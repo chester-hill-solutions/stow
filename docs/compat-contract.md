@@ -321,7 +321,11 @@ GET/HeadObject flow (readThroughCache):
 **ListObjectsV2 in run-through:**
 - Returns **union** of local keys and upstream keys (deduplicated by key name).
 - For duplicate keys, **local metadata wins** for `ETag`/`Size`/`LastModified` in listing (local is authoritative for dev).
-- Pagination tokens MUST be stable for merged listing; conformance tests required.
+- Implementation fetches complete prefix sets from both sources, merges, then applies client `max-keys` / continuation locally so pagination tokens stay stable.
+- Under `proxy` policy, listing is upstream-only (matches proxy Get/Head).
+
+**Object size / buffering (v1, intentional):**
+- Single-part Put and multipart Complete buffer object/part bytes in memory to compute MD5 ETags. Stow is a **dev/test** bucket service — not production object storage. Large-object streaming without full buffering is out of scope for v1.
 
 **ListBuckets / HeadBucket / CreateBucket / DeleteBucket:**
 - Local bucket namespace is authoritative.

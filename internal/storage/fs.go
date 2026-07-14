@@ -2,10 +2,7 @@ package storage
 
 import (
 	"context"
-	"crypto/rand"
-	"encoding/hex"
 	"encoding/json"
-	"fmt"
 	"io"
 	"os"
 	"path/filepath"
@@ -24,6 +21,7 @@ type objectSidecar struct {
 }
 
 // FilesystemStore persists object bytes on disk with atomic writes.
+// Object metadata is stored alongside each object as a JSON sidecar (.stowmeta).
 type FilesystemStore struct {
 	dataDir string
 	mu      sync.RWMutex
@@ -184,8 +182,8 @@ func (s *FilesystemStore) PutObject(_ context.Context, bucket, key string, body 
 	}, nil
 }
 
-func (s *FilesystemStore) GetObject(_ context.Context, bucket, key string) (io.ReadCloser, *ObjectMeta, error) {
-	meta, err := s.HeadObject(context.Background(), bucket, key)
+func (s *FilesystemStore) GetObject(ctx context.Context, bucket, key string) (io.ReadCloser, *ObjectMeta, error) {
+	meta, err := s.HeadObject(ctx, bucket, key)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -222,7 +220,7 @@ func (s *FilesystemStore) HeadObject(_ context.Context, bucket, key string) (*Ob
 		Bucket:       bucket,
 		Key:          key,
 		Size:         st.Size(),
-		LastModified:   st.ModTime().UTC(),
+		LastModified: st.ModTime().UTC(),
 		ContentType:  sidecar.ContentType,
 		Metadata:     cloneMetadata(sidecar.Metadata),
 		ETag:         sidecar.ETag,
@@ -256,12 +254,23 @@ func (s *FilesystemStore) DeleteObject(_ context.Context, bucket, key string) er
 }
 
 func (s *FilesystemStore) DeleteObjects(_ context.Context, bucket string, keys []string) ([]string, error) {
+	if err := validateBucketName(bucket); err != nil {
+		return nil, err
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
 	var deleted []string
 	for _, key := range keys {
-		if err := s.DeleteObject(context.Background(), bucket, key); err != nil {
-			if err == ErrObjectNotFound {
-				continue
-			}
+		if err := validateKey(key); err != nil {
+			return deleted, err
+		}
+		objPath := s.objectPath(bucket, key)
+		if _, err := os.Stat(objPath); os.IsNotExist(err) {
+			continue
+		}
+		_ = os.Remove(s.metaPath(bucket, key))
+		if err := os.Remove(objPath); err != nil {
 			return deleted, err
 		}
 		deleted = append(deleted, key)
@@ -279,307 +288,6 @@ func (s *FilesystemStore) CopyObject(ctx context.Context, srcBucket, srcKey, dst
 		ContentType: meta.ContentType,
 		Metadata:    cloneMetadata(meta.Metadata),
 	})
-}
-
-func (s *FilesystemStore) ListObjectsV2(_ context.Context, bucket string, opts ListOptions) (*ListResult, error) {
-	if err := validateBucketName(bucket); err != nil {
-		return nil, err
-	}
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-
-	if _, err := os.Stat(s.bucketDir(bucket)); os.IsNotExist(err) {
-		return nil, ErrBucketNotFound
-	}
-
-	type item struct {
-		key  string
-		meta ObjectMeta
-	}
-	var items []item
-	root := s.objectsDir(bucket)
-	err := filepath.WalkDir(root, func(p string, d os.DirEntry, err error) error {
-		if err != nil {
-			return err
-		}
-		if d.IsDir() {
-			return nil
-		}
-		if strings.HasSuffix(d.Name(), metaSuffix) {
-			return nil
-		}
-		rel, err := filepath.Rel(root, p)
-		if err != nil {
-			return err
-		}
-		key := filepath.ToSlash(rel)
-		if opts.Prefix != "" && !strings.HasPrefix(key, opts.Prefix) {
-			return nil
-		}
-		st, err := d.Info()
-		if err != nil {
-			return err
-		}
-		sidecar, _ := readObjectSidecar(p + metaSuffix)
-		items = append(items, item{
-			key: key,
-			meta: ObjectMeta{
-				Bucket:       bucket,
-				Key:          key,
-				Size:         st.Size(),
-				LastModified: st.ModTime().UTC(),
-				ContentType:  sidecar.ContentType,
-				Metadata:     cloneMetadata(sidecar.Metadata),
-				ETag:         sidecar.ETag,
-			},
-		})
-		return nil
-	})
-	if err != nil {
-		return nil, err
-	}
-	sort.Slice(items, func(i, j int) bool { return items[i].key < items[j].key })
-
-	startAfter := listStartAfter(opts)
-	maxKeys := maxKeysOrDefault(opts.MaxKeys)
-	result := &ListResult{}
-	prefixSet := map[string]struct{}{}
-
-	for _, it := range items {
-		if startAfter != "" && it.key <= startAfter {
-			continue
-		}
-		if cp := commonPrefixFor(it.key, opts.Prefix, opts.Delimiter); cp != "" {
-			if _, ok := prefixSet[cp]; !ok {
-				prefixSet[cp] = struct{}{}
-				result.CommonPrefixes = append(result.CommonPrefixes, cp)
-			}
-			continue
-		}
-		if len(result.Objects) >= maxKeys {
-			result.IsTruncated = true
-			result.NextContinuationToken = it.key
-			break
-		}
-		result.Objects = append(result.Objects, it.meta)
-	}
-	sort.Strings(result.CommonPrefixes)
-	result.KeyCount = len(result.Objects) + len(result.CommonPrefixes)
-	if opts.ContinuationToken != "" {
-		result.ContinuationToken = opts.ContinuationToken
-	}
-	return result, nil
-}
-
-type multipartManifest struct {
-	Bucket    string    `json:"bucket"`
-	Key       string    `json:"key"`
-	Initiated time.Time `json:"initiated"`
-}
-
-func (s *FilesystemStore) CreateMultipartUpload(_ context.Context, bucket, key string) (*MultipartUpload, error) {
-	if err := validateBucketName(bucket); err != nil {
-		return nil, err
-	}
-	if err := validateKey(key); err != nil {
-		return nil, err
-	}
-	s.mu.Lock()
-	defer s.mu.Unlock()
-
-	if _, err := os.Stat(s.bucketDir(bucket)); os.IsNotExist(err) {
-		return nil, ErrBucketNotFound
-	}
-
-	uploadID, err := newUploadID()
-	if err != nil {
-		return nil, err
-	}
-	dir := s.multipartDir(uploadID)
-	if err := os.MkdirAll(dir, 0o755); err != nil {
-		return nil, err
-	}
-	manifest := multipartManifest{
-		Bucket:    bucket,
-		Key:       key,
-		Initiated: time.Now().UTC(),
-	}
-	if err := writeJSONAtomic(filepath.Join(dir, "manifest.json"), manifest); err != nil {
-		_ = os.RemoveAll(dir)
-		return nil, err
-	}
-	return &MultipartUpload{
-		UploadID:  uploadID,
-		Bucket:    bucket,
-		Key:       key,
-		Initiated: manifest.Initiated,
-	}, nil
-}
-
-func (s *FilesystemStore) UploadPart(_ context.Context, uploadID string, partNumber int, body io.Reader) (*PartInfo, error) {
-	if partNumber < 1 || partNumber > 10000 {
-		return nil, ErrInvalidPart
-	}
-	s.mu.Lock()
-	defer s.mu.Unlock()
-
-	dir := s.multipartDir(uploadID)
-	if _, err := os.Stat(dir); os.IsNotExist(err) {
-		return nil, ErrUploadNotFound
-	}
-	etag, data, err := etagForReader(body)
-	if err != nil {
-		return nil, err
-	}
-	partPath := filepath.Join(dir, fmt.Sprintf("part-%05d", partNumber))
-	if err := writeBytesAtomic(partPath, data); err != nil {
-		return nil, err
-	}
-	now := time.Now().UTC()
-	return &PartInfo{
-		PartNumber:   partNumber,
-		ETag:         etag,
-		Size:         int64(len(data)),
-		LastModified: now,
-	}, nil
-}
-
-func (s *FilesystemStore) CompleteMultipartUpload(_ context.Context, uploadID string, parts []PartInfo) (*ObjectMeta, error) {
-	if len(parts) == 0 {
-		return nil, ErrInvalidUpload
-	}
-	s.mu.Lock()
-	defer s.mu.Unlock()
-
-	dir := s.multipartDir(uploadID)
-	manifest, err := readMultipartManifest(dir)
-	if err != nil {
-		return nil, ErrUploadNotFound
-	}
-
-	sort.Slice(parts, func(i, j int) bool { return parts[i].PartNumber < parts[j].PartNumber })
-	var combined []byte
-	for _, p := range parts {
-		partPath := filepath.Join(dir, fmt.Sprintf("part-%05d", p.PartNumber))
-		data, err := os.ReadFile(partPath)
-		if err != nil {
-			return nil, ErrInvalidPart
-		}
-		combined = append(combined, data...)
-	}
-
-	objPath := s.objectPath(manifest.Bucket, manifest.Key)
-	if err := writeBytesAtomic(objPath, combined); err != nil {
-		return nil, err
-	}
-	etag := etagForBytes(combined)
-	sidecar := objectSidecar{ETag: etag}
-	if err := writeJSONAtomic(s.metaPath(manifest.Bucket, manifest.Key), sidecar); err != nil {
-		return nil, err
-	}
-	_ = os.RemoveAll(dir)
-
-	now := time.Now().UTC()
-	return &ObjectMeta{
-		Bucket:       manifest.Bucket,
-		Key:          manifest.Key,
-		Size:         int64(len(combined)),
-		ETag:         etag,
-		LastModified:   now,
-	}, nil
-}
-
-func (s *FilesystemStore) AbortMultipartUpload(_ context.Context, uploadID string) error {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-
-	dir := s.multipartDir(uploadID)
-	if _, err := os.Stat(dir); os.IsNotExist(err) {
-		return ErrUploadNotFound
-	}
-	return os.RemoveAll(dir)
-}
-
-func (s *FilesystemStore) ListParts(_ context.Context, uploadID string) ([]PartInfo, error) {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-
-	dir := s.multipartDir(uploadID)
-	if _, err := os.Stat(dir); os.IsNotExist(err) {
-		return nil, ErrUploadNotFound
-	}
-	entries, err := os.ReadDir(dir)
-	if err != nil {
-		return nil, err
-	}
-	var parts []PartInfo
-	for _, e := range entries {
-		if !strings.HasPrefix(e.Name(), "part-") {
-			continue
-		}
-		var num int
-		if _, err := fmt.Sscanf(e.Name(), "part-%05d", &num); err != nil {
-			continue
-		}
-		st, err := e.Info()
-		if err != nil {
-			return nil, err
-		}
-		data, err := os.ReadFile(filepath.Join(dir, e.Name()))
-		if err != nil {
-			return nil, err
-		}
-		parts = append(parts, PartInfo{
-			PartNumber:   num,
-			ETag:         etagForBytes(data),
-			Size:         st.Size(),
-			LastModified: st.ModTime().UTC(),
-		})
-	}
-	sort.Slice(parts, func(i, j int) bool { return parts[i].PartNumber < parts[j].PartNumber })
-	return parts, nil
-}
-
-func writeBytesAtomic(path string, data []byte) error {
-	dir := filepath.Dir(path)
-	if err := os.MkdirAll(dir, 0o755); err != nil {
-		return err
-	}
-	tmp, err := os.CreateTemp(dir, ".tmp-*")
-	if err != nil {
-		return err
-	}
-	tmpName := tmp.Name()
-	cleanup := true
-	defer func() {
-		if cleanup {
-			_ = os.Remove(tmpName)
-		}
-	}()
-	if _, err := tmp.Write(data); err != nil {
-		_ = tmp.Close()
-		return err
-	}
-	if err := tmp.Sync(); err != nil {
-		_ = tmp.Close()
-		return err
-	}
-	if err := tmp.Close(); err != nil {
-		return err
-	}
-	if err := os.Rename(tmpName, path); err != nil {
-		return err
-	}
-	cleanup = false
-	return nil
-}
-
-func writeJSONAtomic(path string, v any) error {
-	data, err := json.Marshal(v)
-	if err != nil {
-		return err
-	}
-	return writeBytesAtomic(path, data)
 }
 
 func readObjectSidecar(path string) (objectSidecar, error) {
@@ -606,14 +314,6 @@ func readBucketCreated(dir string) (time.Time, error) {
 	return payload.CreatedAt.UTC(), nil
 }
 
-func newUploadID() (string, error) {
-	var b [16]byte
-	if _, err := rand.Read(b[:]); err != nil {
-		return "", err
-	}
-	return hex.EncodeToString(b[:]), nil
-}
-
 func bucketHasObjects(root string) (bool, error) {
 	if _, err := os.Stat(root); os.IsNotExist(err) {
 		return false, nil
@@ -633,14 +333,4 @@ func bucketHasObjects(root string) (bool, error) {
 		return filepath.SkipAll
 	})
 	return found, err
-}
-
-func readMultipartManifest(dir string) (multipartManifest, error) {
-	var m multipartManifest
-	data, err := os.ReadFile(filepath.Join(dir, "manifest.json"))
-	if err != nil {
-		return m, err
-	}
-	err = json.Unmarshal(data, &m)
-	return m, err
 }

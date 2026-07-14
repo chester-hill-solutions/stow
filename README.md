@@ -49,8 +49,7 @@ See [docs/adr/0001-auto-detect-run-through.md](docs/adr/0001-auto-detect-run-thr
 ```
 cmd/stow/           CLI
 internal/s3api/     S3 HTTP + admin routes
-internal/storage/   filesystem + memory stores
-internal/metadata/  SQLite index
+internal/storage/   filesystem + memory stores (JSON sidecars on disk)
 internal/auth/      SigV4
 internal/runthrough/ upstream adapter
 conformance/        AWS SDK Go v2 conformance tests

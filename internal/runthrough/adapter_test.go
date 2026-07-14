@@ -134,15 +134,15 @@ func TestAdapter_WriteGuardBlocksUpstreamPut(t *testing.T) {
 
 	up := newMockUpstream()
 	cfg := runthrough.Config{
-		Policy:          runthrough.PolicyReadThroughCache,
+		Policy:          runthrough.PolicyMirrorWrites,
 		AllowLiveWrites: false,
 		Revalidate:      false,
 	}
 	adapter := runthrough.New(cfg, local, up)
 
-	err := adapter.PropagateUpstreamPut(ctx, "b", "k", bytes.NewReader([]byte("x")), storage.PutOptions{})
+	_, err := adapter.PutObject(ctx, "b", "k", bytes.NewReader([]byte("x")), storage.PutOptions{})
 	if err != runthrough.ErrLiveWritesDisabled {
-		t.Fatalf("PropagateUpstreamPut() error = %v, want ErrLiveWritesDisabled", err)
+		t.Fatalf("PutObject() error = %v, want ErrLiveWritesDisabled", err)
 	}
 	if up.putCalls != 0 {
 		t.Fatalf("upstream put calls = %d, want 0", up.putCalls)
@@ -308,5 +308,36 @@ func TestAdapter_BucketFilter(t *testing.T) {
 	}
 	if up.getCalls != 1 {
 		t.Fatalf("upstream get calls = %d, want 1 (filtered bucket only)", up.getCalls)
+	}
+}
+
+func TestAdapter_ProxyPutPropagatesUpstream(t *testing.T) {
+	local := storage.NewMemoryStore()
+	ctx := context.Background()
+	_ = local.CreateBucket(ctx, "b")
+
+	up := newMockUpstream()
+	cfg := runthrough.Config{
+		Policy:          runthrough.PolicyProxy,
+		AllowLiveWrites: true,
+		Revalidate:      false,
+	}
+	adapter := runthrough.New(cfg, local, up)
+
+	_, err := adapter.PutObject(ctx, "b", "k", bytes.NewReader([]byte("proxied")), storage.PutOptions{})
+	if err != nil {
+		t.Fatalf("PutObject() error = %v", err)
+	}
+	if up.putCalls != 1 {
+		t.Fatalf("upstream put calls = %d, want 1", up.putCalls)
+	}
+	rc, _, err := up.GetObject(ctx, "b", "k")
+	if err != nil {
+		t.Fatalf("upstream GetObject() error = %v", err)
+	}
+	defer rc.Close()
+	data, _ := io.ReadAll(rc)
+	if string(data) != "proxied" {
+		t.Fatalf("upstream data = %q", data)
 	}
 }

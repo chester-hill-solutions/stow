@@ -199,14 +199,22 @@ func (s *MemoryStore) DeleteObject(_ context.Context, bucket, key string) error 
 }
 
 func (s *MemoryStore) DeleteObjects(_ context.Context, bucket string, keys []string) ([]string, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	b, ok := s.buckets[bucket]
+	if !ok {
+		return nil, ErrBucketNotFound
+	}
 	var deleted []string
 	for _, key := range keys {
-		if err := s.DeleteObject(context.Background(), bucket, key); err != nil {
-			if err == ErrObjectNotFound {
-				continue
-			}
+		if err := validateKey(key); err != nil {
 			return deleted, err
 		}
+		if _, ok := b.objects[key]; !ok {
+			continue
+		}
+		delete(b.objects, key)
 		deleted = append(deleted, key)
 	}
 	return deleted, nil
@@ -233,44 +241,15 @@ func (s *MemoryStore) ListObjectsV2(_ context.Context, bucket string, opts ListO
 		return nil, ErrBucketNotFound
 	}
 
-	keys := make([]string, 0, len(b.objects))
-	for key := range b.objects {
+	items := make([]ObjectMeta, 0, len(b.objects))
+	for key, obj := range b.objects {
 		if opts.Prefix != "" && !strings.HasPrefix(key, opts.Prefix) {
 			continue
 		}
-		keys = append(keys, key)
+		items = append(items, obj.meta)
 	}
-	sort.Strings(keys)
-
-	startAfter := listStartAfter(opts)
-	maxKeys := maxKeysOrDefault(opts.MaxKeys)
-	result := &ListResult{}
-	prefixSet := map[string]struct{}{}
-
-	for _, key := range keys {
-		if startAfter != "" && key <= startAfter {
-			continue
-		}
-		if cp := commonPrefixFor(key, opts.Prefix, opts.Delimiter); cp != "" {
-			if _, ok := prefixSet[cp]; !ok {
-				prefixSet[cp] = struct{}{}
-				result.CommonPrefixes = append(result.CommonPrefixes, cp)
-			}
-			continue
-		}
-		if len(result.Objects) >= maxKeys {
-			result.IsTruncated = true
-			result.NextContinuationToken = key
-			break
-		}
-		result.Objects = append(result.Objects, b.objects[key].meta)
-	}
-	sort.Strings(result.CommonPrefixes)
-	result.KeyCount = len(result.Objects) + len(result.CommonPrefixes)
-	if opts.ContinuationToken != "" {
-		result.ContinuationToken = opts.ContinuationToken
-	}
-	return result, nil
+	sort.Slice(items, func(i, j int) bool { return items[i].Key < items[j].Key })
+	return PaginateObjects(items, opts), nil
 }
 
 func (s *MemoryStore) CreateMultipartUpload(_ context.Context, bucket, key string) (*MultipartUpload, error) {

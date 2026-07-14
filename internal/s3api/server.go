@@ -15,11 +15,19 @@ import (
 type Config struct {
 	Store       storage.Store
 	Auth        AuthFunc
-	Host        string   // listen host, default 127.0.0.1
-	Port        int      // 0 = ephemeral
+	Host        string // listen host, default 127.0.0.1
+	Port        int    // 0 = ephemeral
 	DataDir     string
 	CORSOrigins []string
 	Region      string
+	// Mode is the operational mode reported by /_stow/status (local | run-through).
+	Mode string
+	// CachePolicy is the run-through cache policy (e.g. readThroughCache) or "none".
+	CachePolicy string
+	// WritePolicy is "local-only" or "allowLiveWrites".
+	WritePolicy string
+	// UpstreamHost is a redacted upstream endpoint host for status (no secrets).
+	UpstreamHost string
 }
 
 // Server is the S3-compatible HTTP server.
@@ -97,48 +105,66 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	reqID := newRequestID()
 	ctx := withRequestID(r.Context(), reqID)
 	r = r.WithContext(ctx)
+	rw := &statusRecorder{ResponseWriter: w, status: http.StatusOK}
 
-	if handleCORSPreflight(w, r) {
-		s.logRequest(r, http.StatusOK, time.Since(start))
+	if handleCORSPreflight(rw, r) {
+		s.logRequest(r, rw.status, time.Since(start))
 		return
 	}
 
 	if isAdminPath(r.URL.Path) {
-		s.handleAdmin(w, r)
-		s.logRequest(r, 200, time.Since(start))
+		s.handleAdmin(rw, r)
+		s.logRequest(r, rw.status, time.Since(start))
 		return
 	}
 
 	if s.auth != nil {
 		if err := prepareRequestForAuth(r); err != nil {
-			writeError(w, r, s3Error{Code: "AccessDenied", Message: "cannot read request body", StatusCode: http.StatusForbidden})
-			s.logRequest(r, http.StatusForbidden, time.Since(start))
+			writeError(rw, r, s3Error{Code: "AccessDenied", Message: "cannot read request body", StatusCode: http.StatusForbidden})
+			s.logRequest(r, rw.status, time.Since(start))
 			return
 		}
 		if err := s.auth(r); err != nil {
-			writeError(w, r, authError(err))
-			s.logRequest(r, http.StatusForbidden, time.Since(start))
+			writeError(rw, r, authError(err))
+			s.logRequest(r, rw.status, time.Since(start))
 			return
 		}
 	}
 
 	route, routeErr := parseRoute(r, s.baseHost)
 	if routeErr.Code != "" {
-		writeError(w, r, routeErr)
-		s.logRequest(r, routeErr.StatusCode, time.Since(start))
+		writeError(rw, r, routeErr)
+		s.logRequest(r, rw.status, time.Since(start))
 		return
 	}
 
-	s.dispatch(ctx, w, r, route)
-	s.logRequest(r, 0, time.Since(start))
+	s.dispatch(ctx, rw, r, route)
+	s.logRequest(r, rw.status, time.Since(start))
+}
+
+type statusRecorder struct {
+	http.ResponseWriter
+	status  int
+	written bool
+}
+
+func (r *statusRecorder) WriteHeader(code int) {
+	if !r.written {
+		r.status = code
+		r.written = true
+	}
+	r.ResponseWriter.WriteHeader(code)
+}
+
+func (r *statusRecorder) Write(b []byte) (int, error) {
+	if !r.written {
+		r.status = http.StatusOK
+		r.written = true
+	}
+	return r.ResponseWriter.Write(b)
 }
 
 func (s *Server) logRequest(r *http.Request, status int, dur time.Duration) {
-	if status == 0 {
-		// status unknown from response writer wrapper; log without it
-		log.Printf("%s %s %v", r.Method, r.URL.Path, dur)
-		return
-	}
 	log.Printf("%s %s %d %v", r.Method, r.URL.Path, status, dur)
 }
 

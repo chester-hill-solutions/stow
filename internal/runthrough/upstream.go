@@ -249,16 +249,3 @@ func metaIsNewer(upstream, local *storage.ObjectMeta) bool {
 	}
 	return false
 }
-
-func metaMatches(a, b *storage.ObjectMeta) bool {
-	if a == nil || b == nil {
-		return false
-	}
-	if normalizeETag(a.ETag) != "" && normalizeETag(b.ETag) != "" {
-		return normalizeETag(a.ETag) == normalizeETag(b.ETag)
-	}
-	if !a.LastModified.IsZero() && !b.LastModified.IsZero() {
-		return a.LastModified.Equal(b.LastModified)
-	}
-	return false
-}

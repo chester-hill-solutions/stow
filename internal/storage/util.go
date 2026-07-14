@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"path"
+	"sort"
 	"strings"
 )
 
@@ -71,6 +72,41 @@ func maxKeysOrDefault(max int) int {
 		return 1000
 	}
 	return max
+}
+
+// PaginateObjects applies ListObjectsV2 continuation/delimiter/max-keys semantics
+// to a sorted slice of ObjectMeta. Callers must pre-filter by prefix and sort by key.
+func PaginateObjects(items []ObjectMeta, opts ListOptions) *ListResult {
+	startAfter := listStartAfter(opts)
+	maxKeys := maxKeysOrDefault(opts.MaxKeys)
+	result := &ListResult{}
+	prefixSet := map[string]struct{}{}
+
+	for _, meta := range items {
+		key := meta.Key
+		if startAfter != "" && key <= startAfter {
+			continue
+		}
+		if cp := commonPrefixFor(key, opts.Prefix, opts.Delimiter); cp != "" {
+			if _, ok := prefixSet[cp]; !ok {
+				prefixSet[cp] = struct{}{}
+				result.CommonPrefixes = append(result.CommonPrefixes, cp)
+			}
+			continue
+		}
+		if len(result.Objects) >= maxKeys {
+			result.IsTruncated = true
+			result.NextContinuationToken = key
+			break
+		}
+		result.Objects = append(result.Objects, meta)
+	}
+	sort.Strings(result.CommonPrefixes)
+	result.KeyCount = len(result.Objects) + len(result.CommonPrefixes)
+	if opts.ContinuationToken != "" {
+		result.ContinuationToken = opts.ContinuationToken
+	}
+	return result
 }
 
 // objectRelPath returns the relative path under a bucket's objects directory.

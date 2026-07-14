@@ -51,18 +51,34 @@ func (s *Server) writeStatus(w http.ResponseWriter, r *http.Request) {
 	if addr == "" {
 		addr = s.config.Host
 	}
-	w.Header().Set("Content-Type", "application/json")
-	_ = json.NewEncoder(w).Encode(map[string]any{
-		"mode":         "local-only",
+	mode := s.config.Mode
+	if mode == "" {
+		mode = "local"
+	}
+	cachePolicy := s.config.CachePolicy
+	if cachePolicy == "" {
+		cachePolicy = "none"
+	}
+	writePolicy := s.config.WritePolicy
+	if writePolicy == "" {
+		writePolicy = "local-only"
+	}
+	payload := map[string]any{
+		"mode":         mode,
 		"listen":       addr,
 		"region":       s.config.Region,
 		"bucket_count": len(buckets),
 		"object_count": objectCount,
-		"cache_policy": "none",
-		"write_policy": "local-only",
+		"cache_policy": cachePolicy,
+		"write_policy": writePolicy,
 		"uptime_sec":   int(time.Since(s.startTime).Seconds()),
 		"version":      "0.1.0",
-	})
+	}
+	if s.config.UpstreamHost != "" {
+		payload["upstream"] = s.config.UpstreamHost
+	}
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(payload)
 }
 
 func (s *Server) writeInspect(w http.ResponseWriter, r *http.Request) {

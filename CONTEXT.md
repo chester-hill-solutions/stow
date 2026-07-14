@@ -26,11 +26,11 @@ Local copy of upstream objects populated on cache miss. On cache hit, optionally
 
 ### Persisted Backend
 
-Filesystem-backed storage with SQLite metadata index. Default for local development.
+Filesystem-backed storage with JSON sidecar metadata (`.stowmeta`) beside each object. Default for local development.
 
 ### In-Memory Backend
 
-Ephemeral storage backend with no filesystem persistence. Intended for fast isolated tests.
+Ephemeral storage backend with no filesystem persistence. Used by unit/conformance tests via `storage.NewMemoryStore()`; not exposed as a `stow serve` flag in v1.
 
 ### Local Dev Credentials
 

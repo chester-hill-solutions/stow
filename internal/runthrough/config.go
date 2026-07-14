@@ -95,7 +95,9 @@ func ConfigFromEnv() Config {
 	}
 
 	if p := os.Getenv("STOW_POLICY"); p != "" {
-		cfg.Policy = Policy(p)
+		if policy, ok := ParsePolicy(p); ok {
+			cfg.Policy = policy
+		}
 	}
 
 	cfg.AllowLiveWrites = envTruthy("STOW_ALLOW_LIVE_WRITES")
@@ -114,6 +116,16 @@ func ConfigFromEnv() Config {
 	}
 
 	return cfg
+}
+
+// ParsePolicy maps a string to a known Policy.
+func ParsePolicy(raw string) (Policy, bool) {
+	switch Policy(strings.TrimSpace(raw)) {
+	case PolicyProxy, PolicyReadThroughCache, PolicyMirrorWrites:
+		return Policy(strings.TrimSpace(raw)), true
+	default:
+		return "", false
+	}
 }
 
 // DetectMode returns local when STOW_MODE=local or upstream credentials are

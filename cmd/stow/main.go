@@ -107,13 +107,27 @@ func serve(args []string) {
 	}
 
 	verifier := auth.NewVerifier(auth.DefaultRegion)
+	writePolicy := "local-only"
+	if rtCfg.AllowLiveWrites {
+		writePolicy = "allowLiveWrites"
+	}
+	cachePolicy := "none"
+	upstreamHost := ""
+	if mode == runthrough.ModeRunThrough {
+		cachePolicy = string(rtCfg.Policy)
+		upstreamHost = strings.TrimSpace(rtCfg.Upstream.Endpoint)
+	}
 	srv, err := s3api.New(s3api.Config{
-		Store:   store,
-		Auth:    s3api.SigV4Auth(verifier, creds),
-		Host:    *host,
-		Port:    *port,
-		DataDir: localDataDir,
-		Region:  auth.DefaultRegion,
+		Store:        store,
+		Auth:         s3api.SigV4Auth(verifier, creds),
+		Host:         *host,
+		Port:         *port,
+		DataDir:      localDataDir,
+		Region:       auth.DefaultRegion,
+		Mode:         string(mode),
+		CachePolicy:  cachePolicy,
+		WritePolicy:  writePolicy,
+		UpstreamHost: upstreamHost,
 	})
 	if err != nil {
 		log.Fatalf("create server: %v", err)
