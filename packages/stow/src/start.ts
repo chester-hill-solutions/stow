@@ -1,6 +1,7 @@
 import { rm } from "node:fs/promises";
 import { spawn, type ChildProcess } from "node:child_process";
 import { resolveStowBinary } from "./bin.js";
+import { ensureStowBinary } from "./ensure-binary.js";
 import { createStowInstance, DEFAULT_REGION } from "./instance.js";
 import type { StartOptions, StowInstance, StowMode } from "./types.js";
 
@@ -139,7 +140,10 @@ export async function startStow(options: StartOptions = {}): Promise<StowInstanc
     await rm(dataDir, { recursive: true, force: true });
   }
 
-  const binary = resolveStowBinary();
+  let binary = resolveStowBinary();
+  if (!process.env.STOW_BIN?.trim() && binary === "stow") {
+    binary = await ensureStowBinary();
+  }
   const args = ["serve", "--port", String(port), "--data-dir", dataDir, "--host", host];
   if (options.mode) {
     args.push("--mode", options.mode);

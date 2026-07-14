@@ -1,6 +1,7 @@
 import { rm } from "node:fs/promises";
 import { spawn } from "node:child_process";
 import { resolveStowBinary } from "./bin.js";
+import { ensureStowBinary } from "./ensure-binary.js";
 import { createStowInstance, DEFAULT_REGION } from "./instance.js";
 const READY_RE = /^STOW_READY endpoint=(\S+) access_key=(\S+) secret_key=(\S+) mode=(\S+)/;
 export function parseReadyLine(line) {
@@ -102,7 +103,10 @@ export async function startStow(options = {}) {
     if (options.cleanSlate) {
         await rm(dataDir, { recursive: true, force: true });
     }
-    const binary = resolveStowBinary();
+    let binary = resolveStowBinary();
+    if (!process.env.STOW_BIN?.trim() && binary === "stow") {
+        binary = await ensureStowBinary();
+    }
     const args = ["serve", "--port", String(port), "--data-dir", dataDir, "--host", host];
     if (options.mode) {
         args.push("--mode", options.mode);

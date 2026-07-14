@@ -3,6 +3,7 @@ import type { AwsSdkV3ConfigOptions, StartOptions, StowInstance, UpstreamConfig 
 export type { AwsSdkV3ConfigOptions, ObjectSnapshot, PutFixtureOptions, StartOptions, StowInstance, StowMode, UpstreamConfig, } from "./types.js";
 export { parseReadyLine } from "./start.js";
 export { resolveStowBinary, stowBinaryAvailable } from "./bin.js";
+export { ensureStowBinary, packageBinaryPath } from "./ensure-binary.js";
 export { upstreamFromEnv } from "./upstream.js";
 export declare const Stow: {
     start(options?: StartOptions): Promise<StowInstance>;

@@ -21,6 +21,7 @@ export type {
 
 export { parseReadyLine } from "./start.js";
 export { resolveStowBinary, stowBinaryAvailable } from "./bin.js";
+export { ensureStowBinary, packageBinaryPath } from "./ensure-binary.js";
 export { upstreamFromEnv } from "./upstream.js";
 
 export const Stow = {

@@ -1,6 +1,7 @@
 import { accessSync, constants, existsSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { packageBinaryPath } from "./ensure-binary.js";
 
 const PACKAGE_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 
@@ -32,15 +33,29 @@ function findMonorepoBinary(): string | undefined {
   return undefined;
 }
 
+function findPackageBinary(): string | undefined {
+  const candidate = packageBinaryPath();
+  if (isExecutable(candidate) || existsSync(candidate)) {
+    return candidate;
+  }
+  return undefined;
+}
+
 /**
  * Resolve the stow binary path.
  *
- * Precedence: STOW_BIN env, `bin/stow` relative to monorepo root, then `stow` on PATH.
+ * Precedence: STOW_BIN env, package-local `bin/stow` (downloaded from release),
+ * monorepo `bin/stow`, then `stow` on PATH.
  */
 export function resolveStowBinary(): string {
   const fromEnv = process.env.STOW_BIN?.trim();
   if (fromEnv) {
     return fromEnv;
+  }
+
+  const fromPackage = findPackageBinary();
+  if (fromPackage) {
+    return fromPackage;
   }
 
   const fromRepo = findMonorepoBinary();
@@ -54,7 +69,7 @@ export function resolveStowBinary(): string {
 export function stowBinaryAvailable(): boolean {
   const bin = resolveStowBinary();
   if (bin !== "stow") {
-    return isExecutable(bin);
+    return isExecutable(bin) || existsSync(bin);
   }
   return false;
 }

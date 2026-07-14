@@ -33,6 +33,33 @@ const client = new S3Client(stow.awsSdkV3Config());
 await stow.stop();
 ```
 
+## Install (consumers)
+
+Published as `@chs/stow` **v0.1.0** (GitHub Packages when available). Prebuilt binaries ship on the matching GitHub Release:
+
+| Asset | Platforms |
+|-------|-----------|
+| `stow-darwin-arm64` / `stow-darwin-amd64` | macOS |
+| `stow-linux-amd64` / `stow-linux-arm64` | Linux |
+| `chs-stow-0.1.0.tgz` | npm pack of `@chs/stow` |
+
+`Stow.start()` resolves the binary in this order:
+
+1. `STOW_BIN`
+2. Package-local `bin/stow` (auto-downloaded from the release when missing)
+3. Monorepo `bin/stow` after `make build`
+4. `stow` on `PATH`
+
+Private-repo downloads need `GH_TOKEN` / `GITHUB_TOKEN` (or `STOW_GITHUB_TOKEN`).
+
+Until GitHub Packages publish is available:
+
+```bash
+# From a release asset, or local pack:
+npm install ./chs-stow-0.1.0.tgz
+# or workspace / file: link to packages/stow
+```
+
 ## Modes
 
 | Mode | When |

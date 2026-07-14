@@ -1,0 +1,52 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Build platform binaries
+        run: |
+          mkdir -p dist
+          GOOS=darwin GOARCH=arm64 go build -o dist/stow-darwin-arm64 ./cmd/stow
+          GOOS=darwin GOARCH=amd64 go build -o dist/stow-darwin-amd64 ./cmd/stow
+          GOOS=linux GOARCH=amd64 go build -o dist/stow-linux-amd64 ./cmd/stow
+          GOOS=linux GOARCH=arm64 go build -o dist/stow-linux-arm64 ./cmd/stow
+
+      - name: Pack npm package
+        working-directory: packages/stow
+        run: |
+          npm ci
+          npm run build
+          npm pack
+          mv chs-stow-*.tgz ../../dist/
+
+      - name: Create GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "${GITHUB_REF_NAME}" \
+            dist/stow-darwin-arm64 \
+            dist/stow-darwin-amd64 \
+            dist/stow-linux-amd64 \
+            dist/stow-linux-arm64 \
+            dist/chs-stow-*.tgz \
+            --title "${GITHUB_REF_NAME}" \
+            --notes "Stow ${GITHUB_REF_NAME}: Go binary assets + @chs/stow npm pack. See README for consumer install."
