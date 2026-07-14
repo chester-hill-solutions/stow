@@ -1,6 +1,6 @@
 {
   "name": "@chs/stow",
-  "version": "0.0.0",
+  "version": "0.1.0",
   "description": "TypeScript client for the stow local S3-compatible dev bucket service",
   "type": "module",
   "main": "./dist/index.js",
@@ -12,12 +12,22 @@
     }
   },
   "files": [
-    "dist"
+    "dist",
+    "README.md"
   ],
   "scripts": {
     "build": "tsc",
     "test": "npm run build && node --experimental-strip-types --test test/integration.test.ts",
     "prepublishOnly": "npm run build"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/chester-hill-solutions/stow.git",
+    "directory": "packages/stow"
+  },
+  "publishConfig": {
+    "registry": "https://npm.pkg.github.com",
+    "access": "restricted"
   },
   "dependencies": {
     "@aws-sdk/client-s3": "^3.750.0",

@@ -3,6 +3,7 @@ import { startStow } from "./start.js";
 import { upstreamFromEnv } from "./upstream.js";
 export { parseReadyLine } from "./start.js";
 export { resolveStowBinary, stowBinaryAvailable } from "./bin.js";
+export { ensureStowBinary, packageBinaryPath } from "./ensure-binary.js";
 export { upstreamFromEnv } from "./upstream.js";
 export const Stow = {
     start(options) {
