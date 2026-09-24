@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"path/filepath"
 	"sync"
 	"testing"
 	"time"
@@ -24,6 +25,7 @@ type mockUpstream struct {
 	putCalls  int
 	delCalls  int
 	putErr    error
+	putErrors map[string]error
 
 	objects map[string]storage.ObjectMeta
 	bodies  map[string][]byte
@@ -31,8 +33,9 @@ type mockUpstream struct {
 
 func newMockUpstream() *mockUpstream {
 	return &mockUpstream{
-		objects: make(map[string]storage.ObjectMeta),
-		bodies:  make(map[string][]byte),
+		objects:   make(map[string]storage.ObjectMeta),
+		bodies:    make(map[string][]byte),
+		putErrors: make(map[string]error),
 	}
 }
 
@@ -70,6 +73,10 @@ func (m *mockUpstream) PutObject(_ context.Context, bucket, key string, body io.
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.putCalls++
+	k := objectKey(bucket, key)
+	if err := m.putErrors[k]; err != nil {
+		return err
+	}
 	if m.putErr != nil {
 		return m.putErr
 	}
@@ -77,7 +84,6 @@ func (m *mockUpstream) PutObject(_ context.Context, bucket, key string, body io.
 	if err != nil {
 		return err
 	}
-	k := objectKey(bucket, key)
 	etag, _, err := storagePutMeta(data)
 	if err != nil {
 		return err
@@ -155,6 +161,50 @@ func TestAdapter_WriteGuardBlocksUpstreamPut(t *testing.T) {
 	}
 }
 
+func TestAdapter_RejectsLiveWritesWithoutDurableOutbox(t *testing.T) {
+	local := storage.NewMemoryStore()
+	ctx := context.Background()
+	_ = local.CreateBucket(ctx, "bucket")
+	up := newMockUpstream()
+	adapter := runthrough.New(runthrough.Config{
+		Policy:          runthrough.PolicyReadThroughCache,
+		AllowLiveWrites: true,
+	}, local, up)
+
+	_, err := adapter.PutObject(ctx, "bucket", "k", bytes.NewReader([]byte("blocked")), storage.PutOptions{})
+	if err != runthrough.ErrDurableOutboxRequired {
+		t.Fatalf("PutObject() error = %v, want ErrDurableOutboxRequired", err)
+	}
+	if up.putCalls != 0 {
+		t.Fatalf("upstream put calls = %d, want 0", up.putCalls)
+	}
+}
+
+func TestAdapter_RejectsMultipartLiveWriteWithoutDurableOutbox(t *testing.T) {
+	ctx := context.Background()
+	local := storage.NewMemoryStore()
+	_ = local.CreateBucket(ctx, "bucket")
+	upload, err := local.CreateMultipartUpload(ctx, "bucket", "key")
+	if err != nil {
+		t.Fatalf("create upload: %v", err)
+	}
+	part, err := local.UploadPart(ctx, upload.UploadID, 1, bytes.NewReader([]byte("part")))
+	if err != nil {
+		t.Fatalf("upload part: %v", err)
+	}
+	adapter := runthrough.New(runthrough.Config{
+		Policy:          runthrough.PolicyReadThroughCache,
+		AllowLiveWrites: true,
+	}, local, newMockUpstream())
+	_, err = adapter.CompleteMultipartUpload(ctx, upload.UploadID, []storage.PartInfo{*part})
+	if err != runthrough.ErrDurableOutboxRequired {
+		t.Fatalf("complete error = %v, want ErrDurableOutboxRequired", err)
+	}
+	if _, err := local.HeadObject(ctx, "bucket", "key"); !errors.Is(err, storage.ErrObjectNotFound) {
+		t.Fatalf("object exists after rejected completion: %v", err)
+	}
+}
+
 func TestAdapter_PutObjectLocalOnlyWithoutLiveWrites(t *testing.T) {
 	local := storage.NewMemoryStore()
 	ctx := context.Background()
@@ -200,9 +250,13 @@ func TestAdapter_PutObjectDualWriteWithLiveWrites(t *testing.T) {
 		AllowLiveWrites: true,
 		Revalidate:      false,
 	}
-	adapter := runthrough.New(cfg, local, up)
+	outbox, err := runthrough.NewFileOutbox(filepath.Join(t.TempDir(), "outbox.json"))
+	if err != nil {
+		t.Fatalf("new outbox: %v", err)
+	}
+	adapter := runthrough.NewWithOutbox(cfg, local, local, up, outbox)
 
-	_, err := adapter.PutObject(ctx, "bucket", "k", bytes.NewReader([]byte("live")), storage.PutOptions{ContentType: "text/plain"})
+	_, err = adapter.PutObject(ctx, "bucket", "k", bytes.NewReader([]byte("live")), storage.PutOptions{ContentType: "text/plain"})
 	if err != nil {
 		t.Fatalf("PutObject() error = %v", err)
 	}
@@ -226,14 +280,17 @@ func TestAdapter_QueuesFailedMirrorWrite(t *testing.T) {
 	_ = local.CreateBucket(ctx, "bucket")
 	up := newMockUpstream()
 	up.putErr = errors.New("temporary upstream failure")
-	outbox := runthrough.NewMemoryOutbox()
+	outbox, err := runthrough.NewFileOutbox(filepath.Join(t.TempDir(), "outbox.json"))
+	if err != nil {
+		t.Fatalf("new outbox: %v", err)
+	}
 	adapter := runthrough.NewWithOutbox(runthrough.Config{
 		Policy:          runthrough.PolicyMirrorWrites,
 		AllowLiveWrites: true,
 		Revalidate:      false,
 	}, local, local, up, outbox)
 
-	_, err := adapter.PutObject(ctx, "bucket", "key", bytes.NewReader([]byte("payload")), storage.PutOptions{})
+	_, err = adapter.PutObject(ctx, "bucket", "key", bytes.NewReader([]byte("payload")), storage.PutOptions{})
 	if err == nil {
 		t.Fatal("expected upstream failure")
 	}
@@ -381,33 +438,23 @@ func TestAdapter_BucketFilter(t *testing.T) {
 	}
 }
 
-func TestAdapter_ProxyPutPropagatesUpstream(t *testing.T) {
+func TestAdapter_UnknownPolicyBlocksUpstreamWrites(t *testing.T) {
 	local := storage.NewMemoryStore()
 	ctx := context.Background()
 	_ = local.CreateBucket(ctx, "bucket")
 
 	up := newMockUpstream()
-	cfg := runthrough.Config{
-		Policy:          runthrough.PolicyProxy,
+	adapter := runthrough.New(runthrough.Config{
+		Policy:          runthrough.Policy("proxy"),
 		AllowLiveWrites: true,
 		Revalidate:      false,
-	}
-	adapter := runthrough.New(cfg, local, up)
+	}, local, up)
 
-	_, err := adapter.PutObject(ctx, "bucket", "k", bytes.NewReader([]byte("proxied")), storage.PutOptions{})
-	if err != nil {
-		t.Fatalf("PutObject() error = %v", err)
+	_, err := adapter.PutObject(ctx, "bucket", "k", bytes.NewReader([]byte("blocked")), storage.PutOptions{})
+	if err != runthrough.ErrLiveWritesDisabled {
+		t.Fatalf("PutObject() error = %v, want ErrLiveWritesDisabled", err)
 	}
-	if up.putCalls != 1 {
-		t.Fatalf("upstream put calls = %d, want 1", up.putCalls)
-	}
-	rc, _, err := up.GetObject(ctx, "bucket", "k")
-	if err != nil {
-		t.Fatalf("upstream GetObject() error = %v", err)
-	}
-	defer rc.Close()
-	data, _ := io.ReadAll(rc)
-	if string(data) != "proxied" {
-		t.Fatalf("upstream data = %q", data)
+	if up.putCalls != 0 {
+		t.Fatalf("upstream put calls = %d, want 0", up.putCalls)
 	}
 }

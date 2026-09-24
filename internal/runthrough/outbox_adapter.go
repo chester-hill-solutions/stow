@@ -30,16 +30,7 @@ func (a *Adapter) enqueueIntent(ctx context.Context, operation OutboxOperation, 
 		version = meta.ETag
 	}
 	entry := OutboxEntry{Operation: operation, Bucket: bucket, Key: key, Version: version, CreatedAt: time.Now().UTC()}
-	if err := a.outbox.Enqueue(entry); err != nil {
-		return OutboxEntry{}, err
-	}
-	pending := a.outbox.Pending()
-	for i := len(pending) - 1; i >= 0; i-- {
-		if pending[i].Bucket == bucket && pending[i].Key == key && pending[i].Operation == operation {
-			return pending[i], nil
-		}
-	}
-	return OutboxEntry{}, fmt.Errorf("outbox entry was not retained")
+	return a.outbox.Enqueue(entry)
 }
 
 func (a *Adapter) propagateEntry(ctx context.Context, entry OutboxEntry) error {
@@ -96,6 +87,8 @@ func outboxRetryDelay(attempts int) time.Duration {
 // at startup; entries that are not due remain queued.
 func (a *Adapter) RetryPending(ctx context.Context) error {
 	now := time.Now()
+	blocked := make(map[string]bool)
+	var firstErr error
 	for _, entry := range a.outbox.Pending() {
 		if entry.Terminal {
 			continue
@@ -106,9 +99,16 @@ func (a *Adapter) RetryPending(ctx context.Context) error {
 		if !a.upstreamEnabled(entry.Bucket) {
 			continue
 		}
+		key := entry.Bucket + "\x00" + entry.Key
+		if blocked[key] {
+			continue
+		}
 		if err := a.completeIntent(ctx, entry); err != nil {
-			return err
+			blocked[key] = true
+			if firstErr == nil {
+				firstErr = err
+			}
 		}
 	}
-	return nil
+	return firstErr
 }

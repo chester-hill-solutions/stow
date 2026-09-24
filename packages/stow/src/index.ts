@@ -39,7 +39,7 @@ export const Stow = {
   awsSdkV3Config(
     options: AwsSdkV3ConfigOptions | StowInstance,
   ): S3ClientConfig {
-    if ("secretAccessKey" in options && "endpoint" in options) {
+    if ("stop" in options) {
       return buildAwsSdkV3Config({
         endpoint: options.endpoint,
         accessKeyId: options.accessKeyId,
@@ -48,7 +48,10 @@ export const Stow = {
         forcePathStyle: true,
       });
     }
-    return buildAwsSdkV3Config(options);
+    return buildAwsSdkV3Config({
+      ...options,
+      forcePathStyle: true,
+    });
   },
 
   upstream: {

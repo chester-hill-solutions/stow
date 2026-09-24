@@ -40,6 +40,24 @@ func TestAdminRoutesRejectRemoteRequestsByDefault(t *testing.T) {
 	}
 }
 
+func TestAdminRoutesRejectMissingRemoteAddress(t *testing.T) {
+	srv, err := New(Config{
+		Store: storage.NewMemoryStore(),
+		Auth:  DevBypass,
+		Host:  "127.0.0.1",
+	})
+	if err != nil {
+		t.Fatalf("new server: %v", err)
+	}
+	req := httptest.NewRequest("GET", "http://localhost/_stow/status", nil)
+	req.RemoteAddr = ""
+	res := httptest.NewRecorder()
+	srv.ServeHTTP(res, req)
+	if res.Code != 404 {
+		t.Fatalf("admin status without remote address = %d, want 404", res.Code)
+	}
+}
+
 func TestParseRouteDecodesPathOnce(t *testing.T) {
 	req := httptest.NewRequest("GET", "http://localhost/bucket/a%252Fb.txt", nil)
 	route, err := parseRoute(req, "localhost")

@@ -25,6 +25,7 @@ type sharedCorpusCase struct {
 	ContentType string            `json:"contentType"`
 	Metadata    map[string]string `json:"metadata"`
 	Expect      struct {
+		Status      int               `json:"status"`
 		Body        string            `json:"body"`
 		ContentType string            `json:"contentType"`
 		Metadata    map[string]string `json:"metadata"`

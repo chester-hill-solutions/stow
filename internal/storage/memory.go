@@ -80,7 +80,7 @@ func (s *MemoryStore) DeleteBucket(_ context.Context, name string) error {
 	if !ok {
 		return ErrBucketNotFound
 	}
-	if len(b.objects) > 0 {
+	if len(b.objects) > 0 || len(b.multipart) > 0 {
 		return ErrBucketNotEmpty
 	}
 	delete(s.buckets, name)
@@ -159,6 +159,12 @@ func (s *MemoryStore) PutObject(_ context.Context, bucket, key string, body io.R
 }
 
 func (s *MemoryStore) GetObject(_ context.Context, bucket, key string) (io.ReadCloser, *ObjectMeta, error) {
+	if err := validateBucketName(bucket); err != nil {
+		return nil, nil, err
+	}
+	if err := validateKey(key); err != nil {
+		return nil, nil, err
+	}
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
@@ -175,6 +181,12 @@ func (s *MemoryStore) GetObject(_ context.Context, bucket, key string) (io.ReadC
 }
 
 func (s *MemoryStore) HeadObject(_ context.Context, bucket, key string) (*ObjectMeta, error) {
+	if err := validateBucketName(bucket); err != nil {
+		return nil, err
+	}
+	if err := validateKey(key); err != nil {
+		return nil, err
+	}
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
@@ -191,6 +203,9 @@ func (s *MemoryStore) HeadObject(_ context.Context, bucket, key string) (*Object
 }
 
 func (s *MemoryStore) DeleteObject(_ context.Context, bucket, key string) error {
+	if err := validateBucketName(bucket); err != nil {
+		return err
+	}
 	if err := validateKey(key); err != nil {
 		return err
 	}
@@ -209,6 +224,9 @@ func (s *MemoryStore) DeleteObject(_ context.Context, bucket, key string) error 
 }
 
 func (s *MemoryStore) DeleteObjects(_ context.Context, bucket string, keys []string) ([]string, error) {
+	if err := validateBucketName(bucket); err != nil {
+		return nil, err
+	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -325,6 +343,9 @@ func (s *MemoryStore) UploadPart(_ context.Context, uploadID string, partNumber 
 func (s *MemoryStore) CompleteMultipartUpload(_ context.Context, uploadID string, parts []PartInfo) (*ObjectMeta, error) {
 	if len(parts) == 0 {
 		return nil, ErrInvalidUpload
+	}
+	if err := validateMultipartPartNumbers(parts); err != nil {
+		return nil, err
 	}
 
 	s.mu.Lock()

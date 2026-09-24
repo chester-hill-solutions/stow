@@ -4,6 +4,8 @@ import {
   GetObjectCommand,
   ListObjectsV2Command,
   PutObjectCommand,
+  type ListObjectsV2CommandOutput,
+  type S3Client,
   type S3ClientConfig,
 } from "@aws-sdk/client-s3";
 import { createStowS3Client } from "./s3-client.js";
@@ -22,15 +24,45 @@ export const DEFAULT_REGION = "us-east-1";
 export function buildAwsSdkV3Config(
   options: AwsSdkV3ConfigOptions,
 ): S3ClientConfig {
+  const credentials = options.provider ?? {
+    accessKeyId: options.accessKeyId,
+    secretAccessKey: options.secretAccessKey,
+    ...(options.sessionToken === undefined
+      ? {}
+      : { sessionToken: options.sessionToken }),
+  };
+
   return {
     endpoint: options.endpoint,
     region: options.region ?? DEFAULT_REGION,
-    credentials: {
-      accessKeyId: options.accessKeyId,
-      secretAccessKey: options.secretAccessKey,
-    },
+    credentials,
     forcePathStyle: options.forcePathStyle ?? true,
   };
+}
+
+type ListedObject = NonNullable<ListObjectsV2CommandOutput["Contents"]>[number];
+
+async function* listObjects(
+  client: S3Client,
+  bucket: string,
+  prefix?: string,
+): AsyncGenerator<ListedObject, void, undefined> {
+  let continuationToken: string | undefined;
+  do {
+    const list = await client.send(
+      new ListObjectsV2Command({
+        Bucket: bucket,
+        Prefix: prefix,
+        ContinuationToken: continuationToken,
+      }),
+    );
+    for (const object of list.Contents ?? []) {
+      yield object;
+    }
+    continuationToken = list.IsTruncated
+      ? list.NextContinuationToken
+      : undefined;
+  } while (continuationToken);
 }
 
 export interface StowInstanceOptions {
@@ -68,20 +100,16 @@ export function createStowInstance(options: StowInstanceOptions): StowInstance {
     awsSdkV3Config: s3Config,
     createBucket: async (name: string) => {
       const client = createClient();
-      await client.send(new CreateBucketCommand({ Bucket: name }));
-      client.destroy();
+      try {
+        await client.send(new CreateBucketCommand({ Bucket: name }));
+      } finally {
+        client.destroy();
+      }
     },
     emptyBucket: async (name: string) => {
       const client = createClient();
-      let continuationToken: string | undefined;
-      do {
-        const list = await client.send(
-          new ListObjectsV2Command({
-            Bucket: name,
-            ContinuationToken: continuationToken,
-          }),
-        );
-        for (const object of list.Contents ?? []) {
+      try {
+        for await (const object of listObjects(client, name)) {
           if (!object.Key) {
             continue;
           }
@@ -89,11 +117,9 @@ export function createStowInstance(options: StowInstanceOptions): StowInstance {
             new DeleteObjectCommand({ Bucket: name, Key: object.Key }),
           );
         }
-        continuationToken = list.IsTruncated
-          ? list.NextContinuationToken
-          : undefined;
-      } while (continuationToken);
-      client.destroy();
+      } finally {
+        client.destroy();
+      }
     },
     putFixture: async (
       bucket: string,
@@ -102,30 +128,25 @@ export function createStowInstance(options: StowInstanceOptions): StowInstance {
       fixtureOptions?: PutFixtureOptions,
     ) => {
       const client = createClient();
-      await client.send(
-        new PutObjectCommand({
-          Bucket: bucket,
-          Key: key,
-          Body: body,
-          ContentType: fixtureOptions?.contentType,
-          Metadata: fixtureOptions?.metadata,
-        }),
-      );
-      client.destroy();
+      try {
+        await client.send(
+          new PutObjectCommand({
+            Bucket: bucket,
+            Key: key,
+            Body: body,
+            ContentType: fixtureOptions?.contentType,
+            Metadata: fixtureOptions?.metadata,
+          }),
+        );
+      } finally {
+        client.destroy();
+      }
     },
     snapshotObjects: async (bucket: string, prefix?: string) => {
       const client = createClient();
-      const snapshots: ObjectSnapshot[] = [];
-      let continuationToken: string | undefined;
-      do {
-        const list = await client.send(
-          new ListObjectsV2Command({
-            Bucket: bucket,
-            Prefix: prefix,
-            ContinuationToken: continuationToken,
-          }),
-        );
-        for (const object of list.Contents ?? []) {
+      try {
+        const snapshots: ObjectSnapshot[] = [];
+        for await (const object of listObjects(client, bucket, prefix)) {
           if (!object.Key) {
             continue;
           }
@@ -136,13 +157,11 @@ export function createStowInstance(options: StowInstanceOptions): StowInstance {
             lastModified: object.LastModified,
           });
         }
-        continuationToken = list.IsTruncated
-          ? list.NextContinuationToken
-          : undefined;
-      } while (continuationToken);
-      client.destroy();
-      snapshots.sort((a, b) => a.key.localeCompare(b.key));
-      return snapshots;
+        snapshots.sort((a, b) => a.key.localeCompare(b.key));
+        return snapshots;
+      } finally {
+        client.destroy();
+      }
     },
   };
 }
@@ -156,6 +175,10 @@ export function createStowConnection(options: ConnectOptions): StowConnection {
     endpoint: options.endpoint,
     accessKeyId: options.accessKeyId,
     secretAccessKey: options.secretAccessKey,
+    ...(options.sessionToken === undefined
+      ? {}
+      : { sessionToken: options.sessionToken }),
+    ...(options.provider === undefined ? {} : { provider: options.provider }),
     region,
     awsSdkV3Config: () => config,
     disconnect: () => {
@@ -173,13 +196,16 @@ export async function verifyObjectReadable(
   key: string,
 ): Promise<string> {
   const client = createStowS3Client(instance.awsSdkV3Config());
-  const response = await client.send(
-    new GetObjectCommand({ Bucket: bucket, Key: key }),
-  );
-  const body = await response.Body?.transformToString();
-  client.destroy();
-  if (body === undefined) {
-    throw new Error(`Object ${bucket}/${key} returned no body`);
+  try {
+    const response = await client.send(
+      new GetObjectCommand({ Bucket: bucket, Key: key }),
+    );
+    const body = await response.Body?.transformToString();
+    if (body === undefined) {
+      throw new Error(`Object ${bucket}/${key} returned no body`);
+    }
+    return body;
+  } finally {
+    client.destroy();
   }
-  return body;
 }

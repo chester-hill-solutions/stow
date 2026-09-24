@@ -12,7 +12,7 @@ export const Stow = {
         return createStowConnection(options);
     },
     awsSdkV3Config(options) {
-        if ("secretAccessKey" in options && "endpoint" in options) {
+        if ("stop" in options) {
             return buildAwsSdkV3Config({
                 endpoint: options.endpoint,
                 accessKeyId: options.accessKeyId,
@@ -21,7 +21,10 @@ export const Stow = {
                 forcePathStyle: true,
             });
         }
-        return buildAwsSdkV3Config(options);
+        return buildAwsSdkV3Config({
+            ...options,
+            forcePathStyle: true,
+        });
     },
     upstream: {
         fromEnv() {

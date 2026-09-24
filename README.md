@@ -35,15 +35,19 @@ const client = new S3Client(stow.awsSdkV3Config());
 await stow.stop();
 ```
 
-## Modes
+## Modes and policies
 
 | Mode | When |
 |------|------|
 | `local` | Default when no upstream credentials; force with `--mode local` or `STOW_MODE=local` |
-| `readThroughCache` | Auto when `STOW_*` / `S3_*` / `AWS_*` endpoint + keys are set; local writes remain local |
-| `mirrorWrites` | Explicit read-through plus upstream propagation; emits a loud startup warning |
+| `run-through` | Auto when `STOW_*` / `S3_*` / `AWS_*` endpoint + keys are set |
 
-Live writes to upstream require `--allow-live-writes` / `STOW_ALLOW_LIVE_WRITES=true`.
+| Policy | Behavior |
+|--------|----------|
+| `readThroughCache` | Read upstream on local cache misses; local writes remain local unless live writes are explicitly enabled |
+| `mirrorWrites` | Read-through plus durable upstream propagation; emits a loud startup warning |
+
+Live writes to upstream require `--allow-live-writes` / `STOW_ALLOW_LIVE_WRITES=true` and a durable outbox.
 
 See [docs/adr/0001-auto-detect-run-through.md](docs/adr/0001-auto-detect-run-through.md) and [docs/compat-contract.md](docs/compat-contract.md).
 
@@ -52,7 +56,7 @@ See [docs/adr/0001-auto-detect-run-through.md](docs/adr/0001-auto-detect-run-thr
 ```
 cmd/stow/           CLI
 internal/s3api/     S3 HTTP + admin routes
-internal/storage/   filesystem + memory stores (JSON sidecars on disk)
+internal/storage/   filesystem + memory stores (atomic JSON object records on disk)
 internal/auth/      SigV4
 internal/runthrough/ upstream adapter
 conformance/        AWS SDK Go v2 conformance tests

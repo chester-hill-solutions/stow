@@ -1,4 +1,5 @@
 import type { S3ClientConfig } from "@aws-sdk/client-s3";
+import type { AwsCredentialIdentityProvider } from "@smithy/types";
 
 export type StowMode = "local" | "run-through";
 
@@ -32,6 +33,8 @@ export interface AwsSdkV3ConfigOptions {
   endpoint: string;
   accessKeyId: string;
   secretAccessKey: string;
+  sessionToken?: string;
+  provider?: AwsCredentialIdentityProvider;
   region?: string;
   forcePathStyle?: boolean;
 }
@@ -42,6 +45,8 @@ export interface StowConnection {
   endpoint: string;
   accessKeyId: string;
   secretAccessKey: string;
+  sessionToken?: string;
+  provider?: AwsCredentialIdentityProvider;
   region: string;
   awsSdkV3Config(): S3ClientConfig;
   disconnect(): void;

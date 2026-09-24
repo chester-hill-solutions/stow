@@ -13,6 +13,9 @@ func (a *Adapter) DeleteObject(ctx context.Context, bucket, key string) error {
 	if action == writeError {
 		return ErrLiveWritesDisabled
 	}
+	if err := a.requireDurableOutbox(action); err != nil {
+		return err
+	}
 	version := ""
 	if action == writePropagate {
 		version = a.localVersion(ctx, bucket, key)
@@ -39,6 +42,9 @@ func (a *Adapter) DeleteObjects(ctx context.Context, bucket string, keys []strin
 	action := a.decideUpstreamWrite(bucket)
 	if action == writeError {
 		return nil, ErrLiveWritesDisabled
+	}
+	if err := a.requireDurableOutbox(action); err != nil {
+		return nil, err
 	}
 	versions := map[string]string{}
 	if action == writePropagate {
@@ -75,17 +81,21 @@ func (a *Adapter) DeleteObjects(ctx context.Context, bucket string, keys []strin
 }
 
 func (a *Adapter) CopyObject(ctx context.Context, srcBucket, srcKey, dstBucket, dstKey string) (*storage.ObjectMeta, error) {
+	action := a.decideUpstreamWrite(dstBucket)
+	if action == writeError {
+		return nil, ErrLiveWritesDisabled
+	}
+	if err := a.requireDurableOutbox(action); err != nil {
+		return nil, err
+	}
 	meta, err := a.local.CopyObject(ctx, srcBucket, srcKey, dstBucket, dstKey)
 	if err != nil {
 		return nil, err
 	}
 	a.invalidateCache(ctx, dstBucket, dstKey)
-	action := a.decideUpstreamWrite(dstBucket)
 	switch action {
 	case writeSkip:
 		return meta, nil
-	case writeError:
-		return meta, ErrLiveWritesDisabled
 	case writePropagate:
 		entry, err := a.enqueueIntent(ctx, OutboxPut, dstBucket, dstKey)
 		if err != nil {
@@ -109,16 +119,24 @@ func (a *Adapter) UploadPart(ctx context.Context, uploadID string, partNumber in
 }
 
 func (a *Adapter) CompleteMultipartUpload(ctx context.Context, uploadID string, parts []storage.PartInfo) (*storage.ObjectMeta, error) {
+	bucket, err := a.multipartTarget(ctx, uploadID)
+	if err != nil {
+		return nil, err
+	}
+	action := a.decideUpstreamWrite(bucket)
+	if action == writeError {
+		return nil, ErrLiveWritesDisabled
+	}
+	if err := a.requireDurableOutbox(action); err != nil {
+		return nil, err
+	}
 	meta, err := a.local.CompleteMultipartUpload(ctx, uploadID, parts)
 	if err != nil {
 		return nil, err
 	}
-	action := a.decideUpstreamWrite(meta.Bucket)
 	switch action {
 	case writeSkip:
 		return meta, nil
-	case writeError:
-		return meta, ErrLiveWritesDisabled
 	case writePropagate:
 		entry, err := a.enqueueIntent(ctx, OutboxPut, meta.Bucket, meta.Key)
 		if err != nil {
@@ -131,4 +149,23 @@ func (a *Adapter) CompleteMultipartUpload(ctx context.Context, uploadID string, 
 	default:
 		return meta, nil
 	}
+}
+
+func (a *Adapter) multipartTarget(ctx context.Context, uploadID string) (string, error) {
+	buckets, err := a.local.ListBuckets(ctx)
+	if err != nil {
+		return "", err
+	}
+	for _, bucket := range buckets {
+		uploads, err := a.local.ListMultipartUploads(ctx, bucket.Name, storage.MultipartListOptions{MaxUploads: 10000})
+		if err != nil {
+			continue
+		}
+		for _, upload := range uploads.Uploads {
+			if upload.UploadID == uploadID {
+				return bucket.Name, nil
+			}
+		}
+	}
+	return "", storage.ErrUploadNotFound
 }

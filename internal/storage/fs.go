@@ -1,10 +1,12 @@
 package storage
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
 	"io"
+	"log"
 	"os"
 	"path/filepath"
 	"sort"
@@ -13,18 +15,10 @@ import (
 	"time"
 )
 
-const metaSuffix = ".stowmeta"
+const legacyMetaSuffix = ".stowmeta"
 
-type objectSidecar struct {
-	ContentType       string            `json:"content_type,omitempty"`
-	Metadata          map[string]string `json:"metadata,omitempty"`
-	ETag              string            `json:"etag,omitempty"`
-	ChecksumAlgorithm string            `json:"checksum_algorithm,omitempty"`
-	ChecksumValue     string            `json:"checksum_value,omitempty"`
-}
-
-// FilesystemStore persists object bytes on disk with atomic writes.
-// Object metadata is stored alongside each object as a JSON sidecar (.stowmeta).
+// FilesystemStore persists object records on disk with atomic writes.
+// Each object is stored as one JSON record containing its bytes and metadata.
 type FilesystemStore struct {
 	dataDir   string
 	lockPath  string
@@ -40,6 +34,7 @@ func NewFilesystemStore(dataDir string) (*FilesystemStore, error) {
 	if err := os.MkdirAll(filepath.Join(dataDir, ".multipart"), 0o755); err != nil {
 		return nil, err
 	}
+	warnLegacyLayout(dataDir)
 	lockPath := filepath.Join(dataDir, ".stow.lock")
 	lock, err := os.OpenFile(lockPath, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
 	if err != nil {
@@ -52,6 +47,20 @@ func NewFilesystemStore(dataDir string) (*FilesystemStore, error) {
 	return &FilesystemStore{dataDir: dataDir, lockPath: lockPath}, nil
 }
 
+func warnLegacyLayout(dataDir string) {
+	root := filepath.Join(dataDir, "buckets")
+	_ = filepath.WalkDir(root, func(_ string, entry os.DirEntry, err error) error {
+		if err != nil {
+			return nil
+		}
+		if !entry.IsDir() && strings.HasSuffix(entry.Name(), legacyMetaSuffix) {
+			log.Printf("stow: legacy .stowmeta layout detected; legacy data is not migrated")
+			return filepath.SkipAll
+		}
+		return nil
+	})
+}
+
 func (s *FilesystemStore) bucketDir(bucket string) string {
 	return filepath.Join(s.dataDir, "buckets", bucket)
 }
@@ -62,10 +71,6 @@ func (s *FilesystemStore) objectsDir(bucket string) string {
 
 func (s *FilesystemStore) objectPath(bucket, key string) string {
 	return filepath.Join(s.objectsDir(bucket), objectRelPath(key))
-}
-
-func (s *FilesystemStore) metaPath(bucket, key string) string {
-	return s.objectPath(bucket, key) + metaSuffix
 }
 
 func (s *FilesystemStore) multipartDir(uploadID string) string {
@@ -104,6 +109,11 @@ func (s *FilesystemStore) DeleteBucket(_ context.Context, name string) error {
 	if hasObjects, err := bucketHasObjects(s.objectsDir(name)); err != nil {
 		return err
 	} else if hasObjects {
+		return ErrBucketNotEmpty
+	}
+	if hasUploads, err := s.bucketHasMultipartUploads(name); err != nil {
+		return err
+	} else if hasUploads {
 		return ErrBucketNotEmpty
 	}
 	return os.RemoveAll(dir)
@@ -169,16 +179,13 @@ func (s *FilesystemStore) PutObject(_ context.Context, bucket, key string, body 
 	}
 	objPath := s.objectPath(bucket, key)
 	var existing *ObjectMeta
-	if stat, statErr := os.Stat(objPath); statErr == nil {
-		sidecar, _ := readObjectSidecar(s.metaPath(bucket, key))
-		existing = &ObjectMeta{ETag: sidecar.ETag, Size: stat.Size()}
-		if existing.ETag == "" {
-			data, readErr := os.ReadFile(objPath)
-			if readErr != nil {
-				return nil, readErr
-			}
-			existing.ETag = etagForBytes(data)
+	if _, statErr := os.Stat(objPath); statErr == nil {
+		record, readErr := readObjectRecord(objPath)
+		if readErr != nil {
+			return nil, readErr
 		}
+		existingMeta := record.meta(bucket, key)
+		existing = &existingMeta
 	} else if !os.IsNotExist(statErr) {
 		return nil, statErr
 	}
@@ -190,46 +197,42 @@ func (s *FilesystemStore) PutObject(_ context.Context, bucket, key string, body 
 	if err != nil {
 		return nil, err
 	}
-	if err := writeBytesAtomic(objPath, data); err != nil {
-		return nil, err
-	}
-	sidecar := objectSidecar{
-		ContentType:       opts.ContentType,
-		Metadata:          cloneMetadata(opts.Metadata),
-		ETag:              etag,
-		ChecksumAlgorithm: opts.ChecksumAlgorithm,
-		ChecksumValue:     opts.ChecksumValue,
-	}
-	if err := writeJSONAtomic(s.metaPath(bucket, key), sidecar); err != nil {
-		return nil, err
-	}
 	now := time.Now().UTC()
-	return &ObjectMeta{
-		Bucket:            bucket,
-		Key:               key,
-		Size:              int64(len(data)),
-		ETag:              etag,
+	record := objectRecord{
+		Data:              data,
 		ContentType:       opts.ContentType,
-		LastModified:      now,
 		Metadata:          cloneMetadata(opts.Metadata),
+		ETag:              etag,
 		ChecksumAlgorithm: opts.ChecksumAlgorithm,
 		ChecksumValue:     opts.ChecksumValue,
-	}, nil
+		LastModified:      now,
+	}
+	if err := writeObjectRecord(objPath, record); err != nil {
+		return nil, err
+	}
+	meta := record.meta(bucket, key)
+	return &meta, nil
 }
 
-func (s *FilesystemStore) GetObject(ctx context.Context, bucket, key string) (io.ReadCloser, *ObjectMeta, error) {
-	meta, err := s.HeadObject(ctx, bucket, key)
-	if err != nil {
+func (s *FilesystemStore) GetObject(_ context.Context, bucket, key string) (io.ReadCloser, *ObjectMeta, error) {
+	if err := validateBucketName(bucket); err != nil {
 		return nil, nil, err
 	}
-	f, err := os.Open(s.objectPath(bucket, key))
+	if err := validateKey(key); err != nil {
+		return nil, nil, err
+	}
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	record, err := readObjectRecord(s.objectPath(bucket, key))
 	if err != nil {
 		if os.IsNotExist(err) {
 			return nil, nil, ErrObjectNotFound
 		}
 		return nil, nil, err
 	}
-	return f, meta, nil
+	meta := record.meta(bucket, key)
+	return io.NopCloser(bytes.NewReader(record.Data)), &meta, nil
 }
 
 func (s *FilesystemStore) HeadObject(_ context.Context, bucket, key string) (*ObjectMeta, error) {
@@ -242,34 +245,15 @@ func (s *FilesystemStore) HeadObject(_ context.Context, bucket, key string) (*Ob
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
-	objPath := s.objectPath(bucket, key)
-	st, err := os.Stat(objPath)
+	record, err := readObjectRecord(s.objectPath(bucket, key))
 	if err != nil {
 		if os.IsNotExist(err) {
 			return nil, ErrObjectNotFound
 		}
 		return nil, err
 	}
-	sidecar, _ := readObjectSidecar(s.metaPath(bucket, key))
-	meta := &ObjectMeta{
-		Bucket:            bucket,
-		Key:               key,
-		Size:              st.Size(),
-		LastModified:      st.ModTime().UTC(),
-		ContentType:       sidecar.ContentType,
-		Metadata:          cloneMetadata(sidecar.Metadata),
-		ETag:              sidecar.ETag,
-		ChecksumAlgorithm: sidecar.ChecksumAlgorithm,
-		ChecksumValue:     sidecar.ChecksumValue,
-	}
-	if meta.ETag == "" {
-		data, err := os.ReadFile(objPath)
-		if err != nil {
-			return nil, err
-		}
-		meta.ETag = etagForBytes(data)
-	}
-	return meta, nil
+	meta := record.meta(bucket, key)
+	return &meta, nil
 }
 
 func (s *FilesystemStore) DeleteObject(_ context.Context, bucket, key string) error {
@@ -286,7 +270,6 @@ func (s *FilesystemStore) DeleteObject(_ context.Context, bucket, key string) er
 	if _, err := os.Stat(objPath); os.IsNotExist(err) {
 		return ErrObjectNotFound
 	}
-	_ = os.Remove(s.metaPath(bucket, key))
 	return os.Remove(objPath)
 }
 
@@ -297,6 +280,12 @@ func (s *FilesystemStore) DeleteObjects(_ context.Context, bucket string, keys [
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
+	if _, err := os.Stat(s.bucketDir(bucket)); os.IsNotExist(err) {
+		return nil, ErrBucketNotFound
+	} else if err != nil {
+		return nil, err
+	}
+
 	var deleted []string
 	for _, key := range keys {
 		if err := validateKey(key); err != nil {
@@ -306,7 +295,6 @@ func (s *FilesystemStore) DeleteObjects(_ context.Context, bucket string, keys [
 		if _, err := os.Stat(objPath); os.IsNotExist(err) {
 			continue
 		}
-		_ = os.Remove(s.metaPath(bucket, key))
 		if err := os.Remove(objPath); err != nil {
 			return deleted, err
 		}
@@ -327,16 +315,6 @@ func (s *FilesystemStore) CopyObject(ctx context.Context, srcBucket, srcKey, dst
 		ChecksumAlgorithm: meta.ChecksumAlgorithm,
 		ChecksumValue:     meta.ChecksumValue,
 	})
-}
-
-func readObjectSidecar(path string) (objectSidecar, error) {
-	var sc objectSidecar
-	data, err := os.ReadFile(path)
-	if err != nil {
-		return sc, err
-	}
-	err = json.Unmarshal(data, &sc)
-	return sc, err
 }
 
 func readBucketCreated(dir string) (time.Time, error) {
@@ -375,11 +353,34 @@ func bucketHasObjects(root string) (bool, error) {
 		if d.IsDir() {
 			return nil
 		}
-		if strings.HasSuffix(d.Name(), metaSuffix) {
+		if strings.HasSuffix(d.Name(), legacyMetaSuffix) {
 			return nil
 		}
 		found = true
 		return filepath.SkipAll
 	})
 	return found, err
+}
+
+func (s *FilesystemStore) bucketHasMultipartUploads(bucket string) (bool, error) {
+	entries, err := os.ReadDir(filepath.Join(s.dataDir, ".multipart"))
+	if os.IsNotExist(err) {
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	for _, entry := range entries {
+		if !entry.IsDir() {
+			continue
+		}
+		manifest, err := readMultipartManifest(filepath.Join(s.dataDir, ".multipart", entry.Name()))
+		if err != nil {
+			return false, err
+		}
+		if manifest.Bucket == bucket {
+			return true, nil
+		}
+	}
+	return false, nil
 }

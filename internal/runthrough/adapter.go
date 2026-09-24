@@ -29,6 +29,7 @@ type Adapter struct {
 	outbox        Outbox
 	cfg           Config
 	separateCache bool
+	durableOutbox bool
 	cacheHits     atomic.Uint64
 	cacheMisses   atomic.Uint64
 }
@@ -54,7 +55,11 @@ func NewWithOutbox(cfg Config, local, cache storage.Store, upstream Client, outb
 	if outbox == nil {
 		outbox = NewMemoryOutbox()
 	}
-	return &Adapter{cfg: cfg, local: local, cache: cache, upstream: upstream, outbox: outbox, separateCache: cache != local}
+	durable := false
+	if provider, ok := outbox.(DurableOutbox); ok {
+		durable = provider.Durable()
+	}
+	return &Adapter{cfg: cfg, local: local, cache: cache, upstream: upstream, outbox: outbox, separateCache: cache != local, durableOutbox: durable}
 }
 
 // Config returns the adapter configuration.
@@ -81,6 +86,22 @@ func (a *Adapter) CacheStats() (hits, misses uint64) {
 	return a.cacheHits.Load(), a.cacheMisses.Load()
 }
 
+// OutboxStats reports pending and terminal entries for admin inspection.
+func (a *Adapter) OutboxStats() (pending, terminal int) {
+	for _, entry := range a.outbox.Pending() {
+		pending++
+		if entry.Terminal {
+			terminal++
+		}
+	}
+	return pending, terminal
+}
+
+// DiscardOutboxEntry removes one pending or terminal propagation intent.
+func (a *Adapter) DiscardOutboxEntry(id string) error {
+	return a.outbox.Discard(id)
+}
+
 func (a *Adapter) upstreamEnabled(bucket string) bool {
 	if a.upstream == nil {
 		return false
@@ -92,12 +113,19 @@ func (a *Adapter) upstreamEnabled(bucket string) bool {
 }
 
 // decideUpstreamWrite collapses Policy × AllowLiveWrites into one action.
+func (a *Adapter) requireDurableOutbox(action writeAction) error {
+	if action == writePropagate && !a.durableOutbox {
+		return ErrDurableOutboxRequired
+	}
+	return nil
+}
+
 func (a *Adapter) decideUpstreamWrite(bucket string) writeAction {
 	if !a.upstreamEnabled(bucket) {
 		return writeSkip
 	}
 	switch a.cfg.Policy {
-	case PolicyProxy, PolicyMirrorWrites:
+	case PolicyMirrorWrites:
 		if a.cfg.AllowLiveWrites {
 			return writePropagate
 		}
@@ -108,12 +136,7 @@ func (a *Adapter) decideUpstreamWrite(bucket string) writeAction {
 		}
 		return writeSkip
 	default:
-		// Unknown/empty policy: treat like read-through.
-		var _ Policy = a.cfg.Policy
-		if a.cfg.AllowLiveWrites {
-			return writePropagate
-		}
-		return writeSkip
+		return writeError
 	}
 }
 
@@ -147,17 +170,8 @@ func (a *Adapter) PutObject(ctx context.Context, bucket, key string, body io.Rea
 	if action == writeError {
 		return nil, ErrLiveWritesDisabled
 	}
-
-	if a.cfg.Policy == PolicyProxy && action == writePropagate {
-		// Proxy reads go upstream-only; writes must match (then cache locally).
-		data, err := io.ReadAll(body)
-		if err != nil {
-			return nil, err
-		}
-		if err := a.upstream.PutObject(ctx, bucket, key, bytes.NewReader(data), opts); err != nil {
-			return nil, err
-		}
-		return a.local.PutObject(ctx, bucket, key, bytes.NewReader(data), opts)
+	if err := a.requireDurableOutbox(action); err != nil {
+		return nil, err
 	}
 
 	meta, err := a.local.PutObject(ctx, bucket, key, body, opts)
@@ -178,16 +192,10 @@ func (a *Adapter) PutObject(ctx context.Context, bucket, key string, body io.Rea
 }
 
 func (a *Adapter) GetObject(ctx context.Context, bucket, key string) (io.ReadCloser, *storage.ObjectMeta, error) {
-	if a.cfg.Policy == PolicyProxy && a.upstreamEnabled(bucket) {
-		return a.upstream.GetObject(ctx, bucket, key)
-	}
 	return a.resolveObject(ctx, bucket, key, true)
 }
 
 func (a *Adapter) HeadObject(ctx context.Context, bucket, key string) (*storage.ObjectMeta, error) {
-	if a.cfg.Policy == PolicyProxy && a.upstreamEnabled(bucket) {
-		return a.upstream.HeadObject(ctx, bucket, key)
-	}
 	_, meta, err := a.resolveObject(ctx, bucket, key, false)
 	return meta, err
 }

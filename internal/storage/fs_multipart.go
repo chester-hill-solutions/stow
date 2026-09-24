@@ -91,6 +91,9 @@ func (s *FilesystemStore) CompleteMultipartUpload(_ context.Context, uploadID st
 	if len(parts) == 0 {
 		return nil, ErrInvalidUpload
 	}
+	if err := validateMultipartPartNumbers(parts); err != nil {
+		return nil, err
+	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -117,24 +120,16 @@ func (s *FilesystemStore) CompleteMultipartUpload(_ context.Context, uploadID st
 		combined = append(combined, data...)
 	}
 	etag := compositeETag(partETags)
+	now := time.Now().UTC()
+	record := objectRecord{Data: combined, ETag: etag, LastModified: now}
 	objPath := s.objectPath(manifest.Bucket, manifest.Key)
-	if err := writeBytesAtomic(objPath, combined); err != nil {
-		return nil, err
-	}
-	sidecar := objectSidecar{ETag: etag}
-	if err := writeJSONAtomic(s.metaPath(manifest.Bucket, manifest.Key), sidecar); err != nil {
+	if err := writeObjectRecord(objPath, record); err != nil {
 		return nil, err
 	}
 	_ = os.RemoveAll(dir)
 
-	now := time.Now().UTC()
-	return &ObjectMeta{
-		Bucket:       manifest.Bucket,
-		Key:          manifest.Key,
-		Size:         int64(len(combined)),
-		ETag:         etag,
-		LastModified: now,
-	}, nil
+	meta := record.meta(manifest.Bucket, manifest.Key)
+	return &meta, nil
 }
 
 func (s *FilesystemStore) ValidateMultipartUpload(_ context.Context, uploadID, bucket, key string) error {

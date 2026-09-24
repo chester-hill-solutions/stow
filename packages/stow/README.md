@@ -33,7 +33,9 @@ process.env.S3_SECRET_ACCESS_KEY = bucket.secretAccessKey;
 await bucket.stop();
 ```
 
-`Stow.start()` owns the child process it launches. Use `backend: "memory"` for an explicitly ephemeral instance. To use an already-running endpoint, call `Stow.connect({ endpoint, accessKeyId, secretAccessKey, region })`; its connection is disconnected by the caller rather than by the managed-process `stop()` method.
+`Stow.start()` owns the child process it launches. Use `backend: "memory"` for an explicitly ephemeral instance. To use an already-running endpoint, call `Stow.connect({ endpoint, accessKeyId, secretAccessKey, region })`; its connection is disconnected by the caller rather than by the managed-process `stop()` method. Both entry points remain endpoint-based in 0.2; the portable in-process/WASM API is a later additive profile.
+
+Both connection helpers also accept an optional `sessionToken` or credential `provider` for temporary AWS credentials.
 
 CLI equivalent:
 
@@ -56,4 +58,4 @@ npm run build
 npm test
 ```
 
-Integration tests are skipped when no `stow` binary is available.
+The package test suite includes lifecycle and shared-corpus coverage. Run `make build` before `npm test` when working from the monorepo.

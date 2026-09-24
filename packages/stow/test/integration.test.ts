@@ -67,20 +67,19 @@ interface SharedCase {
   };
 }
 
-describe("shared conformance corpus", () => {
-  it("runs the SDK round-trip case", async () => {
-    const corpus = JSON.parse(
-      await readFile(new URL("../../../conformance/corpus/cases.json", import.meta.url), "utf8"),
-    ) as { cases: SharedCase[] };
-    const testCase = corpus.cases.find((candidate) => candidate.id === "put-get-roundtrip");
-    assert.ok(testCase, "shared corpus must contain put-get-roundtrip");
+async function runSharedCorpus(backend: "filesystem" | "memory"): Promise<void> {
+  const corpus = JSON.parse(
+    await readFile(new URL("../../../conformance/corpus/cases.json", import.meta.url), "utf8"),
+  ) as { cases: SharedCase[] };
+  assert.ok(corpus.cases.length > 0, "shared corpus must contain cases");
 
-    const dataDir = await mkdtemp(join(tmpdir(), "stow-corpus-"));
+  for (const testCase of corpus.cases) {
+    const dataDir = await mkdtemp(join(tmpdir(), `stow-corpus-${backend}-`));
     const instance = await Stow.start({
       dataDir,
       buckets: [testCase.bucket],
       port: 0,
-      backend: "filesystem",
+      backend,
     });
     const client = new S3Client(instance.awsSdkV3Config());
     try {
@@ -110,6 +109,16 @@ describe("shared conformance corpus", () => {
       await instance.stop();
       await rm(dataDir, { recursive: true, force: true });
     }
+  }
+}
+
+describe("shared conformance corpus", () => {
+  it("runs every corpus case against the filesystem backend", async () => {
+    await runSharedCorpus("filesystem");
+  });
+
+  it("runs every corpus case against the memory backend", async () => {
+    await runSharedCorpus("memory");
   });
 });
 
@@ -128,44 +137,6 @@ describe("external connections", () => {
       assert.equal(connection.awsSdkV3Config().forcePathStyle, true);
       connection.disconnect();
     } finally {
-      await instance.stop();
-      await rm(dataDir, { recursive: true, force: true });
-    }
-  });
-});
-
-describe("shared conformance corpus", () => {
-  it("runs the SDK round-trip case with the memory backend", async () => {
-    const corpus = JSON.parse(
-      await readFile(new URL("../../../conformance/corpus/cases.json", import.meta.url), "utf8"),
-    ) as { cases: SharedCase[] };
-    const testCase = corpus.cases.find((candidate) => candidate.id === "put-get-roundtrip");
-    assert.ok(testCase, "shared corpus must contain put-get-roundtrip");
-
-    const dataDir = await mkdtemp(join(tmpdir(), "stow-corpus-memory-"));
-    const instance = await Stow.start({
-      dataDir,
-      buckets: [testCase.bucket],
-      port: 0,
-      backend: "memory",
-    });
-    const client = new S3Client(instance.awsSdkV3Config());
-    try {
-      await client.send(
-        new PutObjectCommand({
-          Bucket: testCase.bucket,
-          Key: testCase.key,
-          Body: testCase.body,
-          ContentType: testCase.contentType,
-          Metadata: testCase.metadata,
-        }),
-      );
-      const get = await client.send(
-        new GetObjectCommand({ Bucket: testCase.bucket, Key: testCase.key }),
-      );
-      assert.equal(await get.Body?.transformToString(), testCase.expect.body);
-    } finally {
-      client.destroy();
       await instance.stop();
       await rm(dataDir, { recursive: true, force: true });
     }

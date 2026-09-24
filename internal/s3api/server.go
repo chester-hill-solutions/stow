@@ -6,6 +6,7 @@ import (
 	"log"
 	"net"
 	"net/http"
+	"sync"
 	"time"
 
 	"github.com/chester-hill-solutions/stow/internal/storage"
@@ -42,6 +43,13 @@ type Server struct {
 	listener   net.Listener
 	listenAddr string
 	baseHost   string
+	mu         sync.RWMutex
+	ready      chan struct{}
+	readyOnce  sync.Once
+	started    bool
+	closed     bool
+	closeOnce  sync.Once
+	closeErr   error
 	startTime  time.Time
 }
 
@@ -69,46 +77,95 @@ func New(cfg Config) (*Server, error) {
 		store:     cfg.Store,
 		auth:      authFn,
 		baseHost:  baseHost,
+		ready:     make(chan struct{}),
 		startTime: time.Now(),
 	}, nil
 }
 
 // ListenAndServe binds and serves HTTP. Blocks until the server stops.
 func (s *Server) ListenAndServe() error {
+	s.mu.Lock()
+	if s.closed {
+		s.mu.Unlock()
+		s.readyOnce.Do(func() { close(s.ready) })
+		return http.ErrServerClosed
+	}
+	if s.started {
+		s.mu.Unlock()
+		return fmt.Errorf("s3api: server is already started")
+	}
+	s.started = true
+	ready := s.ready
+	s.mu.Unlock()
+
 	addr := fmt.Sprintf("%s:%d", s.config.Host, s.config.Port)
 	ln, err := net.Listen("tcp", addr)
 	if err != nil {
+		s.readyOnce.Do(func() { close(ready) })
 		return err
 	}
-	s.listener = ln
-	s.listenAddr = ln.Addr().String()
+	listenAddr := ln.Addr().String()
+	s.mu.RLock()
+	baseHost := s.baseHost
+	s.mu.RUnlock()
 	// Use an explicitly configured base host for virtual-hosted routing. Otherwise
 	// derive the suffix from the actual bound address.
 	if s.config.BaseHost == "" {
-		if host, _, err := net.SplitHostPort(s.listenAddr); err == nil {
-			s.baseHost = host
+		if host, _, err := net.SplitHostPort(listenAddr); err == nil {
+			baseHost = host
 		}
 	}
-	s.httpServer = &http.Server{Handler: s}
-	return s.httpServer.Serve(ln)
+	httpServer := &http.Server{
+		Handler:           s,
+		ReadHeaderTimeout: 10 * time.Second,
+		IdleTimeout:       2 * time.Minute,
+		MaxHeaderBytes:    1 << 20,
+	}
+	s.mu.Lock()
+	s.listener = ln
+	s.listenAddr = listenAddr
+	s.baseHost = baseHost
+	s.httpServer = httpServer
+	s.mu.Unlock()
+	s.readyOnce.Do(func() { close(ready) })
+	return httpServer.Serve(ln)
 }
 
 // Addr returns the bound listen address (host:port).
 func (s *Server) Addr() string {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
 	return s.listenAddr
 }
 
 // Shutdown gracefully stops the server.
 func (s *Server) Shutdown(ctx context.Context) error {
-	if s.httpServer == nil {
-		return s.store.Close()
+	s.mu.Lock()
+	s.closed = true
+	started := s.started
+	ready := s.ready
+	httpServer := s.httpServer
+	s.mu.Unlock()
+
+	var shutdownErr error
+	if started && httpServer == nil {
+		select {
+		case <-ready:
+			s.mu.RLock()
+			httpServer = s.httpServer
+			s.mu.RUnlock()
+		case <-ctx.Done():
+			return ctx.Err()
+		}
 	}
-	shutdownErr := s.httpServer.Shutdown(ctx)
-	closeErr := s.store.Close()
+	if httpServer != nil {
+		shutdownErr = httpServer.Shutdown(ctx)
+	}
+	s.closeOnce.Do(func() { s.closeErr = s.store.Close() })
 	if shutdownErr != nil {
 		return shutdownErr
 	}
-	return closeErr
+	return s.closeErr
 }
 
 // ServeHTTP implements http.Handler.
@@ -148,7 +205,10 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	route, routeErr := parseRoute(r, s.baseHost)
+	s.mu.RLock()
+	baseHost := s.baseHost
+	s.mu.RUnlock()
+	route, routeErr := parseRoute(r, baseHost)
 	if routeErr.Code != "" {
 		writeError(rw, r, routeErr)
 		s.logRequest(r, rw.status, time.Since(start))
@@ -188,7 +248,7 @@ func (s *Server) logRequest(r *http.Request, status int, dur time.Duration) {
 func isLoopbackRequest(r *http.Request) bool {
 	remote := r.RemoteAddr
 	if remote == "" {
-		return true
+		return false
 	}
 	host, _, err := net.SplitHostPort(remote)
 	if err != nil {

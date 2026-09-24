@@ -29,6 +29,8 @@ jobs:
           node-version: 24
           cache: npm
           cache-dependency-path: packages/stow/package-lock.json
+      - name: Verify tests
+        run: make test-all
       - name: Verify build and standards
         run: |
           make build

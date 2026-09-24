@@ -1,4 +1,4 @@
-.PHONY: build test test-conformance test-node test-all lint format-check check-go-quality check-ts-quality check-type-escapes check-dry check-file-size check-coverage check-version standards check-generated
+.PHONY: build test test-race test-conformance test-node test-all lint format-check check-go-quality check-ts-quality check-type-escapes check-dry check-file-size check-coverage check-version standards check-generated
 
 BINARY := bin/stow
 
@@ -8,14 +8,17 @@ build:
 test:
 	go test ./...
 
+test-race:
+	go test -race ./...
+
 test-conformance:
 	STOW_CONFORMANCE_BACKEND=memory go test ./conformance/... -count=1 -v
 	STOW_CONFORMANCE_BACKEND=filesystem go test ./conformance/... -count=1 -v
 
-test-node:
+test-node: build
 	cd packages/stow && npm ci && npm test
 
-test-all: test test-conformance test-node
+test-all: build test test-race test-conformance test-node
 
 lint:
 	go vet ./...
@@ -49,4 +52,4 @@ check-coverage:
 check-version:
 	node scripts/check-version.mjs
 
-standards: format-check lint check-go-quality check-file-size check-coverage check-version check-ts-quality check-generated
+standards: format-check lint test-race check-go-quality check-file-size check-coverage check-version check-ts-quality check-generated

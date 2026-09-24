@@ -36,11 +36,17 @@ type OutboxEntry struct {
 }
 
 type Outbox interface {
-	Enqueue(entry OutboxEntry) error
+	Enqueue(entry OutboxEntry) (OutboxEntry, error)
 	Pending() []OutboxEntry
 	MarkSuccess(id string) error
 	MarkFailure(id string, cause error, retryAt time.Time) error
+	Discard(id string) error
 	Close() error
+}
+
+type DurableOutbox interface {
+	Outbox
+	Durable() bool
 }
 
 type outboxState struct {
@@ -64,11 +70,6 @@ func (s *outboxState) enqueue(entry OutboxEntry) OutboxEntry {
 	if entry.CreatedAt.IsZero() {
 		entry.CreatedAt = time.Now().UTC()
 	}
-	for id, existing := range s.entries {
-		if existing.Bucket == entry.Bucket && existing.Key == entry.Key {
-			delete(s.entries, id)
-		}
-	}
 	s.entries[entry.ID] = entry
 	return entry
 }
@@ -78,6 +79,14 @@ func (s *outboxState) pending() []OutboxEntry {
 }
 
 func (s *outboxState) markSuccess(id string) error {
+	delete(s.entries, id)
+	return nil
+}
+
+func (s *outboxState) discard(id string) error {
+	if _, ok := s.entries[id]; !ok {
+		return fmt.Errorf("outbox entry %q not found", id)
+	}
 	delete(s.entries, id)
 	return nil
 }
@@ -109,11 +118,10 @@ func NewMemoryOutbox() *MemoryOutbox {
 	return &MemoryOutbox{state: newOutboxState()}
 }
 
-func (o *MemoryOutbox) Enqueue(entry OutboxEntry) error {
+func (o *MemoryOutbox) Enqueue(entry OutboxEntry) (OutboxEntry, error) {
 	o.mu.Lock()
 	defer o.mu.Unlock()
-	o.state.enqueue(entry)
-	return nil
+	return o.state.enqueue(entry), nil
 }
 
 func (o *MemoryOutbox) Pending() []OutboxEntry {
@@ -134,7 +142,15 @@ func (o *MemoryOutbox) MarkFailure(id string, cause error, retryAt time.Time) er
 	return o.state.markFailure(id, cause, retryAt)
 }
 
+func (o *MemoryOutbox) Discard(id string) error {
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	return o.state.discard(id)
+}
+
 func (o *MemoryOutbox) Close() error { return nil }
+
+func (o *MemoryOutbox) Durable() bool { return false }
 
 type FileOutbox struct {
 	path  string
@@ -183,11 +199,14 @@ func NewFileOutbox(path string) (*FileOutbox, error) {
 	return o, nil
 }
 
-func (o *FileOutbox) Enqueue(entry OutboxEntry) error {
+func (o *FileOutbox) Enqueue(entry OutboxEntry) (OutboxEntry, error) {
 	o.mu.Lock()
 	defer o.mu.Unlock()
-	o.state.enqueue(entry)
-	return o.persistLocked()
+	enqueued := o.state.enqueue(entry)
+	if err := o.persistLocked(); err != nil {
+		return OutboxEntry{}, err
+	}
+	return enqueued, nil
 }
 
 func (o *FileOutbox) Pending() []OutboxEntry {
@@ -213,6 +232,17 @@ func (o *FileOutbox) MarkFailure(id string, cause error, retryAt time.Time) erro
 	}
 	return o.persistLocked()
 }
+
+func (o *FileOutbox) Discard(id string) error {
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	if err := o.state.discard(id); err != nil {
+		return err
+	}
+	return o.persistLocked()
+}
+
+func (o *FileOutbox) Durable() bool { return true }
 
 func (o *FileOutbox) Close() error {
 	o.mu.Lock()
@@ -242,7 +272,14 @@ func (o *FileOutbox) persistLocked() error {
 	if err := tmp.Close(); err != nil {
 		return err
 	}
-	return os.Rename(tmpName, o.path)
+	if err := os.Rename(tmpName, o.path); err != nil {
+		return err
+	}
+	if dirFile, err := os.Open(filepath.Dir(o.path)); err == nil {
+		_ = dirFile.Sync()
+		_ = dirFile.Close()
+	}
+	return nil
 }
 
 func pendingEntries(entries map[string]OutboxEntry) []OutboxEntry {
@@ -252,9 +289,17 @@ func pendingEntries(entries map[string]OutboxEntry) []OutboxEntry {
 	}
 	sort.Slice(out, func(i, j int) bool {
 		if out[i].CreatedAt.Equal(out[j].CreatedAt) {
-			return out[i].ID < out[j].ID
+			return outboxSequence(out[i].ID) < outboxSequence(out[j].ID)
 		}
 		return out[i].CreatedAt.Before(out[j].CreatedAt)
 	})
 	return out
+}
+
+func outboxSequence(id string) uint64 {
+	sequence, err := strconv.ParseUint(strings.TrimPrefix(id, "outbox-"), 10, 64)
+	if err != nil {
+		return ^uint64(0)
+	}
+	return sequence
 }

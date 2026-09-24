@@ -36,6 +36,10 @@ func writeBytesAtomic(path string, data []byte) error {
 	if err := os.Rename(tmpName, path); err != nil {
 		return err
 	}
+	if dirFile, err := os.Open(dir); err == nil {
+		_ = dirFile.Sync()
+		_ = dirFile.Close()
+	}
 	cleanup = false
 	return nil
 }

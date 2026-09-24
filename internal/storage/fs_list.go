@@ -29,7 +29,7 @@ func (s *FilesystemStore) ListObjectsV2(_ context.Context, bucket string, opts L
 	}
 	items := make([]ObjectMeta, 0, len(entries))
 	for _, entry := range entries {
-		if entry.IsDir() || strings.HasSuffix(entry.Name(), metaSuffix) {
+		if entry.IsDir() || strings.HasSuffix(entry.Name(), legacyMetaSuffix) {
 			continue
 		}
 		key, ok := objectKeyFromFilename(entry.Name())
@@ -39,23 +39,11 @@ func (s *FilesystemStore) ListObjectsV2(_ context.Context, bucket string, opts L
 		if opts.Prefix != "" && !strings.HasPrefix(key, opts.Prefix) {
 			continue
 		}
-		p := filepath.Join(root, entry.Name())
-		st, err := entry.Info()
+		record, err := readObjectRecord(filepath.Join(root, entry.Name()))
 		if err != nil {
 			return nil, err
 		}
-		sidecar, _ := readObjectSidecar(p + metaSuffix)
-		items = append(items, ObjectMeta{
-			Bucket:            bucket,
-			Key:               key,
-			Size:              st.Size(),
-			LastModified:      st.ModTime().UTC(),
-			ContentType:       sidecar.ContentType,
-			Metadata:          cloneMetadata(sidecar.Metadata),
-			ETag:              sidecar.ETag,
-			ChecksumAlgorithm: sidecar.ChecksumAlgorithm,
-			ChecksumValue:     sidecar.ChecksumValue,
-		})
+		items = append(items, record.meta(bucket, key))
 	}
 	sort.Slice(items, func(i, j int) bool { return items[i].Key < items[j].Key })
 	return PaginateObjects(items, opts), nil

@@ -2,13 +2,17 @@ package s3api_test
 
 import (
 	"bytes"
+	"context"
 	"encoding/xml"
 	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"testing"
+	"time"
 
+	"github.com/chester-hill-solutions/stow/internal/runthrough"
 	"github.com/chester-hill-solutions/stow/internal/s3api"
 	"github.com/chester-hill-solutions/stow/internal/storage"
 )
@@ -36,6 +40,92 @@ func TestNewRequiresAuthentication(t *testing.T) {
 	})
 	if err == nil {
 		t.Fatal("expected server creation to reject missing authentication")
+	}
+}
+
+func TestServerAddrAndShutdownAreRaceFree(t *testing.T) {
+	store := storage.NewMemoryStore()
+	srv, err := s3api.New(s3api.Config{
+		Store: store,
+		Auth:  s3api.DevBypass,
+		Host:  "127.0.0.1",
+		Port:  0,
+	})
+	if err != nil {
+		t.Fatalf("new server: %v", err)
+	}
+
+	errCh := make(chan error, 1)
+	go func() {
+		errCh <- srv.ListenAndServe()
+	}()
+
+	var readers sync.WaitGroup
+	stopReaders := make(chan struct{})
+	readers.Add(1)
+	go func() {
+		defer readers.Done()
+		for {
+			select {
+			case <-stopReaders:
+				return
+			default:
+				_ = srv.Addr()
+			}
+		}
+	}()
+
+	deadline := time.Now().Add(2 * time.Second)
+	for srv.Addr() == "" && time.Now().Before(deadline) {
+		time.Sleep(time.Millisecond)
+	}
+	if srv.Addr() == "" {
+		close(stopReaders)
+		readers.Wait()
+		t.Fatal("server failed to bind")
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	if err := srv.Shutdown(ctx); err != nil {
+		t.Fatalf("shutdown: %v", err)
+	}
+	close(stopReaders)
+	readers.Wait()
+
+	select {
+	case err := <-errCh:
+		if err != nil && err != http.ErrServerClosed {
+			t.Fatalf("serve: %v", err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("server did not stop")
+	}
+}
+
+func TestShutdownBeforeListenPreventsServe(t *testing.T) {
+	srv, err := s3api.New(s3api.Config{
+		Store: storage.NewMemoryStore(),
+		Auth:  s3api.DevBypass,
+		Host:  "127.0.0.1",
+		Port:  0,
+	})
+	if err != nil {
+		t.Fatalf("new server: %v", err)
+	}
+	if err := srv.Shutdown(context.Background()); err != nil {
+		t.Fatalf("shutdown before listen: %v", err)
+	}
+
+	errCh := make(chan error, 1)
+	go func() { errCh <- srv.ListenAndServe() }()
+	select {
+	case err := <-errCh:
+		if err != http.ErrServerClosed {
+			t.Fatalf("listen error = %v, want http.ErrServerClosed", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("server started after shutdown")
 	}
 }
 
@@ -225,6 +315,102 @@ func TestDeleteObject(t *testing.T) {
 	resp.Body.Close()
 	if resp.StatusCode != http.StatusNoContent {
 		t.Fatalf("idempotent delete status = %d", resp.StatusCode)
+	}
+}
+
+func TestDeleteObjectsQuietSuppressesDeletedEntries(t *testing.T) {
+	ts := newTestServer(t)
+	defer ts.Close()
+
+	req, _ := http.NewRequest(http.MethodPut, ts.URL+"/quietbucket", nil)
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("create bucket: %v", err)
+	}
+	resp.Body.Close()
+
+	for _, path := range []string{"/quietbucket/one", "/quietbucket/two"} {
+		req, _ := http.NewRequest(http.MethodPut, ts.URL+path, strings.NewReader("value"))
+		req.ContentLength = int64(len("value"))
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			t.Fatalf("put %s: %v", path, err)
+		}
+		resp.Body.Close()
+	}
+
+	body := `<Delete><Quiet>true</Quiet><Object><Key>one</Key></Object><Object><Key>two</Key></Object></Delete>`
+	req, _ = http.NewRequest(http.MethodPost, ts.URL+"/quietbucket?delete", strings.NewReader(body))
+	req.ContentLength = int64(len(body))
+	resp, err = http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("delete objects: %v", err)
+	}
+	defer resp.Body.Close()
+	data, _ := io.ReadAll(resp.Body)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("delete status = %d, want 200", resp.StatusCode)
+	}
+	if strings.Contains(string(data), "<Deleted>") {
+		t.Fatalf("quiet response contained deleted entries: %s", data)
+	}
+}
+
+func TestAdminOutboxDiscard(t *testing.T) {
+	local := storage.NewMemoryStore()
+	outbox := runthrough.NewMemoryOutbox()
+	adapter := runthrough.NewWithOutbox(runthrough.Config{}, local, local, nil, outbox)
+	entry, err := outbox.Enqueue(runthrough.OutboxEntry{
+		Operation: runthrough.OutboxPut,
+		Bucket:    "bucket",
+		Key:       "key",
+	})
+	if err != nil {
+		t.Fatalf("enqueue: %v", err)
+	}
+	srv, err := s3api.New(s3api.Config{
+		Store: adapter,
+		Auth:  s3api.DevBypass,
+		Host:  "127.0.0.1",
+	})
+	if err != nil {
+		t.Fatalf("new server: %v", err)
+	}
+	ts := httptest.NewServer(srv.Handler())
+	defer ts.Close()
+
+	req, _ := http.NewRequest(http.MethodPost, ts.URL+"/_stow/outbox/discard?id="+entry.ID, nil)
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("discard: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("discard status = %d, want 200", resp.StatusCode)
+	}
+	if pending := outbox.Pending(); len(pending) != 0 {
+		t.Fatalf("pending entries = %+v, want none", pending)
+	}
+}
+
+func TestAdminMetrics(t *testing.T) {
+	ts := newTestServer(t)
+	defer ts.Close()
+
+	resp, err := http.Get(ts.URL + "/_stow/metrics")
+	if err != nil {
+		t.Fatalf("metrics: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("metrics status = %d, want 200", resp.StatusCode)
+	}
+	if contentType := resp.Header.Get("Content-Type"); !strings.HasPrefix(contentType, "text/plain") {
+		t.Fatalf("metrics content type = %q, want text/plain", contentType)
+	}
+	data, _ := io.ReadAll(resp.Body)
+	if !strings.Contains(string(data), "stow_cache_hits_total") {
+		t.Fatalf("metrics body = %q, missing cache counter", data)
 	}
 }
 

@@ -54,6 +54,20 @@ func compositeETag(partETags []string) string {
 	return fmt.Sprintf("\"%s-%d\"", hex.EncodeToString(h.Sum(nil)), len(partETags))
 }
 
+func validateMultipartPartNumbers(parts []PartInfo) error {
+	seen := make(map[int]struct{}, len(parts))
+	for _, part := range parts {
+		if part.PartNumber < 1 || part.PartNumber > 10000 {
+			return ErrInvalidPart
+		}
+		if _, ok := seen[part.PartNumber]; ok {
+			return ErrInvalidPart
+		}
+		seen[part.PartNumber] = struct{}{}
+	}
+	return nil
+}
+
 func etagForReader(r io.Reader) (string, []byte, error) {
 	data, err := io.ReadAll(r)
 	if err != nil {

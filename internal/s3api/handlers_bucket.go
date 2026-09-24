@@ -259,8 +259,10 @@ func (s *Server) handleDeleteObjects(ctx context.Context, w http.ResponseWriter,
 		return
 	}
 	resp := deleteResult{}
-	for _, k := range deleted {
-		resp.Deleted = append(resp.Deleted, deletedEntry{Key: k})
+	if !req.Quiet {
+		for _, k := range deleted {
+			resp.Deleted = append(resp.Deleted, deletedEntry{Key: k})
+		}
 	}
 	writeXML(w, r, http.StatusOK, resp)
 }

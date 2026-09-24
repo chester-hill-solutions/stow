@@ -19,6 +19,44 @@
           "origin": "test"
         }
       }
+    },
+    {
+      "id": "opaque-key-roundtrip",
+      "operation": "putGetRoundTrip",
+      "bucket": "contract-opaque",
+      "key": "dir/../name.txt",
+      "body": "opaque key",
+      "contentType": "text/plain",
+      "metadata": {
+        "case": "opaque"
+      },
+      "expect": {
+        "status": 200,
+        "body": "opaque key",
+        "contentType": "text/plain",
+        "metadata": {
+          "case": "opaque"
+        }
+      }
+    },
+    {
+      "id": "empty-object-roundtrip",
+      "operation": "putGetRoundTrip",
+      "bucket": "contract-empty",
+      "key": "empty.bin",
+      "body": "",
+      "contentType": "application/octet-stream",
+      "metadata": {
+        "case": "empty"
+      },
+      "expect": {
+        "status": 200,
+        "body": "",
+        "contentType": "application/octet-stream",
+        "metadata": {
+          "case": "empty"
+        }
+      }
     }
   ]
 }

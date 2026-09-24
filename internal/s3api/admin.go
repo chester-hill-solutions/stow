@@ -3,6 +3,7 @@ package s3api
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/url"
 	"strings"
@@ -14,6 +15,15 @@ import (
 
 type cacheStatsProvider interface {
 	CacheStats() (hits, misses uint64)
+}
+
+type outboxStatsProvider interface {
+	OutboxStats() (pending, terminal int)
+}
+
+type outboxAdminProvider interface {
+	RetryPending(context.Context) error
+	DiscardOutboxEntry(string) error
 }
 
 func (s *Server) handleAdmin(w http.ResponseWriter, r *http.Request) {
@@ -37,6 +47,24 @@ func (s *Server) handleAdmin(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		s.writeInspect(w, r)
+	case "/_stow/metrics":
+		if r.Method != http.MethodGet {
+			http.NotFound(w, r)
+			return
+		}
+		s.writeMetrics(w, r)
+	case "/_stow/outbox/retry":
+		if r.Method != http.MethodPost {
+			http.NotFound(w, r)
+			return
+		}
+		s.retryOutbox(w, r)
+	case "/_stow/outbox/discard":
+		if r.Method != http.MethodPost {
+			http.NotFound(w, r)
+			return
+		}
+		s.discardOutbox(w, r)
 	default:
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusNotFound)
@@ -54,7 +82,7 @@ func (s *Server) writeStatus(w http.ResponseWriter, r *http.Request) {
 			objectCount += len(list.Objects)
 		}
 	}
-	addr := s.listenAddr
+	addr := s.Addr()
 	if addr == "" {
 		addr = s.config.Host
 	}
@@ -123,13 +151,78 @@ func (s *Server) writeInspect(w http.ResponseWriter, r *http.Request) {
 	if provider, ok := s.store.(cacheStatsProvider); ok {
 		cacheHits, cacheMisses = provider.CacheStats()
 	}
+	outboxPending, outboxTerminal := 0, 0
+	if provider, ok := s.store.(outboxStatsProvider); ok {
+		outboxPending, outboxTerminal = provider.OutboxStats()
+	}
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(map[string]any{
 		"buckets":           snaps,
 		"multipart_uploads": multipartUploads,
 		"cache_hits":        cacheHits,
 		"cache_misses":      cacheMisses,
+		"outbox_pending":    outboxPending,
+		"outbox_terminal":   outboxTerminal,
 	})
+}
+
+func (s *Server) retryOutbox(w http.ResponseWriter, r *http.Request) {
+	provider, ok := s.store.(outboxAdminProvider)
+	if !ok {
+		http.Error(w, "outbox administration is unavailable", http.StatusNotImplemented)
+		return
+	}
+	if err := provider.RetryPending(r.Context()); err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
+}
+
+func (s *Server) discardOutbox(w http.ResponseWriter, r *http.Request) {
+	id := strings.TrimSpace(r.URL.Query().Get("id"))
+	if id == "" {
+		http.Error(w, "id is required", http.StatusBadRequest)
+		return
+	}
+	provider, ok := s.store.(outboxAdminProvider)
+	if !ok {
+		http.Error(w, "outbox administration is unavailable", http.StatusNotImplemented)
+		return
+	}
+	if err := provider.DiscardOutboxEntry(id); err != nil {
+		http.Error(w, err.Error(), http.StatusNotFound)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
+}
+
+func (s *Server) writeMetrics(w http.ResponseWriter, r *http.Request) {
+	var hits, misses uint64
+	if provider, ok := s.store.(cacheStatsProvider); ok {
+		hits, misses = provider.CacheStats()
+	}
+	pending, terminal := 0, 0
+	if provider, ok := s.store.(outboxStatsProvider); ok {
+		pending, terminal = provider.OutboxStats()
+	}
+	multipartUploads := 0
+	if buckets, err := s.store.ListBuckets(r.Context()); err == nil {
+		for _, bucket := range buckets {
+			if uploads, err := s.store.ListMultipartUploads(r.Context(), bucket.Name, storage.MultipartListOptions{MaxUploads: 10000}); err == nil {
+				multipartUploads += len(uploads.Uploads)
+			}
+		}
+	}
+
+	w.Header().Set("Content-Type", "text/plain; version=0.0.4; charset=utf-8")
+	_, _ = fmt.Fprintf(w, "# HELP stow_cache_hits_total Cache hits observed by the runtime.\n# TYPE stow_cache_hits_total counter\nstow_cache_hits_total %d\n", hits)
+	_, _ = fmt.Fprintf(w, "# HELP stow_cache_misses_total Cache misses observed by the runtime.\n# TYPE stow_cache_misses_total counter\nstow_cache_misses_total %d\n", misses)
+	_, _ = fmt.Fprintf(w, "# HELP stow_multipart_uploads Active multipart uploads.\n# TYPE stow_multipart_uploads gauge\nstow_multipart_uploads %d\n", multipartUploads)
+	_, _ = fmt.Fprintf(w, "# HELP stow_outbox_pending_entries Pending outbox entries.\n# TYPE stow_outbox_pending_entries gauge\nstow_outbox_pending_entries %d\n", pending)
+	_, _ = fmt.Fprintf(w, "# HELP stow_outbox_terminal_entries Terminal outbox entries.\n# TYPE stow_outbox_terminal_entries gauge\nstow_outbox_terminal_entries %d\n", terminal)
 }
 
 func (s *Server) dispatch(ctx context.Context, w http.ResponseWriter, r *http.Request, route routeInfo) {

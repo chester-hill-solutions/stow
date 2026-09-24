@@ -18,7 +18,6 @@ const (
 type Policy string
 
 const (
-	PolicyProxy            Policy = "proxy"
 	PolicyReadThroughCache Policy = "readThroughCache"
 	PolicyMirrorWrites     Policy = "mirrorWrites"
 )

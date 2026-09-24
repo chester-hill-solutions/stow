@@ -406,6 +406,8 @@ Non-S3 HTTP routes for observability and debugging. **No SigV4 required** (local
 | `/_stow/status` | `GET` | None | `200 OK` JSON: mode, listen address, region, bucket count, object count (approx), cache policy, write policy, upstream endpoint (redacted), uptime seconds, version |
 | `/_stow/inspect` | `GET` | None | `200 OK` JSON: detailed snapshot — buckets with object counts, in-flight multipart uploads, cache hit/miss counters, last upstream error (if any), and outbox entries. Query `?bucket={name}` scopes to one bucket |
 | `/_stow/metrics` | `GET` | None | `200 OK` Prometheus exposition: cache, upstream, multipart, retry, and outbox metrics |
+| `/_stow/outbox/retry` | `POST` | Loopback only | `200 OK` after attempting all due outbox entries; reports a failure if an entry remains failed |
+| `/_stow/outbox/discard?id={id}` | `POST` | Loopback only | `200 OK` after removing the selected outbox entry; `404` if the entry is unknown |
 
 **Security:** Admin routes, including `/_stow/metrics`, MUST NOT be exposed on `0.0.0.0` in default configuration; require an explicit public-exposure flag and warning before binding publicly.
 

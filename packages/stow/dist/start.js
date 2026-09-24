@@ -80,20 +80,65 @@ async function waitForReady(child, timeoutMs = 10_000) {
         child.on("exit", onExit);
     });
 }
+const STOP_GRACE_PERIOD_MS = 5_000;
+const STOP_WAIT_PERIOD_MS = 10_000;
 async function stopChild(child) {
-    if (child.exitCode !== null || child.signalCode !== null) {
+    if (child.exitCode !== null ||
+        child.signalCode !== null ||
+        child.pid === undefined) {
         return;
     }
     await new Promise((resolve) => {
-        const timer = setTimeout(() => {
-            child.kill("SIGKILL");
-        }, 5_000);
-        child.once("exit", () => {
-            clearTimeout(timer);
+        let settled = false;
+        function finish() {
+            if (settled) {
+                return;
+            }
+            settled = true;
+            if (gracefulTimer) {
+                clearTimeout(gracefulTimer);
+            }
+            if (waitTimer) {
+                clearTimeout(waitTimer);
+            }
+            child.off("exit", finish);
+            child.off("close", finish);
+            child.off("error", onError);
             resolve();
-        });
-        child.kill("SIGTERM");
+        }
+        function onError(_error) {
+            finish();
+        }
+        const gracefulTimer = setTimeout(() => {
+            try {
+                if (!child.kill("SIGKILL")) {
+                    finish();
+                }
+            }
+            catch {
+                finish();
+            }
+        }, STOP_GRACE_PERIOD_MS);
+        const waitTimer = setTimeout(finish, STOP_WAIT_PERIOD_MS);
+        child.once("exit", finish);
+        child.once("close", finish);
+        child.once("error", onError);
+        try {
+            if (!child.kill("SIGTERM")) {
+                finish();
+            }
+        }
+        catch {
+            finish();
+        }
     });
+}
+function createStopProcess(child) {
+    let stopPromise;
+    return () => {
+        stopPromise ??= stopChild(child);
+        return stopPromise;
+    };
 }
 export async function startStow(options = {}) {
     const dataDir = options.dataDir ?? ".stow";
@@ -132,28 +177,25 @@ export async function startStow(options = {}) {
         stdio: ["ignore", "pipe", "pipe"],
         env: process.env,
     });
-    let ready;
     try {
-        ready = await waitForReady(child);
+        const ready = await waitForReady(child);
+        const instance = createStowInstance({
+            endpoint: ready.endpoint,
+            accessKeyId: ready.accessKeyId,
+            secretAccessKey: ready.secretAccessKey,
+            region: DEFAULT_REGION,
+            mode: ready.mode,
+            dataDir,
+            stopProcess: createStopProcess(child),
+        });
+        for (const bucket of options.buckets ?? []) {
+            await instance.createBucket(bucket);
+        }
+        return instance;
     }
     catch (error) {
         await stopChild(child);
         throw error;
     }
-    const instance = createStowInstance({
-        endpoint: ready.endpoint,
-        accessKeyId: ready.accessKeyId,
-        secretAccessKey: ready.secretAccessKey,
-        region: DEFAULT_REGION,
-        mode: ready.mode,
-        dataDir,
-        stopProcess: async () => {
-            await stopChild(child);
-        },
-    });
-    for (const bucket of options.buckets ?? []) {
-        await instance.createBucket(bucket);
-    }
-    return instance;
 }
 //# sourceMappingURL=start.js.map
