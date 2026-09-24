@@ -52,6 +52,12 @@ func serve(args []string) {
 	allowLiveWrites := fs.Bool("allow-live-writes", false, "Propagate writes to upstream S3")
 	cacheDir := fs.String("cache-dir", "", "Run-through cache directory (default: <data-dir>/cache)")
 	fs.Parse(args)
+	if strings.TrimSpace(*accessKey) == "" {
+		*accessKey = os.Getenv("STOW_LOCAL_ACCESS_KEY_ID")
+	}
+	if strings.TrimSpace(*secretKey) == "" {
+		*secretKey = os.Getenv("STOW_LOCAL_SECRET_ACCESS_KEY")
+	}
 
 	rtCfg, cfgErr := runthrough.ConfigFromEnvChecked()
 	if cfgErr != nil {

@@ -163,14 +163,17 @@ describe("startup lifecycle", () => {
     const binary = join(directory, "fake-stow");
     const pidFile = join(directory, "child.pid");
     const stopFile = join(directory, "child.stopped");
+    const argsFile = join(directory, "child.args");
     const previous = {
       STOW_BIN: process.env.STOW_BIN,
       STOW_TEST_PID_FILE: process.env.STOW_TEST_PID_FILE,
       STOW_TEST_STOP_FILE: process.env.STOW_TEST_STOP_FILE,
+      STOW_TEST_ARGS_FILE: process.env.STOW_TEST_ARGS_FILE,
     };
     const script = `#!/usr/bin/env node
 const fs = require("node:fs");
 fs.writeFileSync(process.env.STOW_TEST_PID_FILE, String(process.pid));
+fs.writeFileSync(process.env.STOW_TEST_ARGS_FILE, JSON.stringify(process.argv));
 process.stdout.write("STOW_READY endpoint=http://127.0.0.1:1 access_key=access secret_key=secret mode=local\\n");
 const stop = () => {
   fs.writeFileSync(process.env.STOW_TEST_STOP_FILE, "terminated");
@@ -186,14 +189,24 @@ setInterval(() => {}, 1_000);
       process.env.STOW_BIN = binary;
       process.env.STOW_TEST_PID_FILE = pidFile;
       process.env.STOW_TEST_STOP_FILE = stopFile;
+      process.env.STOW_TEST_ARGS_FILE = argsFile;
 
       await assert.rejects(
-        startStow({ dataDir: join(directory, "data"), buckets: ["unavailable"] }),
+        startStow({
+          dataDir: join(directory, "data"),
+          buckets: ["unavailable"],
+          accessKey: "access",
+          secretKey: "secret",
+        }),
         /./,
       );
 
       const pid = Number(await readFile(pidFile, "utf8"));
       assert.equal(await readFile(stopFile, "utf8"), "terminated");
+      const childArgs = JSON.parse(await readFile(argsFile, "utf8")) as string[];
+      assert.equal(childArgs.includes("--access-key"), false);
+      assert.equal(childArgs.includes("--secret-key"), false);
+      assert.equal(childArgs.includes("secret"), false);
       await assertProcessExited(pid);
     } finally {
       restoreEnvironment(previous);

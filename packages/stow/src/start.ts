@@ -207,16 +207,17 @@ export async function startStow(options: StartOptions = {}): Promise<StowInstanc
   if (options.allowLiveWrites) {
     args.push("--allow-live-writes");
   }
+  const childEnv = { ...process.env };
   if (options.accessKey) {
-    args.push("--access-key", options.accessKey);
+    childEnv.STOW_LOCAL_ACCESS_KEY_ID = options.accessKey;
   }
   if (options.secretKey) {
-    args.push("--secret-key", options.secretKey);
+    childEnv.STOW_LOCAL_SECRET_ACCESS_KEY = options.secretKey;
   }
 
   const child = spawn(binary, args, {
     stdio: ["ignore", "pipe", "pipe"],
-    env: process.env,
+    env: childEnv,
   });
 
   try {
