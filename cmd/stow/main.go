@@ -38,6 +38,16 @@ func usage() {
 	fmt.Fprintf(os.Stderr, "usage: stow <command>\n\ncommands:\n  serve    start the S3-compatible server\n")
 }
 
+func resolveLocalCredentials(accessKey, secretKey string) (string, string) {
+	if strings.TrimSpace(accessKey) == "" {
+		accessKey = os.Getenv("STOW_LOCAL_ACCESS_KEY_ID")
+	}
+	if strings.TrimSpace(secretKey) == "" {
+		secretKey = os.Getenv("STOW_LOCAL_SECRET_ACCESS_KEY")
+	}
+	return accessKey, secretKey
+}
+
 func serve(args []string) {
 	fs := flag.NewFlagSet("serve", flag.ExitOnError)
 	port := fs.Int("port", 9000, "HTTP listen port (0 = ephemeral)")
@@ -52,12 +62,7 @@ func serve(args []string) {
 	allowLiveWrites := fs.Bool("allow-live-writes", false, "Propagate writes to upstream S3")
 	cacheDir := fs.String("cache-dir", "", "Run-through cache directory (default: <data-dir>/cache)")
 	fs.Parse(args)
-	if strings.TrimSpace(*accessKey) == "" {
-		*accessKey = os.Getenv("STOW_LOCAL_ACCESS_KEY_ID")
-	}
-	if strings.TrimSpace(*secretKey) == "" {
-		*secretKey = os.Getenv("STOW_LOCAL_SECRET_ACCESS_KEY")
-	}
+	*accessKey, *secretKey = resolveLocalCredentials(*accessKey, *secretKey)
 
 	rtCfg, cfgErr := runthrough.ConfigFromEnvChecked()
 	if cfgErr != nil {
