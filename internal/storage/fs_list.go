@@ -46,13 +46,15 @@ func (s *FilesystemStore) ListObjectsV2(_ context.Context, bucket string, opts L
 		}
 		sidecar, _ := readObjectSidecar(p + metaSuffix)
 		items = append(items, ObjectMeta{
-			Bucket:       bucket,
-			Key:          key,
-			Size:         st.Size(),
-			LastModified: st.ModTime().UTC(),
-			ContentType:  sidecar.ContentType,
-			Metadata:     cloneMetadata(sidecar.Metadata),
-			ETag:         sidecar.ETag,
+			Bucket:            bucket,
+			Key:               key,
+			Size:              st.Size(),
+			LastModified:      st.ModTime().UTC(),
+			ContentType:       sidecar.ContentType,
+			Metadata:          cloneMetadata(sidecar.Metadata),
+			ETag:              sidecar.ETag,
+			ChecksumAlgorithm: sidecar.ChecksumAlgorithm,
+			ChecksumValue:     sidecar.ChecksumValue,
 		})
 	}
 	sort.Slice(items, func(i, j int) bool { return items[i].Key < items[j].Key })

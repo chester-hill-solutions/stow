@@ -13,5 +13,6 @@ var (
 	ErrUploadNotFound     = errors.New("multipart upload not found")
 	ErrNoSuchUpload       = errors.New("no such upload")
 	ErrPreconditionFailed = errors.New("precondition failed")
+	ErrChecksumMismatch   = errors.New("checksum mismatch")
 	ErrBucketNotEmpty     = errors.New("bucket not empty")
 )

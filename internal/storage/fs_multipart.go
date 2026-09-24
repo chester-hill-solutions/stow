@@ -137,6 +137,14 @@ func (s *FilesystemStore) CompleteMultipartUpload(_ context.Context, uploadID st
 	}, nil
 }
 
+func (s *FilesystemStore) ValidateMultipartUpload(_ context.Context, uploadID, bucket, key string) error {
+	manifest, err := readMultipartManifest(s.multipartDir(uploadID))
+	if err != nil || manifest.Bucket != bucket || manifest.Key != key {
+		return ErrNoSuchUpload
+	}
+	return nil
+}
+
 func (s *FilesystemStore) ListMultipartUploads(_ context.Context, bucket string, opts MultipartListOptions) (*MultipartListResult, error) {
 	if err := validateBucketName(bucket); err != nil {
 		return nil, err

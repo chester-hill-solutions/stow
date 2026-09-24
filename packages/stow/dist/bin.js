@@ -39,7 +39,6 @@ function findMonorepoBinary() {
             if (isExecutable(candidate)) {
                 return candidate;
             }
-            return undefined;
         }
         const parent = dirname(dir);
         if (parent === dir) {

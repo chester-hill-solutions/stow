@@ -25,6 +25,7 @@ type Store interface {
 	CompleteMultipartUpload(ctx context.Context, uploadID string, parts []PartInfo) (*ObjectMeta, error)
 	AbortMultipartUpload(ctx context.Context, uploadID string) error
 	ListParts(ctx context.Context, uploadID string) ([]PartInfo, error)
+	ValidateMultipartUpload(ctx context.Context, uploadID, bucket, key string) error
 	ListMultipartUploads(ctx context.Context, bucket string, opts MultipartListOptions) (*MultipartListResult, error)
 	Close() error
 }

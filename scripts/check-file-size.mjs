@@ -34,7 +34,7 @@ if (process.argv.includes("--baseline")) {
 const baseline = JSON.parse(readFileSync(baselinePath, "utf8"));
 let previous = null;
 try {
-  previous = JSON.parse(execFileSync("git", ["show", "HEAD:scripts/baselines/file-size.json"], { cwd: repoRoot, encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] }));
+  previous = JSON.parse(execFileSync("git", ["show", "HEAD^:scripts/baselines/file-size.json"], { cwd: repoRoot, encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] }));
 } catch {
   // First baseline creation has no parent version.
 }

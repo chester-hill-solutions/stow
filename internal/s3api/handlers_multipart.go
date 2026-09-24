@@ -14,6 +14,14 @@ import (
 
 const minPartSize = 5 * 1024 * 1024
 
+func (s *Server) validateMultipartRoute(ctx context.Context, w http.ResponseWriter, r *http.Request, bucket, key, uploadID string) bool {
+	if err := s.store.ValidateMultipartUpload(ctx, uploadID, bucket, key); err != nil {
+		writeError(w, r, mapStorageError(err, resourcePath(bucket, key)))
+		return false
+	}
+	return true
+}
+
 func (s *Server) handleCreateMultipartUpload(ctx context.Context, w http.ResponseWriter, r *http.Request, bucket, key string) {
 	upload, err := s.store.CreateMultipartUpload(ctx, bucket, key)
 	if err != nil {
@@ -34,7 +42,14 @@ func (s *Server) handleUploadPart(ctx context.Context, w http.ResponseWriter, r 
 		return
 	}
 	uploadID := q.Get("uploadId")
+	if !s.validateMultipartRoute(ctx, w, r, bucket, key, uploadID) {
+		return
+	}
 
+	if err := enforceContentLength(r); err != nil {
+		writeError(w, r, s3Error{Code: "InvalidArgument", Message: err.Error(), Resource: resourcePath(bucket, key), StatusCode: http.StatusBadRequest})
+		return
+	}
 	if err := verifyContentMD5(r); err != nil {
 		writeError(w, r, s3Error{Code: "InvalidArgument", Message: err.Error(), Resource: resourcePath(bucket, key), StatusCode: http.StatusBadRequest})
 		return
@@ -49,6 +64,9 @@ func (s *Server) handleUploadPart(ctx context.Context, w http.ResponseWriter, r 
 }
 
 func (s *Server) handleCompleteMultipartUpload(ctx context.Context, w http.ResponseWriter, r *http.Request, bucket, key, uploadID string) {
+	if !s.validateMultipartRoute(ctx, w, r, bucket, key, uploadID) {
+		return
+	}
 	var req completeMultipartUploadRequest
 	if err := xml.NewDecoder(r.Body).Decode(&req); err != nil {
 		writeError(w, r, s3Error{Code: "MalformedXML", Message: "Malformed XML", Resource: resourcePath(bucket, key), StatusCode: http.StatusBadRequest})
@@ -95,6 +113,9 @@ func (s *Server) handleCompleteMultipartUpload(ctx context.Context, w http.Respo
 }
 
 func (s *Server) handleAbortMultipartUpload(ctx context.Context, w http.ResponseWriter, r *http.Request, bucket, key, uploadID string) {
+	if !s.validateMultipartRoute(ctx, w, r, bucket, key, uploadID) {
+		return
+	}
 	err := s.store.AbortMultipartUpload(ctx, uploadID)
 	if err != nil {
 		writeError(w, r, mapStorageError(err, resourcePath(bucket, key)))
@@ -147,6 +168,9 @@ func (s *Server) handleListMultipartUploads(ctx context.Context, w http.Response
 }
 
 func (s *Server) handleListParts(ctx context.Context, w http.ResponseWriter, r *http.Request, bucket, key, uploadID string) {
+	if !s.validateMultipartRoute(ctx, w, r, bucket, key, uploadID) {
+		return
+	}
 	parts, err := s.store.ListParts(ctx, uploadID)
 	if err != nil {
 		writeError(w, r, mapStorageError(err, resourcePath(bucket, key)))

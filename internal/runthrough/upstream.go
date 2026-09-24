@@ -1,6 +1,7 @@
 package runthrough
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"io"
@@ -83,10 +84,17 @@ func (c *S3Client) GetObject(ctx context.Context, bucket, key string) (io.ReadCl
 }
 
 func (c *S3Client) PutObject(ctx context.Context, bucket, key string, body io.Reader, opts storage.PutOptions) error {
+	if body == nil {
+		return errors.New("upstream put body is nil")
+	}
+	data, err := io.ReadAll(body)
+	if err != nil {
+		return err
+	}
 	input := &s3.PutObjectInput{
 		Bucket: aws.String(bucket),
 		Key:    aws.String(key),
-		Body:   body,
+		Body:   bytes.NewReader(data),
 	}
 	if opts.ContentType != "" {
 		input.ContentType = aws.String(opts.ContentType)
@@ -94,7 +102,22 @@ func (c *S3Client) PutObject(ctx context.Context, bucket, key string, body io.Re
 	if len(opts.Metadata) > 0 {
 		input.Metadata = opts.Metadata
 	}
-	_, err := c.s3.PutObject(ctx, input)
+	if opts.ChecksumAlgorithm != "" {
+		input.ChecksumAlgorithm = types.ChecksumAlgorithm(opts.ChecksumAlgorithm)
+		if opts.ChecksumValue != "" {
+			switch opts.ChecksumAlgorithm {
+			case "CRC32":
+				input.ChecksumCRC32 = aws.String(opts.ChecksumValue)
+			case "CRC32C":
+				input.ChecksumCRC32C = aws.String(opts.ChecksumValue)
+			case "SHA1":
+				input.ChecksumSHA1 = aws.String(opts.ChecksumValue)
+			case "SHA256":
+				input.ChecksumSHA256 = aws.String(opts.ChecksumValue)
+			}
+		}
+	}
+	_, err = c.s3.PutObject(ctx, input)
 	return mapUpstreamError(err)
 }
 
@@ -176,6 +199,7 @@ func headOutputToMeta(bucket, key string, out *s3.HeadObjectOutput) *storage.Obj
 		ContentType: aws.ToString(out.ContentType),
 		Metadata:    cloneStringMap(out.Metadata),
 	}
+	applyUpstreamChecksum(meta, out.ChecksumCRC32, out.ChecksumCRC32C, out.ChecksumSHA1, out.ChecksumSHA256)
 	if out.LastModified != nil {
 		meta.LastModified = out.LastModified.UTC()
 	}
@@ -191,6 +215,7 @@ func getOutputToMeta(bucket, key string, out *s3.GetObjectOutput) *storage.Objec
 		ContentType: aws.ToString(out.ContentType),
 		Metadata:    cloneStringMap(out.Metadata),
 	}
+	applyUpstreamChecksum(meta, out.ChecksumCRC32, out.ChecksumCRC32C, out.ChecksumSHA1, out.ChecksumSHA256)
 	if out.LastModified != nil {
 		meta.LastModified = out.LastModified.UTC()
 	}
@@ -232,7 +257,27 @@ func cloneStringMap(m map[string]string) map[string]string {
 	return out
 }
 
-func metaIsNewer(upstream, local *storage.ObjectMeta) bool {
+func applyUpstreamChecksum(meta *storage.ObjectMeta, crc32Value, crc32cValue, sha1Value, sha256Value *string) {
+	for _, candidate := range []struct {
+		algorithm string
+		value     *string
+	}{
+		{algorithm: "CRC32", value: crc32Value},
+		{algorithm: "CRC32C", value: crc32cValue},
+		{algorithm: "SHA1", value: sha1Value},
+		{algorithm: "SHA256", value: sha256Value},
+	} {
+		if candidate.value != nil && aws.ToString(candidate.value) != "" {
+			meta.ChecksumAlgorithm = candidate.algorithm
+			meta.ChecksumValue = aws.ToString(candidate.value)
+			return
+		}
+	}
+}
+
+// upstreamChanged reports whether the upstream validator differs from the cached
+// validator. ETag is a change detector here, not an ordering primitive.
+func upstreamChanged(upstream, local *storage.ObjectMeta) bool {
 	if upstream == nil {
 		return false
 	}

@@ -2,15 +2,49 @@ package runthrough_test
 
 import (
 	"errors"
+	"path/filepath"
 	"testing"
 	"time"
 
 	"github.com/chester-hill-solutions/stow/internal/runthrough"
 )
 
+func TestFileOutboxRestartsWithMonotonicIDs(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "outbox.json")
+	first, err := runthrough.NewFileOutbox(path)
+	if err != nil {
+		t.Fatalf("new file outbox: %v", err)
+	}
+	if err := first.Enqueue(runthrough.OutboxEntry{Operation: runthrough.OutboxPut, Bucket: "bucket", Key: "one"}); err != nil {
+		t.Fatalf("enqueue first: %v", err)
+	}
+	firstPending := first.Pending()
+	if len(firstPending) != 1 {
+		t.Fatalf("first pending = %+v", firstPending)
+	}
+	if err := first.Close(); err != nil {
+		t.Fatalf("close first: %v", err)
+	}
+
+	second, err := runthrough.NewFileOutbox(path)
+	if err != nil {
+		t.Fatalf("reopen file outbox: %v", err)
+	}
+	if err := second.Enqueue(runthrough.OutboxEntry{Operation: runthrough.OutboxPut, Bucket: "bucket", Key: "two"}); err != nil {
+		t.Fatalf("enqueue second: %v", err)
+	}
+	pending := second.Pending()
+	if len(pending) != 2 {
+		t.Fatalf("second pending = %+v", pending)
+	}
+	if pending[0].ID == pending[1].ID {
+		t.Fatalf("duplicate IDs after restart: %q", pending[0].ID)
+	}
+}
+
 func TestMemoryOutboxLifecycle(t *testing.T) {
 	outbox := runthrough.NewMemoryOutbox()
-	entry := runthrough.OutboxEntry{Operation: "put", Bucket: "bucket", Key: "key"}
+	entry := runthrough.OutboxEntry{Operation: runthrough.OutboxPut, Bucket: "bucket", Key: "key"}
 	if err := outbox.Enqueue(entry); err != nil {
 		t.Fatalf("enqueue: %v", err)
 	}

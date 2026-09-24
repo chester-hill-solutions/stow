@@ -2,7 +2,6 @@ package runthrough
 
 import (
 	"fmt"
-	"net/url"
 	"strings"
 )
 
@@ -13,7 +12,10 @@ func StartupBanner(cfg Config, mode Mode) string {
 	fmt.Fprintf(&b, "stow mode: %s\n", mode)
 
 	if mode == ModeRunThrough {
-		host := redactEndpoint(cfg.Upstream.Endpoint)
+		host := RedactEndpoint(cfg.Upstream.Endpoint)
+		if host == "" {
+			host = "(not set)"
+		}
 		fmt.Fprintf(&b, "  upstream: %s (credentials redacted)\n", host)
 		if cfg.Upstream.Bucket != "" {
 			fmt.Fprintf(&b, "  upstream bucket filter: %s\n", cfg.Upstream.Bucket)
@@ -32,7 +34,10 @@ func StartupBanner(cfg Config, mode Mode) string {
 	}
 
 	writePolicy := "local-only"
-	if cfg.AllowLiveWrites {
+	if cfg.Policy == PolicyMirrorWrites {
+		writePolicy = "mirrorWrites"
+		fmt.Fprintf(&b, "  WARNING: mirrorWrites propagates supported mutations upstream\n")
+	} else if cfg.AllowLiveWrites {
 		writePolicy = "allowLiveWrites"
 	}
 	fmt.Fprintf(&b, "  write policy: %s\n", writePolicy)
@@ -41,19 +46,4 @@ func StartupBanner(cfg Config, mode Mode) string {
 		fmt.Fprintf(&b, "  hint: set STOW_ALLOW_LIVE_WRITES=true to propagate writes upstream\n")
 	}
 	return b.String()
-}
-
-func redactEndpoint(raw string) string {
-	raw = strings.TrimSpace(raw)
-	if raw == "" {
-		return "(not set)"
-	}
-	u, err := url.Parse(raw)
-	if err != nil || u.Host == "" {
-		return raw
-	}
-	if u.Scheme != "" {
-		return u.Scheme + "://" + u.Host
-	}
-	return u.Host
 }

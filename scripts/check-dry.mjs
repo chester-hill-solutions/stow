@@ -31,7 +31,7 @@ if (process.argv.includes("--baseline")) {
 const baseline = JSON.parse(readFileSync(baselinePath, "utf8"));
 let previous = null;
 try {
-  previous = JSON.parse(execFileSync("git", ["show", "HEAD:scripts/baselines/dry.json"], { cwd: repoRoot, encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] }));
+  previous = JSON.parse(execFileSync("git", ["show", "HEAD^:scripts/baselines/dry.json"], { cwd: repoRoot, encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] }));
 } catch {
   // First baseline creation has no parent version.
 }
@@ -43,10 +43,15 @@ const regressions = [];
 for (const key of ["clones", "duplicatedLines", "percentage"]) {
   if (current[key] > baseline[key]) regressions.push(`${key}: ${current[key]} > ${baseline[key]}`);
 }
-if (regressions.length) {
+const stale = [];
+for (const key of ["clones", "duplicatedLines", "percentage"]) {
+  if (current[key] < baseline[key]) stale.push(`${key}: ${current[key]} < ${baseline[key]}; lower the baseline`);
+}
+if (regressions.length || stale.length) {
   console.error("TypeScript DRY ratchet violation");
   for (const item of regressions) console.error(`  new debt: ${item}`);
-  console.error("Extract the duplicated logic; do not raise the baseline to pass.");
+  for (const item of stale) console.error(`  stale baseline: ${item}`);
+  console.error("Extract the duplicated logic; lower the baseline only after the improvement is verified.");
   process.exit(1);
 }
 console.log(`TypeScript DRY ratchet OK (${current.clones} clones / ${current.duplicatedLines} lines / ${current.percentage}%)`);

@@ -12,6 +12,10 @@ import (
 	"github.com/chester-hill-solutions/stow/internal/version"
 )
 
+type cacheStatsProvider interface {
+	CacheStats() (hits, misses uint64)
+}
+
 func (s *Server) handleAdmin(w http.ResponseWriter, r *http.Request) {
 	switch r.URL.Path {
 	case "/_stow/health":
@@ -95,6 +99,7 @@ func (s *Server) writeInspect(w http.ResponseWriter, r *http.Request) {
 		CreationDate string `json:"creation_date"`
 	}
 	var snaps []bucketSnap
+	multipartUploads := 0
 	for _, b := range buckets {
 		if bucketFilter != "" && b.Name != bucketFilter {
 			continue
@@ -104,18 +109,26 @@ func (s *Server) writeInspect(w http.ResponseWriter, r *http.Request) {
 		if err == nil {
 			count = len(list.Objects)
 		}
+		uploads, uploadErr := s.store.ListMultipartUploads(ctx, b.Name, storage.MultipartListOptions{MaxUploads: 10000})
+		if uploadErr == nil {
+			multipartUploads += len(uploads.Uploads)
+		}
 		snaps = append(snaps, bucketSnap{
 			Name:         b.Name,
 			ObjectCount:  count,
 			CreationDate: formatTime(b.CreationDate),
 		})
 	}
+	var cacheHits, cacheMisses uint64
+	if provider, ok := s.store.(cacheStatsProvider); ok {
+		cacheHits, cacheMisses = provider.CacheStats()
+	}
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(map[string]any{
 		"buckets":           snaps,
-		"multipart_uploads": 0,
-		"cache_hits":        0,
-		"cache_misses":      0,
+		"multipart_uploads": multipartUploads,
+		"cache_hits":        cacheHits,
+		"cache_misses":      cacheMisses,
 	})
 }
 

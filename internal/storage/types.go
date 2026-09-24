@@ -6,13 +6,15 @@ import (
 
 // ObjectMeta describes a stored object.
 type ObjectMeta struct {
-	Bucket       string
-	Key          string
-	Size         int64
-	ETag         string
-	ContentType  string
-	LastModified time.Time
-	Metadata     map[string]string
+	Bucket            string
+	Key               string
+	Size              int64
+	ETag              string
+	ContentType       string
+	LastModified      time.Time
+	Metadata          map[string]string
+	ChecksumAlgorithm string
+	ChecksumValue     string
 }
 
 // BucketInfo describes a bucket.
@@ -23,8 +25,12 @@ type BucketInfo struct {
 
 // PutOptions configures object writes.
 type PutOptions struct {
-	ContentType string
-	Metadata    map[string]string
+	ContentType       string
+	Metadata          map[string]string
+	ChecksumAlgorithm string
+	ChecksumValue     string
+	IfMatch           string
+	IfNoneMatch       string
 }
 
 // ListOptions configures object listing.

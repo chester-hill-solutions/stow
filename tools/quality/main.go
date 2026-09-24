@@ -116,7 +116,7 @@ func main() {
 }
 
 func previousBaseline(path string) (report, bool) {
-	command := exec.Command("git", "show", "HEAD:"+filepath.ToSlash(path))
+	command := exec.Command("git", "show", "HEAD^:"+filepath.ToSlash(path))
 	data, err := command.Output()
 	if err != nil {
 		return report{}, false
@@ -161,22 +161,20 @@ func scanFile(path string, result *report, seen map[string]int) error {
 		return err
 	}
 	add := func(rule, identity, message string) {
-		seen[rule]++
-		identity = fmt.Sprintf("%s#%d", identity, seen[rule])
+		occurrenceKey := rule + "\x00" + identity
+		seen[occurrenceKey]++
+		identity = fmt.Sprintf("%s#%d", identity, seen[occurrenceKey])
 		result.Violations = append(result.Violations, violation{Rule: rule, Identity: identity, Message: message})
 		result.Counts[rule]++
 	}
-	for _, decl := range file.Decls {
-		fn, ok := decl.(*ast.FuncDecl)
-		if !ok || fn.Body == nil {
-			continue
+	checkFunction := func(name string, body *ast.BlockStmt, params *ast.FieldList, start int) {
+		if body == nil {
+			return
 		}
-		name := fn.Name.Name
-		start := fset.Position(fn.Pos()).Line
-		end := fset.Position(fn.Body.End()).Line
+		end := fset.Position(body.End()).Line
 		lines := end - start + 1
-		complexity := cyclomaticComplexity(fn.Body)
-		params := parameterCount(fn.Type.Params)
+		complexity := cyclomaticComplexity(body)
+		paramCount := parameterCount(params)
 		base := fmt.Sprintf("%s:%s", filepath.ToSlash(path), name)
 		if lines > 200 {
 			add("function-lines", base, fmt.Sprintf("function %s has %d lines (maximum 200)", name, lines))
@@ -184,10 +182,28 @@ func scanFile(path string, result *report, seen map[string]int) error {
 		if complexity > 15 {
 			add("complexity", base, fmt.Sprintf("function %s has complexity %d (maximum 15)", name, complexity))
 		}
-		if params > 5 {
-			add("max-params", base, fmt.Sprintf("function %s has %d parameters (maximum 5)", name, params))
+		if paramCount > 5 {
+			add("max-params", base, fmt.Sprintf("function %s has %d parameters (maximum 5)", name, paramCount))
 		}
 	}
+	for _, decl := range file.Decls {
+		fn, ok := decl.(*ast.FuncDecl)
+		if !ok || fn.Body == nil {
+			continue
+		}
+		checkFunction(fn.Name.Name, fn.Body, fn.Type.Params, fset.Position(fn.Pos()).Line)
+	}
+	literalNumber := 0
+	ast.Inspect(file, func(node ast.Node) bool {
+		literal, ok := node.(*ast.FuncLit)
+		if !ok {
+			return true
+		}
+		literalNumber++
+		name := fmt.Sprintf("func-literal-%d", literalNumber)
+		checkFunction(name, literal.Body, literal.Type.Params, fset.Position(literal.Pos()).Line)
+		return true
+	})
 	ast.Inspect(file, func(node ast.Node) bool {
 		switch typed := node.(type) {
 		case *ast.Ident:

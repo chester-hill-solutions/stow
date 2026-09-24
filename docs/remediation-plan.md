@@ -86,7 +86,7 @@ The repository adopts the CallCaster/GoCanvass ratchet pattern before further fe
 - Baselines may only shrink after verified debt reduction. A baseline update is a reviewed maintenance action, never an approval mechanism for a regression.
 - The nested `packages/stow/go.mod` boundary prevents Go package discovery from walking npm `node_modules`.
 
-This standards phase is a release blocker: no new remediation PR may increase a ratchet, file-size, duplication, or coverage baseline without an explicitly reviewed debt-reduction change.
+This standards phase is a release blocker: no new remediation PR may increase a debt baseline or lower the coverage floor without an explicitly reviewed, verified change.
 
 ## 5. Work packages
 

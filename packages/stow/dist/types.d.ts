@@ -4,6 +4,7 @@ export interface UpstreamConfig {
     endpoint: string;
     accessKey: string;
     secretKey: string;
+    sessionToken?: string;
     region?: string;
     bucket?: string;
 }

@@ -8,7 +8,7 @@
     },
     {
       "rule": "complexity",
-      "identity": "conformance/local_test.go:TestMultipartUpload#5",
+      "identity": "conformance/local_test.go:TestMultipartUpload#1",
       "message": "function TestMultipartUpload has complexity 16 (maximum 15)"
     },
     {
@@ -18,7 +18,7 @@
     },
     {
       "rule": "max-params",
-      "identity": "internal/auth/auth_test.go:signString#2",
+      "identity": "internal/auth/auth_test.go:signString#1",
       "message": "function signString has 6 parameters (maximum 5)"
     },
     {
@@ -27,9 +27,9 @@
       "message": "use of any"
     },
     {
-      "rule": "complexity",
-      "identity": "internal/auth/sigv4.go:verifySignedRequest#2",
-      "message": "function verifySignedRequest has complexity 17 (maximum 15)"
+      "rule": "any",
+      "identity": "internal/s3api/admin.go#1",
+      "message": "use of any"
     },
     {
       "rule": "any",
@@ -37,64 +37,64 @@
       "message": "use of any"
     },
     {
-      "rule": "any",
-      "identity": "internal/s3api/admin.go#3",
-      "message": "use of any"
-    },
-    {
       "rule": "complexity",
-      "identity": "internal/s3api/admin.go:dispatch#3",
+      "identity": "internal/s3api/admin.go:dispatch#1",
       "message": "function dispatch has complexity 34 (maximum 15)"
     },
     {
       "rule": "any",
-      "identity": "internal/s3api/errors.go#4",
+      "identity": "internal/s3api/errors.go#1",
       "message": "use of any"
     },
     {
       "rule": "max-params",
-      "identity": "internal/s3api/handlers_bucket.go:handleCopyObject#3",
+      "identity": "internal/s3api/handlers_bucket.go:handleCopyObject#1",
       "message": "function handleCopyObject has 6 parameters (maximum 5)"
     },
     {
       "rule": "max-params",
-      "identity": "internal/s3api/handlers_multipart.go:handleAbortMultipartUpload#6",
+      "identity": "internal/s3api/handlers_multipart.go:handleAbortMultipartUpload#1",
       "message": "function handleAbortMultipartUpload has 6 parameters (maximum 5)"
     },
     {
       "rule": "max-params",
-      "identity": "internal/s3api/handlers_multipart.go:handleCompleteMultipartUpload#5",
+      "identity": "internal/s3api/handlers_multipart.go:handleCompleteMultipartUpload#1",
       "message": "function handleCompleteMultipartUpload has 6 parameters (maximum 5)"
     },
     {
       "rule": "max-params",
-      "identity": "internal/s3api/handlers_multipart.go:handleListParts#7",
+      "identity": "internal/s3api/handlers_multipart.go:handleListParts#1",
       "message": "function handleListParts has 6 parameters (maximum 5)"
     },
     {
       "rule": "max-params",
-      "identity": "internal/s3api/handlers_multipart.go:handleUploadPart#4",
+      "identity": "internal/s3api/handlers_multipart.go:handleUploadPart#1",
       "message": "function handleUploadPart has 6 parameters (maximum 5)"
     },
     {
       "rule": "max-params",
-      "identity": "internal/s3api/handlers_multipart.go:serveRange#8",
+      "identity": "internal/s3api/handlers_multipart.go:serveRange#1",
       "message": "function serveRange has 7 parameters (maximum 5)"
     },
     {
+      "rule": "max-params",
+      "identity": "internal/s3api/handlers_multipart.go:validateMultipartRoute#1",
+      "message": "function validateMultipartRoute has 6 parameters (maximum 5)"
+    },
+    {
       "rule": "complexity",
-      "identity": "internal/s3api/router.go:parseRoute#4",
+      "identity": "internal/s3api/router.go:parseRoute#1",
       "message": "function parseRoute has complexity 16 (maximum 15)"
     },
     {
       "rule": "any",
-      "identity": "internal/storage/fs_atomic.go#5",
+      "identity": "internal/storage/fs_atomic.go#1",
       "message": "use of any"
     }
   ],
   "counts": {
     "any": 5,
-    "complexity": 5,
-    "max-params": 8
+    "complexity": 4,
+    "max-params": 9
   }
 }

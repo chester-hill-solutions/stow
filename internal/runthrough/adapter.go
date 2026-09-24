@@ -4,10 +4,9 @@ import (
 	"bytes"
 	"context"
 	"errors"
-	"fmt"
 	"io"
 	"sort"
-	"time"
+	"sync/atomic"
 
 	"github.com/chester-hill-solutions/stow/internal/storage"
 )
@@ -30,6 +29,8 @@ type Adapter struct {
 	outbox        Outbox
 	cfg           Config
 	separateCache bool
+	cacheHits     atomic.Uint64
+	cacheMisses   atomic.Uint64
 }
 
 // New creates a run-through adapter. upstream may be nil for local-only behavior.
@@ -72,6 +73,12 @@ func (a *Adapter) Close() error {
 
 func (a *Adapter) Config() Config {
 	return a.cfg
+}
+
+// CacheStats reports process-local cache hit and miss counters for admin
+// inspection. They are intentionally not persisted across restarts.
+func (a *Adapter) CacheStats() (hits, misses uint64) {
+	return a.cacheHits.Load(), a.cacheMisses.Load()
 }
 
 func (a *Adapter) upstreamEnabled(bucket string) bool {
@@ -131,75 +138,6 @@ func (a *Adapter) HeadBucket(ctx context.Context, name string) (*storage.BucketI
 	return a.local.HeadBucket(ctx, name)
 }
 
-func (a *Adapter) enqueueIntent(operation, bucket, key string) (OutboxEntry, error) {
-	entry := OutboxEntry{Operation: operation, Bucket: bucket, Key: key, CreatedAt: time.Now().UTC()}
-	if err := a.outbox.Enqueue(entry); err != nil {
-		return OutboxEntry{}, err
-	}
-	pending := a.outbox.Pending()
-	for i := len(pending) - 1; i >= 0; i-- {
-		if pending[i].Bucket == bucket && pending[i].Key == key && pending[i].Operation == operation {
-			return pending[i], nil
-		}
-	}
-	return OutboxEntry{}, fmt.Errorf("outbox entry was not retained")
-}
-
-func (a *Adapter) propagateEntry(ctx context.Context, entry OutboxEntry) error {
-	switch entry.Operation {
-	case "put":
-		rc, meta, err := a.local.GetObject(ctx, entry.Bucket, entry.Key)
-		if err != nil {
-			return err
-		}
-		defer rc.Close()
-		return a.upstream.PutObject(ctx, entry.Bucket, entry.Key, rc, storage.PutOptions{
-			ContentType: meta.ContentType,
-			Metadata:    meta.Metadata,
-		})
-	case "delete":
-		return a.upstream.DeleteObject(ctx, entry.Bucket, entry.Key)
-	default:
-		return fmt.Errorf("unsupported outbox operation %q", entry.Operation)
-	}
-}
-
-func (a *Adapter) completeIntent(ctx context.Context, entry OutboxEntry) error {
-	if err := a.propagateEntry(ctx, entry); err != nil {
-		_ = a.outbox.MarkFailure(entry.ID, err, time.Now().Add(outboxRetryDelay(entry.Attempts)))
-		return err
-	}
-	return a.outbox.MarkSuccess(entry.ID)
-}
-
-func outboxRetryDelay(attempts int) time.Duration {
-	if attempts < 1 {
-		attempts = 1
-	}
-	if attempts > 6 {
-		attempts = 6
-	}
-	return time.Duration(1<<uint(attempts-1)) * time.Second
-}
-
-// RetryPending retries due outbox entries. It is safe to call from a worker or
-// at startup; entries that are not due remain queued.
-func (a *Adapter) RetryPending(ctx context.Context) error {
-	now := time.Now()
-	for _, entry := range a.outbox.Pending() {
-		if !entry.NextAttempt.IsZero() && entry.NextAttempt.After(now) {
-			continue
-		}
-		if !a.upstreamEnabled(entry.Bucket) {
-			continue
-		}
-		if err := a.completeIntent(ctx, entry); err != nil {
-			return err
-		}
-	}
-	return nil
-}
-
 func (a *Adapter) ListBuckets(ctx context.Context) ([]storage.BucketInfo, error) {
 	return a.local.ListBuckets(ctx)
 }
@@ -228,7 +166,7 @@ func (a *Adapter) PutObject(ctx context.Context, bucket, key string, body io.Rea
 	}
 	a.invalidateCache(ctx, bucket, key)
 	if action == writePropagate {
-		entry, err := a.enqueueIntent("put", bucket, key)
+		entry, err := a.enqueueIntent(ctx, OutboxPut, bucket, key)
 		if err != nil {
 			return meta, err
 		}
@@ -301,7 +239,7 @@ func (a *Adapter) revalidateCachedObject(ctx context.Context, bucket, key string
 	if headErr != nil {
 		return a.openCached(ctx, bucket, key, cachedMeta, needBody)
 	}
-	if !metaIsNewer(upMeta, cachedMeta) {
+	if !upstreamChanged(upMeta, cachedMeta) {
 		return a.openCached(ctx, bucket, key, cachedMeta, needBody)
 	}
 	return a.refreshFromUpstream(ctx, bucket, key, needBody)
@@ -319,6 +257,7 @@ func (a *Adapter) openLocal(ctx context.Context, bucket, key string, meta *stora
 }
 
 func (a *Adapter) openCached(ctx context.Context, bucket, key string, meta *storage.ObjectMeta, needBody bool) (io.ReadCloser, *storage.ObjectMeta, error) {
+	a.cacheHits.Add(1)
 	if !needBody {
 		return nil, meta, nil
 	}
@@ -330,6 +269,7 @@ func (a *Adapter) openCached(ctx context.Context, bucket, key string, meta *stor
 }
 
 func (a *Adapter) refreshFromUpstream(ctx context.Context, bucket, key string, needBody bool) (io.ReadCloser, *storage.ObjectMeta, error) {
+	a.cacheMisses.Add(1)
 	rc, meta, err := a.upstream.GetObject(ctx, bucket, key)
 	if err != nil {
 		return nil, nil, err
@@ -347,8 +287,10 @@ func (a *Adapter) refreshFromUpstream(ctx context.Context, bucket, key string, n
 		}
 	}
 	cached, err := cacheStore.PutObject(ctx, bucket, key, bytes.NewReader(data), storage.PutOptions{
-		ContentType: meta.ContentType,
-		Metadata:    meta.Metadata,
+		ContentType:       meta.ContentType,
+		Metadata:          meta.Metadata,
+		ChecksumAlgorithm: meta.ChecksumAlgorithm,
+		ChecksumValue:     meta.ChecksumValue,
 	})
 	if err != nil {
 		return nil, nil, err
@@ -357,89 +299,6 @@ func (a *Adapter) refreshFromUpstream(ctx context.Context, bucket, key string, n
 		return nil, cached, nil
 	}
 	return io.NopCloser(bytes.NewReader(data)), cached, nil
-}
-
-func (a *Adapter) DeleteObject(ctx context.Context, bucket, key string) error {
-	if err := a.local.DeleteObject(ctx, bucket, key); err != nil && !errors.Is(err, storage.ErrObjectNotFound) {
-		return err
-	}
-	a.invalidateCache(ctx, bucket, key)
-	action := a.decideUpstreamWrite(bucket)
-	switch action {
-	case writeSkip:
-		return nil
-	case writeError:
-		return ErrLiveWritesDisabled
-	case writePropagate:
-		entry, err := a.enqueueIntent("delete", bucket, key)
-		if err != nil {
-			return err
-		}
-		return a.completeIntent(ctx, entry)
-	default:
-		var _ writeAction = action
-		return nil
-	}
-}
-
-func (a *Adapter) DeleteObjects(ctx context.Context, bucket string, keys []string) ([]string, error) {
-	deleted, err := a.local.DeleteObjects(ctx, bucket, keys)
-	if err != nil {
-		return deleted, err
-	}
-	if a.separateCache {
-		for _, key := range deleted {
-			a.invalidateCache(ctx, bucket, key)
-		}
-	}
-	action := a.decideUpstreamWrite(bucket)
-	switch action {
-	case writeSkip:
-		return deleted, nil
-	case writeError:
-		return deleted, ErrLiveWritesDisabled
-	case writePropagate:
-		for _, key := range deleted {
-			entry, err := a.enqueueIntent("delete", bucket, key)
-			if err != nil {
-				return deleted, err
-			}
-			if err := a.completeIntent(ctx, entry); err != nil {
-				return deleted, err
-			}
-		}
-		return deleted, nil
-	default:
-		var _ writeAction = action
-		return deleted, nil
-	}
-}
-
-func (a *Adapter) CopyObject(ctx context.Context, srcBucket, srcKey, dstBucket, dstKey string) (*storage.ObjectMeta, error) {
-	meta, err := a.local.CopyObject(ctx, srcBucket, srcKey, dstBucket, dstKey)
-	if err != nil {
-		return nil, err
-	}
-	a.invalidateCache(ctx, dstBucket, dstKey)
-	action := a.decideUpstreamWrite(dstBucket)
-	switch action {
-	case writeSkip:
-		return meta, nil
-	case writeError:
-		return meta, ErrLiveWritesDisabled
-	case writePropagate:
-		entry, err := a.enqueueIntent("put", dstBucket, dstKey)
-		if err != nil {
-			return meta, err
-		}
-		if err := a.completeIntent(ctx, entry); err != nil {
-			return meta, err
-		}
-		return meta, nil
-	default:
-		var _ writeAction = action
-		return meta, nil
-	}
 }
 
 func (a *Adapter) ListObjectsV2(ctx context.Context, bucket string, opts storage.ListOptions) (*storage.ListResult, error) {
@@ -514,46 +373,16 @@ func mergeObjectLists(local, upstream []storage.ObjectMeta) []storage.ObjectMeta
 	return out
 }
 
-func (a *Adapter) CreateMultipartUpload(ctx context.Context, bucket, key string) (*storage.MultipartUpload, error) {
-	return a.local.CreateMultipartUpload(ctx, bucket, key)
-}
-
-func (a *Adapter) UploadPart(ctx context.Context, uploadID string, partNumber int, body io.Reader) (*storage.PartInfo, error) {
-	return a.local.UploadPart(ctx, uploadID, partNumber, body)
-}
-
-func (a *Adapter) CompleteMultipartUpload(ctx context.Context, uploadID string, parts []storage.PartInfo) (*storage.ObjectMeta, error) {
-	meta, err := a.local.CompleteMultipartUpload(ctx, uploadID, parts)
-	if err != nil {
-		return nil, err
-	}
-	action := a.decideUpstreamWrite(meta.Bucket)
-	switch action {
-	case writeSkip:
-		return meta, nil
-	case writeError:
-		return meta, ErrLiveWritesDisabled
-	case writePropagate:
-		entry, err := a.enqueueIntent("put", meta.Bucket, meta.Key)
-		if err != nil {
-			return meta, err
-		}
-		if err := a.completeIntent(ctx, entry); err != nil {
-			return meta, err
-		}
-		return meta, nil
-	default:
-		var _ writeAction = action
-		return meta, nil
-	}
-}
-
 func (a *Adapter) AbortMultipartUpload(ctx context.Context, uploadID string) error {
 	return a.local.AbortMultipartUpload(ctx, uploadID)
 }
 
 func (a *Adapter) ListParts(ctx context.Context, uploadID string) ([]storage.PartInfo, error) {
 	return a.local.ListParts(ctx, uploadID)
+}
+
+func (a *Adapter) ValidateMultipartUpload(ctx context.Context, uploadID, bucket, key string) error {
+	return a.local.ValidateMultipartUpload(ctx, uploadID, bucket, key)
 }
 
 func (a *Adapter) ListMultipartUploads(ctx context.Context, bucket string, opts storage.MultipartListOptions) (*storage.MultipartListResult, error) {

@@ -71,7 +71,7 @@ func mapStorageError(err error, resource string) s3Error {
 		return s3Error{Code: "InvalidArgument", Message: "Invalid object key", Resource: resource, StatusCode: http.StatusBadRequest}
 	case errors.Is(err, storage.ErrInvalidPart):
 		return s3Error{Code: "InvalidPart", Message: "One or more of the specified parts could not be found", Resource: resource, StatusCode: http.StatusBadRequest}
-	case errors.Is(err, storage.ErrUploadNotFound):
+	case errors.Is(err, storage.ErrUploadNotFound), errors.Is(err, storage.ErrNoSuchUpload):
 		return s3Error{Code: "NoSuchUpload", Message: "The specified multipart upload does not exist", Resource: resource, StatusCode: http.StatusNotFound}
 	case errors.Is(err, storage.ErrPreconditionFailed):
 		return s3Error{Code: "PreconditionFailed", Message: "At least one of the pre-conditions you specified did not hold", Resource: resource, StatusCode: http.StatusPreconditionFailed}

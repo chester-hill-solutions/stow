@@ -2,26 +2,36 @@ package runthrough
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
 	"sort"
+	"strconv"
+	"strings"
 	"sync"
-	"sync/atomic"
 	"time"
 )
 
+type OutboxOperation string
+
+var ErrOutboxVersionConflict = errors.New("outbox object version no longer matches the committed record")
+
+const (
+	OutboxPut    OutboxOperation = "put"
+	OutboxDelete OutboxOperation = "delete"
+)
+
 type OutboxEntry struct {
-	ID           string    `json:"id"`
-	Operation    string    `json:"operation"`
-	Bucket       string    `json:"bucket"`
-	Key          string    `json:"key"`
-	SourceBucket string    `json:"source_bucket,omitempty"`
-	SourceKey    string    `json:"source_key,omitempty"`
-	CreatedAt    time.Time `json:"created_at"`
-	Attempts     int       `json:"attempts"`
-	NextAttempt  time.Time `json:"next_attempt"`
-	LastError    string    `json:"last_error,omitempty"`
+	ID          string          `json:"id"`
+	Operation   OutboxOperation `json:"operation"`
+	Bucket      string          `json:"bucket"`
+	Key         string          `json:"key"`
+	Version     string          `json:"version,omitempty"`
+	CreatedAt   time.Time       `json:"created_at"`
+	Attempts    int             `json:"attempts"`
+	NextAttempt time.Time       `json:"next_attempt"`
+	LastError   string          `json:"last_error,omitempty"`
 }
 
 type Outbox interface {
@@ -32,46 +42,47 @@ type Outbox interface {
 	Close() error
 }
 
-type MemoryOutbox struct {
-	mu      sync.Mutex
+type outboxState struct {
 	entries map[string]OutboxEntry
 	seq     uint64
 }
 
-func NewMemoryOutbox() *MemoryOutbox {
-	return &MemoryOutbox{entries: make(map[string]OutboxEntry)}
+func newOutboxState() outboxState {
+	return outboxState{entries: make(map[string]OutboxEntry)}
 }
 
-func (o *MemoryOutbox) Enqueue(entry OutboxEntry) error {
-	o.mu.Lock()
-	defer o.mu.Unlock()
+func (s *outboxState) enqueue(entry OutboxEntry) OutboxEntry {
 	if entry.ID == "" {
-		entry.ID = fmt.Sprintf("outbox-%d", atomic.AddUint64(&o.seq, 1))
+		s.seq++
+		entry.ID = fmt.Sprintf("outbox-%d", s.seq)
+	} else if strings.HasPrefix(entry.ID, "outbox-") {
+		if sequence, err := strconv.ParseUint(strings.TrimPrefix(entry.ID, "outbox-"), 10, 64); err == nil && sequence > s.seq {
+			s.seq = sequence
+		}
 	}
 	if entry.CreatedAt.IsZero() {
 		entry.CreatedAt = time.Now().UTC()
 	}
-	o.entries[entry.ID] = entry
+	for id, existing := range s.entries {
+		if existing.Bucket == entry.Bucket && existing.Key == entry.Key {
+			delete(s.entries, id)
+		}
+	}
+	s.entries[entry.ID] = entry
+	return entry
+}
+
+func (s *outboxState) pending() []OutboxEntry {
+	return pendingEntries(s.entries)
+}
+
+func (s *outboxState) markSuccess(id string) error {
+	delete(s.entries, id)
 	return nil
 }
 
-func (o *MemoryOutbox) Pending() []OutboxEntry {
-	o.mu.Lock()
-	defer o.mu.Unlock()
-	return pendingEntries(o.entries)
-}
-
-func (o *MemoryOutbox) MarkSuccess(id string) error {
-	o.mu.Lock()
-	defer o.mu.Unlock()
-	delete(o.entries, id)
-	return nil
-}
-
-func (o *MemoryOutbox) MarkFailure(id string, cause error, retryAt time.Time) error {
-	o.mu.Lock()
-	defer o.mu.Unlock()
-	entry, ok := o.entries[id]
+func (s *outboxState) markFailure(id string, cause error, retryAt time.Time) error {
+	entry, ok := s.entries[id]
 	if !ok {
 		return fmt.Errorf("outbox entry %q not found", id)
 	}
@@ -80,24 +91,57 @@ func (o *MemoryOutbox) MarkFailure(id string, cause error, retryAt time.Time) er
 	if cause != nil {
 		entry.LastError = cause.Error()
 	}
-	o.entries[id] = entry
+	s.entries[id] = entry
 	return nil
+}
+
+type MemoryOutbox struct {
+	mu    sync.Mutex
+	state outboxState
+}
+
+func NewMemoryOutbox() *MemoryOutbox {
+	return &MemoryOutbox{state: newOutboxState()}
+}
+
+func (o *MemoryOutbox) Enqueue(entry OutboxEntry) error {
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	o.state.enqueue(entry)
+	return nil
+}
+
+func (o *MemoryOutbox) Pending() []OutboxEntry {
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	return o.state.pending()
+}
+
+func (o *MemoryOutbox) MarkSuccess(id string) error {
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	return o.state.markSuccess(id)
+}
+
+func (o *MemoryOutbox) MarkFailure(id string, cause error, retryAt time.Time) error {
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	return o.state.markFailure(id, cause, retryAt)
 }
 
 func (o *MemoryOutbox) Close() error { return nil }
 
 type FileOutbox struct {
-	path    string
-	mu      sync.Mutex
-	entries map[string]OutboxEntry
-	seq     uint64
+	path  string
+	mu    sync.Mutex
+	state outboxState
 }
 
 func NewFileOutbox(path string) (*FileOutbox, error) {
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		return nil, err
 	}
-	o := &FileOutbox{path: path, entries: make(map[string]OutboxEntry)}
+	o := &FileOutbox{path: path, state: newOutboxState()}
 	data, err := os.ReadFile(path)
 	if err != nil {
 		if os.IsNotExist(err) {
@@ -108,8 +152,17 @@ func NewFileOutbox(path string) (*FileOutbox, error) {
 	if len(data) == 0 {
 		return o, nil
 	}
-	if err := json.Unmarshal(data, &o.entries); err != nil {
+	if err := json.Unmarshal(data, &o.state.entries); err != nil {
 		return nil, fmt.Errorf("decode outbox: %w", err)
+	}
+	for id := range o.state.entries {
+		if !strings.HasPrefix(id, "outbox-") {
+			continue
+		}
+		sequence, parseErr := strconv.ParseUint(strings.TrimPrefix(id, "outbox-"), 10, 64)
+		if parseErr == nil && sequence > o.state.seq {
+			o.state.seq = sequence
+		}
 	}
 	return o, nil
 }
@@ -117,42 +170,31 @@ func NewFileOutbox(path string) (*FileOutbox, error) {
 func (o *FileOutbox) Enqueue(entry OutboxEntry) error {
 	o.mu.Lock()
 	defer o.mu.Unlock()
-	if entry.ID == "" {
-		entry.ID = fmt.Sprintf("outbox-%d", atomic.AddUint64(&o.seq, 1))
-	}
-	if entry.CreatedAt.IsZero() {
-		entry.CreatedAt = time.Now().UTC()
-	}
-	o.entries[entry.ID] = entry
+	o.state.enqueue(entry)
 	return o.persistLocked()
 }
 
 func (o *FileOutbox) Pending() []OutboxEntry {
 	o.mu.Lock()
 	defer o.mu.Unlock()
-	return pendingEntries(o.entries)
+	return o.state.pending()
 }
 
 func (o *FileOutbox) MarkSuccess(id string) error {
 	o.mu.Lock()
 	defer o.mu.Unlock()
-	delete(o.entries, id)
+	if err := o.state.markSuccess(id); err != nil {
+		return err
+	}
 	return o.persistLocked()
 }
 
 func (o *FileOutbox) MarkFailure(id string, cause error, retryAt time.Time) error {
 	o.mu.Lock()
 	defer o.mu.Unlock()
-	entry, ok := o.entries[id]
-	if !ok {
-		return fmt.Errorf("outbox entry %q not found", id)
+	if err := o.state.markFailure(id, cause, retryAt); err != nil {
+		return err
 	}
-	entry.Attempts++
-	entry.NextAttempt = retryAt
-	if cause != nil {
-		entry.LastError = cause.Error()
-	}
-	o.entries[id] = entry
 	return o.persistLocked()
 }
 
@@ -163,7 +205,7 @@ func (o *FileOutbox) Close() error {
 }
 
 func (o *FileOutbox) persistLocked() error {
-	data, err := json.MarshalIndent(o.entries, "", "  ")
+	data, err := json.MarshalIndent(o.state.entries, "", "  ")
 	if err != nil {
 		return err
 	}

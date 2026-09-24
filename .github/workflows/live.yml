@@ -34,5 +34,6 @@ jobs:
           STOW_ACCESS_KEY_ID: ${{ secrets.STOW_LIVE_ACCESS_KEY_ID }}
           STOW_SECRET_ACCESS_KEY: ${{ secrets.STOW_LIVE_SECRET_ACCESS_KEY }}
           STOW_SESSION_TOKEN: ${{ secrets.STOW_LIVE_SESSION_TOKEN }}
+          STOW_LIVE_BUCKET: ${{ vars.STOW_LIVE_BUCKET }}
           STOW_LIVE_BUCKET_PREFIX: ${{ vars.STOW_LIVE_BUCKET_PREFIX }}
         run: make test-conformance

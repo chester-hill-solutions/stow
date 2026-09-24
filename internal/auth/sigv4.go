@@ -161,6 +161,15 @@ func parseSignedHeaders(raw string) []string {
 	return out
 }
 
+func containsHeader(headers []string, name string) bool {
+	for _, header := range headers {
+		if header == name {
+			return true
+		}
+	}
+	return false
+}
+
 func queryValue(query url.Values, key string) string {
 	for k, values := range query {
 		if strings.EqualFold(k, key) && len(values) > 0 {
@@ -211,7 +220,26 @@ func verifySignedRequest(r *http.Request, creds Credentials, region string, maxS
 	if err != nil {
 		return err
 	}
+	if err := validateCredentialScope(sr, creds, region); err != nil {
+		return err
+	}
+	if err := validateRequestTime(r, sr, maxSkew, now); err != nil {
+		return err
+	}
+	if err := verifyPayloadHash(r, sr); err != nil {
+		return err
+	}
+	expected, err := computeSignature(r, sr, creds.SecretAccessKey)
+	if err != nil {
+		return err
+	}
+	if !hmac.Equal([]byte(strings.ToLower(sr.signature)), []byte(strings.ToLower(expected))) {
+		return authError("SignatureDoesNotMatch", "signature mismatch")
+	}
+	return nil
+}
 
+func validateCredentialScope(sr signedRequest, creds Credentials, region string) error {
 	if sr.credential.accessKeyID != creds.AccessKeyID {
 		return authError("AccessDenied", "unknown access key")
 	}
@@ -221,37 +249,39 @@ func verifySignedRequest(r *http.Request, creds Credentials, region string, maxS
 	if sr.credential.region != region {
 		return authError("AccessDenied", "region mismatch")
 	}
+	if !containsHeader(sr.signedHeaders, "host") {
+		return authError("AccessDenied", "host must be signed")
+	}
+	if !sr.presigned && !containsHeader(sr.signedHeaders, "x-amz-date") && !containsHeader(sr.signedHeaders, "date") {
+		return authError("AccessDenied", "date must be signed")
+	}
 	if !strings.HasPrefix(sr.amzDate, sr.credential.dateStamp) {
 		return authError("AccessDenied", "credential date mismatch")
 	}
+	return nil
+}
 
+func validateRequestTime(r *http.Request, sr signedRequest, maxSkew time.Duration, now time.Time) error {
 	requestTime, err := parseAmzTime(sr.amzDate)
 	if err != nil {
 		return err
 	}
-
 	if sr.presigned {
-		if r.Method != http.MethodGet && r.Method != http.MethodPut && r.Method != http.MethodHead {
-			return authError("AccessDenied", "unsupported presigned method")
-		}
-		expiry := requestTime.Add(time.Duration(sr.expires) * time.Second)
-		if now.After(expiry) {
-			return authError("AccessDenied", "request has expired")
-		}
-	} else if skew := now.Sub(requestTime); skew > maxSkew || skew < -maxSkew {
+		return validatePresignedTime(r, sr, requestTime, now)
+	}
+	if skew := now.Sub(requestTime); skew > maxSkew || skew < -maxSkew {
 		return authError("RequestTimeTooSkewed", "request time skew too large")
 	}
+	return nil
+}
 
-	if err := verifyPayloadHash(r, sr); err != nil {
-		return err
+func validatePresignedTime(r *http.Request, sr signedRequest, requestTime, now time.Time) error {
+	if r.Method != http.MethodGet && r.Method != http.MethodPut && r.Method != http.MethodHead {
+		return authError("AccessDenied", "unsupported presigned method")
 	}
-
-	expected, err := computeSignature(r, sr, creds.SecretAccessKey)
-	if err != nil {
-		return err
-	}
-	if !hmac.Equal([]byte(strings.ToLower(sr.signature)), []byte(strings.ToLower(expected))) {
-		return authError("SignatureDoesNotMatch", "signature mismatch")
+	expiry := requestTime.Add(time.Duration(sr.expires) * time.Second)
+	if now.After(expiry) {
+		return authError("AccessDenied", "request has expired")
 	}
 	return nil
 }
@@ -359,120 +389,4 @@ func hmacSHA256(key []byte, data string) []byte {
 	mac := hmac.New(sha256.New, key)
 	_, _ = mac.Write([]byte(data))
 	return mac.Sum(nil)
-}
-
-func canonicalURIPath(path string) string {
-	if path == "" {
-		return "/"
-	}
-	if !strings.HasPrefix(path, "/") {
-		path = "/" + path
-	}
-	segments := strings.Split(path, "/")
-	for i, segment := range segments {
-		segments[i] = uriEncode(segment, false)
-	}
-	return strings.Join(segments, "/")
-}
-
-func uriEncode(value string, encodeSlash bool) string {
-	var b strings.Builder
-	for i := 0; i < len(value); i++ {
-		c := value[i]
-		if (c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z') || (c >= '0' && c <= '9') ||
-			c == '-' || c == '_' || c == '.' || c == '~' {
-			b.WriteByte(c)
-			continue
-		}
-		if c == '/' && !encodeSlash {
-			b.WriteByte(c)
-			continue
-		}
-		fmt.Fprintf(&b, "%%%02X", c)
-	}
-	return b.String()
-}
-
-func canonicalQueryString(rawQuery string) string {
-	if rawQuery == "" {
-		return ""
-	}
-	values, err := url.ParseQuery(rawQuery)
-	if err != nil {
-		return ""
-	}
-	deleteCaseInsensitive(values, "X-Amz-Signature")
-
-	keys := make([]string, 0, len(values))
-	for key := range values {
-		keys = append(keys, key)
-	}
-	sort.Strings(keys)
-
-	var parts []string
-	for _, key := range keys {
-		vals := values[key]
-		sort.Strings(vals)
-		encodedKey := uriEncode(key, true)
-		for _, val := range vals {
-			parts = append(parts, encodedKey+"="+uriEncode(val, true))
-		}
-	}
-	return strings.Join(parts, "&")
-}
-
-func deleteCaseInsensitive(values url.Values, target string) {
-	for key := range values {
-		if strings.EqualFold(key, target) {
-			delete(values, key)
-		}
-	}
-}
-
-func canonicalHeaders(r *http.Request, signed []string) (string, string, error) {
-	headerMap := make(map[string]string, len(signed))
-	for _, name := range signed {
-		value, err := signedHeaderValue(r, name)
-		if err != nil {
-			return "", "", err
-		}
-		headerMap[name] = normalizeHeaderValue(value)
-	}
-
-	ordered := make([]string, len(signed))
-	copy(ordered, signed)
-	sort.Strings(ordered)
-
-	var b strings.Builder
-	for _, name := range ordered {
-		b.WriteString(name)
-		b.WriteByte(':')
-		b.WriteString(headerMap[name])
-		b.WriteByte('\n')
-	}
-	return b.String(), strings.Join(ordered, ";"), nil
-}
-
-func signedHeaderValue(r *http.Request, name string) (string, error) {
-	switch name {
-	case "host":
-		host := headerValue(r.Header, "Host")
-		if host == "" {
-			host = r.Host
-		}
-		if host == "" {
-			return "", authError("AccessDenied", "missing host header")
-		}
-		return host, nil
-	default:
-		value := headerValue(r.Header, name)
-		if value == "" {
-			return "", authError("AccessDenied", "missing signed header %q", name)
-		}
-		return value, nil
-	}
-}
-
-func normalizeHeaderValue(value string) string {
-	return strings.Join(strings.Fields(strings.TrimSpace(value)), " ")
 }

@@ -138,11 +138,15 @@ func (s *Server) handlePutObject(ctx context.Context, w http.ResponseWriter, r *
 		writeError(w, r, s3Error{Code: "InvalidArgument", Message: err.Error(), Resource: resourcePath(bucket, key), StatusCode: http.StatusBadRequest})
 		return
 	}
-	if err := s.checkPutPreconditions(ctx, bucket, key, r.Header); err != nil {
-		writeError(w, r, mapStorageError(err, resourcePath(bucket, key)))
+	checksumAlgorithm, checksumValue, err := checksumFromRequest(r)
+	if err != nil {
+		code := "InvalidArgument"
+		if errors.Is(err, storage.ErrChecksumMismatch) {
+			code = "BadDigest"
+		}
+		writeError(w, r, s3Error{Code: code, Message: err.Error(), Resource: resourcePath(bucket, key), StatusCode: http.StatusBadRequest})
 		return
 	}
-
 	cl := r.ContentLength
 	if cl < 0 {
 		writeError(w, r, s3Error{Code: "InvalidArgument", Message: "Content-Length required", Resource: resourcePath(bucket, key), StatusCode: http.StatusBadRequest})
@@ -163,14 +167,19 @@ func (s *Server) handlePutObject(ctx context.Context, w http.ResponseWriter, r *
 	}
 
 	meta, err := s.store.PutObject(ctx, bucket, key, r.Body, storage.PutOptions{
-		ContentType: contentType,
-		Metadata:    metadata,
+		ContentType:       contentType,
+		Metadata:          metadata,
+		ChecksumAlgorithm: checksumAlgorithm,
+		ChecksumValue:     checksumValue,
+		IfMatch:           r.Header.Get("If-Match"),
+		IfNoneMatch:       r.Header.Get("If-None-Match"),
 	})
 	if err != nil {
 		writeError(w, r, mapStorageError(err, resourcePath(bucket, key)))
 		return
 	}
 	w.Header().Set("ETag", meta.ETag)
+	setChecksumHeader(w, meta)
 	writeXML(w, r, http.StatusOK, putObjectResult{ETag: meta.ETag})
 }
 
@@ -227,6 +236,10 @@ func (s *Server) handleDeleteObject(ctx context.Context, w http.ResponseWriter, 
 }
 
 func (s *Server) handleDeleteObjects(ctx context.Context, w http.ResponseWriter, r *http.Request, bucket string) {
+	if err := enforceContentLength(r); err != nil {
+		writeError(w, r, s3Error{Code: "InvalidArgument", Message: err.Error(), Resource: "/" + bucket, StatusCode: http.StatusBadRequest})
+		return
+	}
 	var req deleteObjectsRequest
 	if err := xml.NewDecoder(r.Body).Decode(&req); err != nil {
 		writeError(w, r, s3Error{Code: "MalformedXML", Message: "Malformed XML", Resource: "/" + bucket, StatusCode: http.StatusBadRequest})
@@ -300,6 +313,13 @@ func (s *Server) handleCopyObject(ctx context.Context, w http.ResponseWriter, r 
 	})
 }
 
+func setChecksumHeader(w http.ResponseWriter, meta *storage.ObjectMeta) {
+	if meta.ChecksumAlgorithm == "" || meta.ChecksumValue == "" {
+		return
+	}
+	w.Header().Set("x-amz-checksum-"+strings.ToLower(meta.ChecksumAlgorithm), meta.ChecksumValue)
+}
+
 func setObjectHeaders(w http.ResponseWriter, meta *storage.ObjectMeta) {
 	if meta.ContentType != "" {
 		w.Header().Set("Content-Type", meta.ContentType)
@@ -308,6 +328,7 @@ func setObjectHeaders(w http.ResponseWriter, meta *storage.ObjectMeta) {
 	}
 	w.Header().Set("Content-Length", strconv.FormatInt(meta.Size, 10))
 	w.Header().Set("ETag", meta.ETag)
+	setChecksumHeader(w, meta)
 	w.Header().Set("Last-Modified", meta.LastModified.UTC().Format(http.TimeFormat))
 	for k, v := range meta.Metadata {
 		w.Header().Set(k, v)
@@ -354,31 +375,6 @@ var errInvalidCopySource = &copySourceError{"Invalid copy source"}
 type copySourceError struct{ msg string }
 
 func (e *copySourceError) Error() string { return e.msg }
-
-func (s *Server) checkPutPreconditions(ctx context.Context, bucket, key string, h http.Header) error {
-	ifMatch := h.Get("If-Match")
-	ifNoneMatch := h.Get("If-None-Match")
-	if ifMatch == "" && ifNoneMatch == "" {
-		return nil
-	}
-	meta, err := s.store.HeadObject(ctx, bucket, key)
-	if err != nil {
-		if errors.Is(err, storage.ErrObjectNotFound) {
-			if ifMatch != "" {
-				return storage.ErrPreconditionFailed
-			}
-			return nil
-		}
-		return err
-	}
-	if ifMatch != "" && !etagHeaderMatches(ifMatch, meta.ETag) {
-		return storage.ErrPreconditionFailed
-	}
-	if ifNoneMatch != "" && etagHeaderMatches(ifNoneMatch, meta.ETag) {
-		return storage.ErrPreconditionFailed
-	}
-	return nil
-}
 
 func etagHeaderMatches(header, actual string) bool {
 	for _, candidate := range strings.Split(header, ",") {

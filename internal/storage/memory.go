@@ -133,15 +133,25 @@ func (s *MemoryStore) PutObject(_ context.Context, bucket, key string, body io.R
 	if !ok {
 		return nil, ErrBucketNotFound
 	}
+	var existing *ObjectMeta
+	if object, exists := b.objects[key]; exists {
+		copy := object.meta
+		existing = &copy
+	}
+	if err := checkWritePreconditions(opts, existing); err != nil {
+		return nil, err
+	}
 	now := time.Now().UTC()
 	meta := ObjectMeta{
-		Bucket:       bucket,
-		Key:          key,
-		Size:         int64(len(data)),
-		ETag:         etag,
-		ContentType:  opts.ContentType,
-		LastModified: now,
-		Metadata:     cloneMetadata(opts.Metadata),
+		Bucket:            bucket,
+		Key:               key,
+		Size:              int64(len(data)),
+		ETag:              etag,
+		ContentType:       opts.ContentType,
+		LastModified:      now,
+		Metadata:          cloneMetadata(opts.Metadata),
+		ChecksumAlgorithm: opts.ChecksumAlgorithm,
+		ChecksumValue:     opts.ChecksumValue,
 	}
 	b.objects[key] = &memObject{data: data, meta: meta}
 	out := meta
@@ -227,8 +237,10 @@ func (s *MemoryStore) CopyObject(ctx context.Context, srcBucket, srcKey, dstBuck
 	}
 	defer rc.Close()
 	return s.PutObject(ctx, dstBucket, dstKey, rc, PutOptions{
-		ContentType: meta.ContentType,
-		Metadata:    cloneMetadata(meta.Metadata),
+		ContentType:       meta.ContentType,
+		Metadata:          cloneMetadata(meta.Metadata),
+		ChecksumAlgorithm: meta.ChecksumAlgorithm,
+		ChecksumValue:     meta.ChecksumValue,
 	})
 }
 
@@ -383,6 +395,16 @@ func (s *MemoryStore) ListParts(_ context.Context, uploadID string) ([]PartInfo,
 		out = append(out, mp.parts[n].info)
 	}
 	return out, nil
+}
+
+func (s *MemoryStore) ValidateMultipartUpload(_ context.Context, uploadID, bucket, key string) error {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	mp, storedBucket, ok := s.findMultipart(uploadID)
+	if !ok || storedBucket.info.Name != bucket || mp.upload.Key != key {
+		return ErrNoSuchUpload
+	}
+	return nil
 }
 
 func (s *MemoryStore) Close() error {

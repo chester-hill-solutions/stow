@@ -4,10 +4,6 @@
     {
       "identity": "conformance/local_test.go:784",
       "lines": 784
-    },
-    {
-      "identity": "internal/runthrough/adapter.go:562",
-      "lines": 562
     }
   ]
 }

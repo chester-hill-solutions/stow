@@ -16,9 +16,11 @@ import (
 const metaSuffix = ".stowmeta"
 
 type objectSidecar struct {
-	ContentType string            `json:"content_type,omitempty"`
-	Metadata    map[string]string `json:"metadata,omitempty"`
-	ETag        string            `json:"etag,omitempty"`
+	ContentType       string            `json:"content_type,omitempty"`
+	Metadata          map[string]string `json:"metadata,omitempty"`
+	ETag              string            `json:"etag,omitempty"`
+	ChecksumAlgorithm string            `json:"checksum_algorithm,omitempty"`
+	ChecksumValue     string            `json:"checksum_value,omitempty"`
 }
 
 // FilesystemStore persists object bytes on disk with atomic writes.
@@ -165,32 +167,53 @@ func (s *FilesystemStore) PutObject(_ context.Context, bucket, key string, body 
 	if _, err := os.Stat(s.bucketDir(bucket)); os.IsNotExist(err) {
 		return nil, ErrBucketNotFound
 	}
+	objPath := s.objectPath(bucket, key)
+	var existing *ObjectMeta
+	if stat, statErr := os.Stat(objPath); statErr == nil {
+		sidecar, _ := readObjectSidecar(s.metaPath(bucket, key))
+		existing = &ObjectMeta{ETag: sidecar.ETag, Size: stat.Size()}
+		if existing.ETag == "" {
+			data, readErr := os.ReadFile(objPath)
+			if readErr != nil {
+				return nil, readErr
+			}
+			existing.ETag = etagForBytes(data)
+		}
+	} else if !os.IsNotExist(statErr) {
+		return nil, statErr
+	}
+	if err := checkWritePreconditions(opts, existing); err != nil {
+		return nil, err
+	}
 
 	etag, data, err := etagForReader(body)
 	if err != nil {
 		return nil, err
 	}
-	objPath := s.objectPath(bucket, key)
 	if err := writeBytesAtomic(objPath, data); err != nil {
 		return nil, err
 	}
 	sidecar := objectSidecar{
-		ContentType: opts.ContentType,
-		Metadata:    cloneMetadata(opts.Metadata),
-		ETag:        etag,
+		ContentType:       opts.ContentType,
+		Metadata:          cloneMetadata(opts.Metadata),
+		ETag:              etag,
+		ChecksumAlgorithm: opts.ChecksumAlgorithm,
+		ChecksumValue:     opts.ChecksumValue,
 	}
 	if err := writeJSONAtomic(s.metaPath(bucket, key), sidecar); err != nil {
 		return nil, err
 	}
 	now := time.Now().UTC()
 	return &ObjectMeta{
-		Bucket:       bucket,
-		Key:          key,
-		Size:         int64(len(data)),
-		ETag:         etag,
-		ContentType:  opts.ContentType,
-		LastModified: now,
-		Metadata:     cloneMetadata(opts.Metadata),
+		Bucket:            bucket,
+		Key:               key,
+		Size:              int64(len(data)),
+		ETag:              etag,
+		ContentType:       opts.ContentType,
+		LastModified:      now,
+		Metadata:          cloneMetadata(opts.Metadata),
+		ChecksumAlgorithm: opts.ChecksumAlgorithm,
+		ChecksumValue:     opts.ChecksumValue,
 	}, nil
 }
 
@@ -229,13 +252,15 @@ func (s *FilesystemStore) HeadObject(_ context.Context, bucket, key string) (*Ob
 	}
 	sidecar, _ := readObjectSidecar(s.metaPath(bucket, key))
 	meta := &ObjectMeta{
-		Bucket:       bucket,
-		Key:          key,
-		Size:         st.Size(),
-		LastModified: st.ModTime().UTC(),
-		ContentType:  sidecar.ContentType,
-		Metadata:     cloneMetadata(sidecar.Metadata),
-		ETag:         sidecar.ETag,
+		Bucket:            bucket,
+		Key:               key,
+		Size:              st.Size(),
+		LastModified:      st.ModTime().UTC(),
+		ContentType:       sidecar.ContentType,
+		Metadata:          cloneMetadata(sidecar.Metadata),
+		ETag:              sidecar.ETag,
+		ChecksumAlgorithm: sidecar.ChecksumAlgorithm,
+		ChecksumValue:     sidecar.ChecksumValue,
 	}
 	if meta.ETag == "" {
 		data, err := os.ReadFile(objPath)
@@ -297,8 +322,10 @@ func (s *FilesystemStore) CopyObject(ctx context.Context, srcBucket, srcKey, dst
 	}
 	defer rc.Close()
 	return s.PutObject(ctx, dstBucket, dstKey, rc, PutOptions{
-		ContentType: meta.ContentType,
-		Metadata:    cloneMetadata(meta.Metadata),
+		ContentType:       meta.ContentType,
+		Metadata:          cloneMetadata(meta.Metadata),
+		ChecksumAlgorithm: meta.ChecksumAlgorithm,
+		ChecksumValue:     meta.ChecksumValue,
 	})
 }
 

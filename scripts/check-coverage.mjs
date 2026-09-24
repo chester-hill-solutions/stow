@@ -27,7 +27,7 @@ if (!existsSync(baselinePath)) {
 const baseline = JSON.parse(readFileSync(baselinePath, "utf8"));
 let previous = null;
 try {
-  previous = JSON.parse(execFileSync("git", ["show", "HEAD:scripts/baselines/go-coverage.json"], { cwd: repoRoot, encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] }));
+  previous = JSON.parse(execFileSync("git", ["show", "HEAD^:scripts/baselines/go-coverage.json"], { cwd: repoRoot, encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] }));
 } catch {
   // First baseline creation has no parent version.
 }
@@ -40,7 +40,7 @@ if (current < baseline.percentage) {
   process.exit(1);
 }
 if (current > baseline.percentage) {
-  console.error(`Go coverage baseline stale: ${current}% > ${baseline.percentage}%; lower the baseline after verifying the improvement`);
+  console.error(`Go coverage baseline stale: ${current}% > ${baseline.percentage}%; raise the baseline after verifying the improvement`);
   process.exit(1);
 }
 console.log(`Go coverage ratchet OK (${current}%)`);

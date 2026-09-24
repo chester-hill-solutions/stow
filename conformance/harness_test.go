@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"fmt"
 	"net/http"
+	"os"
 	"testing"
 	"time"
 
@@ -36,7 +37,19 @@ func newTestEnv(t *testing.T) *testEnv {
 		SecretAccessKey: "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY",
 	}
 
-	store := storage.NewMemoryStore()
+	var store storage.Store
+	switch os.Getenv("STOW_CONFORMANCE_BACKEND") {
+	case "", "memory":
+		store = storage.NewMemoryStore()
+	case "filesystem":
+		var err error
+		store, err = storage.NewFilesystemStore(t.TempDir())
+		if err != nil {
+			t.Fatalf("filesystem store: %v", err)
+		}
+	default:
+		t.Fatalf("unknown STOW_CONFORMANCE_BACKEND %q", os.Getenv("STOW_CONFORMANCE_BACKEND"))
+	}
 	verifier := auth.NewVerifier(testRegion)
 	srv, err := s3api.New(s3api.Config{
 		Store:  store,
@@ -75,6 +88,9 @@ func newTestEnv(t *testing.T) *testEnv {
 				t.Logf("server exit: %v", err)
 			}
 		case <-time.After(2 * time.Second):
+		}
+		if err := store.Close(); err != nil {
+			t.Logf("store close: %v", err)
 		}
 	})
 

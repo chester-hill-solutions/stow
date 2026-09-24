@@ -21,6 +21,8 @@ make check-type-escapes
 make check-dry
 make check-file-size
 make check-coverage
+make check-version
+make check-generated
 ```
 
 The TypeScript wrapper also exposes the equivalent package-local commands through `packages/stow`:
@@ -39,7 +41,7 @@ npm run check:dry
 - `scripts/baselines/type-escapes.json` records TypeScript escape identities.
 - `scripts/baselines/dry.json` records TypeScript duplication counts.
 - `scripts/baselines/file-size.json` records oversized-file identities.
-- `scripts/baselines/go-coverage.json` records the Go coverage floor.
+- `scripts/baselines/go-coverage.json` records the current Go coverage floor; improvements require an explicit baseline update and regressions fail.
 - A new identity fails the gate.
 - A stale identity also fails the gate, forcing the baseline to be lowered after debt is removed.
 - A baseline-generation command is allowed only as an explicit maintenance action after reviewing the diff. It is not a way to approve a regression.
@@ -79,7 +81,7 @@ The TypeScript escape ratchet additionally records `as any`, double casts, expli
 
 ## Duplication and size
 
-`jscpd` tracks duplicated TypeScript structure. Go duplication and file-size checks are tracked by the Go quality command. Both dimensions are ratcheted independently: fixing one does not permit new debt in another.
+`jscpd` tracks duplicated TypeScript structure. The Go quality and file-size gates track Go structural metrics and file size. Cross-language Go clone detection is not yet part of the gate and must not be implied by this document; it is a follow-up before claiming full cross-language DRY coverage. Each implemented dimension is ratcheted independently.
 
 Generated `packages/stow/dist` is checked into the repository for release reproducibility, but it is excluded from lint and duplication scans. The build is cleaned and regenerated, and CI fails if the checked-in output differs.
 
