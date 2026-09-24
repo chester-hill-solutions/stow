@@ -1,8 +1,8 @@
 #!/usr/bin/env node
-import { execFileSync } from "node:child_process";
 import { readFileSync, readdirSync, statSync, writeFileSync } from "node:fs";
 import { createRequire } from "node:module";
 import { join, relative, resolve } from "node:path";
+import { readPreviousBaseline } from "./baseline-history.mjs";
 
 const require = createRequire(import.meta.url);
 const ts = require("../packages/stow/node_modules/typescript");
@@ -18,6 +18,16 @@ function position(sourceFile, offset) {
   return `${point.line + 1}:${point.character + 1}`;
 }
 
+function isUnknownCastExpression(expression) {
+  if (ts.isAsExpression(expression)) {
+    return expression.type.kind === ts.SyntaxKind.UnknownKeyword || isUnknownCastExpression(expression.expression);
+  }
+  if (ts.isParenthesizedExpression(expression) || ts.isTypeAssertionExpression(expression)) {
+    return isUnknownCastExpression(expression.expression);
+  }
+  return false;
+}
+
 function scan(path) {
   const source = readFileSync(path, "utf8");
   const sourceFile = ts.createSourceFile(path, source, ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX);
@@ -28,9 +38,7 @@ function scan(path) {
     if (node.kind === ts.SyntaxKind.AnyKeyword) add("explicit-any", node);
     if (ts.isAsExpression(node)) {
       if (node.type.kind === ts.SyntaxKind.AnyKeyword) add("as-any", node);
-      if (ts.isAsExpression(node.expression) && node.expression.type.kind === ts.SyntaxKind.UnknownKeyword) {
-        add("double-cast", node);
-      }
+      if (isUnknownCastExpression(node.expression)) add("double-cast", node);
     }
     if (ts.isTypeReferenceNode(node) && node.typeName.getText(sourceFile) === "any") {
       add("explicit-any", node);
@@ -81,9 +89,10 @@ const newViolations = violations.filter((item) => !allowed.has(item));
 const staleEntries = [...allowed].filter((item) => !violations.includes(item));
 let previous = null;
 try {
-  previous = JSON.parse(execFileSync("git", ["show", "HEAD^:scripts/baselines/type-escapes.json"], { cwd: repoRoot, encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] }));
-} catch {
-  // First baseline creation has no parent version.
+  previous = readPreviousBaseline(repoRoot, "scripts/baselines/type-escapes.json");
+} catch (error) {
+  console.error(error.message);
+  process.exit(2);
 }
 if (previous && (baseline.violations ?? []).length > (previous.violations ?? []).length) {
   console.error("TypeScript escape baseline increased");

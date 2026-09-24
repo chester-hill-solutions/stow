@@ -6,6 +6,13 @@ import (
 	"testing"
 )
 
+func TestEnforceContentLengthRejectsMissingHeader(t *testing.T) {
+	req := httptest.NewRequest("PUT", "/bucket/key", nil)
+	if err := enforceContentLength(req); err == nil {
+		t.Fatal("expected missing Content-Length")
+	}
+}
+
 func TestEnforceContentLengthRejectsMismatch(t *testing.T) {
 	req := httptest.NewRequest("PUT", "/bucket/key", strings.NewReader("body"))
 	req.ContentLength = 99

@@ -135,7 +135,11 @@ func (s *Server) handlePutObject(ctx context.Context, w http.ResponseWriter, r *
 		return
 	}
 	if err := verifyContentMD5(r); err != nil {
-		writeError(w, r, s3Error{Code: "InvalidArgument", Message: err.Error(), Resource: resourcePath(bucket, key), StatusCode: http.StatusBadRequest})
+		code := "InvalidArgument"
+		if errors.Is(err, storage.ErrMD5Mismatch) {
+			code = "BadDigest"
+		}
+		writeError(w, r, s3Error{Code: code, Message: err.Error(), Resource: resourcePath(bucket, key), StatusCode: http.StatusBadRequest})
 		return
 	}
 	checksumAlgorithm, checksumValue, err := checksumFromRequest(r)
@@ -376,10 +380,28 @@ type copySourceError struct{ msg string }
 
 func (e *copySourceError) Error() string { return e.msg }
 
-func etagHeaderMatches(header, actual string) bool {
+func etagHeaderMatchesStrong(header, actual string) bool {
+	return etagHeaderMatchesMode(header, actual, false)
+}
+
+func etagHeaderMatchesWeak(header, actual string) bool {
+	return etagHeaderMatchesMode(header, actual, true)
+}
+
+func etagHeaderMatchesMode(header, actual string, weak bool) bool {
 	for _, candidate := range strings.Split(header, ",") {
 		candidate = strings.TrimSpace(candidate)
-		if candidate == "*" || etagMatches(candidate, actual) {
+		if candidate == "*" {
+			return true
+		}
+		candidateValue := candidate
+		if strings.HasPrefix(strings.ToLower(candidateValue), "w/") {
+			if !weak {
+				continue
+			}
+			candidateValue = candidateValue[2:]
+		}
+		if strings.EqualFold(strings.Trim(candidateValue, "\""), strings.Trim(actual, "\"")) {
 			return true
 		}
 	}
@@ -387,10 +409,10 @@ func etagHeaderMatches(header, actual string) bool {
 }
 
 func checkReadPreconditions(h http.Header, meta *storage.ObjectMeta) error {
-	if match := h.Get("If-Match"); match != "" && !etagHeaderMatches(match, meta.ETag) {
+	if match := h.Get("If-Match"); match != "" && !etagHeaderMatchesStrong(match, meta.ETag) {
 		return storage.ErrPreconditionFailed
 	}
-	if noneMatch := h.Get("If-None-Match"); noneMatch != "" && etagHeaderMatches(noneMatch, meta.ETag) {
+	if noneMatch := h.Get("If-None-Match"); noneMatch != "" && etagHeaderMatchesWeak(noneMatch, meta.ETag) {
 		return storage.ErrPreconditionFailed
 	}
 	if raw := h.Get("If-Modified-Since"); raw != "" {
@@ -415,10 +437,10 @@ func checkReadPreconditions(h http.Header, meta *storage.ObjectMeta) error {
 }
 
 func checkCopyPreconditions(h http.Header, meta *storage.ObjectMeta) error {
-	if match := h.Get("x-amz-copy-source-if-match"); match != "" && !etagMatches(match, meta.ETag) {
+	if match := h.Get("x-amz-copy-source-if-match"); match != "" && !etagHeaderMatchesStrong(match, meta.ETag) {
 		return storage.ErrPreconditionFailed
 	}
-	if noneMatch := h.Get("x-amz-copy-source-if-none-match"); noneMatch != "" && etagMatches(noneMatch, meta.ETag) {
+	if noneMatch := h.Get("x-amz-copy-source-if-none-match"); noneMatch != "" && etagHeaderMatchesWeak(noneMatch, meta.ETag) {
 		return storage.ErrPreconditionFailed
 	}
 	if raw := h.Get("x-amz-copy-source-if-modified-since"); raw != "" {
@@ -440,8 +462,4 @@ func checkCopyPreconditions(h http.Header, meta *storage.ObjectMeta) error {
 		}
 	}
 	return nil
-}
-
-func etagMatches(condition, actual string) bool {
-	return strings.Trim(condition, "\"") == strings.Trim(actual, "\"")
 }

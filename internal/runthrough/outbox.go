@@ -32,6 +32,7 @@ type OutboxEntry struct {
 	Attempts    int             `json:"attempts"`
 	NextAttempt time.Time       `json:"next_attempt"`
 	LastError   string          `json:"last_error,omitempty"`
+	Terminal    bool            `json:"terminal,omitempty"`
 }
 
 type Outbox interface {
@@ -91,6 +92,10 @@ func (s *outboxState) markFailure(id string, cause error, retryAt time.Time) err
 	if cause != nil {
 		entry.LastError = cause.Error()
 	}
+	if errors.Is(cause, ErrOutboxVersionConflict) {
+		entry.Terminal = true
+		entry.NextAttempt = time.Time{}
+	}
 	s.entries[id] = entry
 	return nil
 }
@@ -137,6 +142,11 @@ type FileOutbox struct {
 	state outboxState
 }
 
+type persistedOutbox struct {
+	Entries map[string]OutboxEntry `json:"entries"`
+	Seq     uint64                 `json:"seq"`
+}
+
 func NewFileOutbox(path string) (*FileOutbox, error) {
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		return nil, err
@@ -152,8 +162,14 @@ func NewFileOutbox(path string) (*FileOutbox, error) {
 	if len(data) == 0 {
 		return o, nil
 	}
-	if err := json.Unmarshal(data, &o.state.entries); err != nil {
-		return nil, fmt.Errorf("decode outbox: %w", err)
+	var persisted persistedOutbox
+	if err := json.Unmarshal(data, &persisted); err != nil || persisted.Entries == nil {
+		if err := json.Unmarshal(data, &o.state.entries); err != nil {
+			return nil, fmt.Errorf("decode outbox: %w", err)
+		}
+	} else {
+		o.state.entries = persisted.Entries
+		o.state.seq = persisted.Seq
 	}
 	for id := range o.state.entries {
 		if !strings.HasPrefix(id, "outbox-") {
@@ -205,7 +221,7 @@ func (o *FileOutbox) Close() error {
 }
 
 func (o *FileOutbox) persistLocked() error {
-	data, err := json.MarshalIndent(o.state.entries, "", "  ")
+	data, err := json.MarshalIndent(persistedOutbox{Entries: o.state.entries, Seq: o.state.seq}, "", "  ")
 	if err != nil {
 		return err
 	}

@@ -2,6 +2,7 @@
 import { execFileSync } from "node:child_process";
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { resolve } from "node:path";
+import { readPreviousBaseline } from "./baseline-history.mjs";
 
 const repoRoot = resolve(import.meta.dirname, "..");
 const packageRoot = resolve(repoRoot, "packages/stow");
@@ -31,9 +32,10 @@ if (process.argv.includes("--baseline")) {
 const baseline = JSON.parse(readFileSync(baselinePath, "utf8"));
 let previous = null;
 try {
-  previous = JSON.parse(execFileSync("git", ["show", "HEAD^:scripts/baselines/dry.json"], { cwd: repoRoot, encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] }));
-} catch {
-  // First baseline creation has no parent version.
+  previous = readPreviousBaseline(repoRoot, "scripts/baselines/dry.json");
+} catch (error) {
+  console.error(error.message);
+  process.exit(2);
 }
 if (previous && (baseline.clones > previous.clones || baseline.duplicatedLines > previous.duplicatedLines || baseline.percentage > previous.percentage)) {
   console.error("TypeScript DRY baseline expanded");

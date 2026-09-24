@@ -2,6 +2,7 @@
 import { execFileSync } from "node:child_process";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { resolve } from "node:path";
+import { readPreviousBaseline } from "./baseline-history.mjs";
 
 const repoRoot = resolve(import.meta.dirname, "..");
 const baselinePath = resolve(repoRoot, "scripts/baselines/go-coverage.json");
@@ -27,9 +28,10 @@ if (!existsSync(baselinePath)) {
 const baseline = JSON.parse(readFileSync(baselinePath, "utf8"));
 let previous = null;
 try {
-  previous = JSON.parse(execFileSync("git", ["show", "HEAD^:scripts/baselines/go-coverage.json"], { cwd: repoRoot, encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] }));
-} catch {
-  // First baseline creation has no parent version.
+  previous = readPreviousBaseline(repoRoot, "scripts/baselines/go-coverage.json");
+} catch (error) {
+  console.error(error.message);
+  process.exit(2);
 }
 if (previous && baseline.percentage < previous.percentage) {
   console.error("Go coverage baseline was lowered without a recorded improvement");

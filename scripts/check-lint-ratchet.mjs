@@ -2,6 +2,7 @@
 import { execFileSync } from "node:child_process";
 import { readFileSync, writeFileSync } from "node:fs";
 import { dirname, join, relative, resolve } from "node:path";
+import { readPreviousBaseline } from "./baseline-history.mjs";
 
 const repoRoot = resolve(import.meta.dirname, "..");
 const packageRoot = resolve(repoRoot, "packages/stow");
@@ -58,9 +59,10 @@ if (hardErrors.length > 0) {
 const baseline = JSON.parse(readFileSync(baselinePath, "utf8"));
 let previous = null;
 try {
-  previous = JSON.parse(execFileSync("git", ["show", "HEAD^:scripts/baselines/lint-ratchet.json"], { cwd: repoRoot, encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] }));
-} catch {
-  // First baseline creation has no parent version.
+  previous = readPreviousBaseline(repoRoot, "scripts/baselines/lint-ratchet.json");
+} catch (error) {
+  console.error(error.message);
+  process.exit(2);
 }
 if (previous) {
   const expanded = rules.filter((rule) => (baseline.counts?.[rule] ?? 0) > (previous.counts?.[rule] ?? 0));

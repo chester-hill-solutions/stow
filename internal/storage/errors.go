@@ -14,5 +14,6 @@ var (
 	ErrNoSuchUpload       = errors.New("no such upload")
 	ErrPreconditionFailed = errors.New("precondition failed")
 	ErrChecksumMismatch   = errors.New("checksum mismatch")
+	ErrMD5Mismatch        = errors.New("Content-MD5 mismatch")
 	ErrBucketNotEmpty     = errors.New("bucket not empty")
 )

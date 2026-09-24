@@ -13,7 +13,7 @@ import (
 )
 
 func enforceContentLength(r *http.Request) error {
-	if r.ContentLength < 0 {
+	if r.Header.Get("Content-Length") == "" || r.ContentLength < 0 {
 		return fmt.Errorf("Content-Length required")
 	}
 	var data []byte
@@ -58,7 +58,7 @@ func verifyContentMD5(r *http.Request) error {
 	}
 	actual := md5.Sum(data)
 	if !bytes.Equal(expected, actual[:]) {
-		return fmt.Errorf("Content-MD5 mismatch")
+		return storage.ErrMD5Mismatch
 	}
 	return nil
 }

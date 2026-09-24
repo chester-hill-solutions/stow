@@ -1,7 +1,7 @@
 #!/usr/bin/env node
-import { execFileSync } from "node:child_process";
 import { readFileSync, readdirSync, statSync, writeFileSync } from "node:fs";
 import { join, relative, resolve } from "node:path";
+import { readPreviousBaseline } from "./baseline-history.mjs";
 
 const repoRoot = resolve(import.meta.dirname, "..");
 const baselinePath = resolve(repoRoot, "scripts/baselines/file-size.json");
@@ -34,9 +34,10 @@ if (process.argv.includes("--baseline")) {
 const baseline = JSON.parse(readFileSync(baselinePath, "utf8"));
 let previous = null;
 try {
-  previous = JSON.parse(execFileSync("git", ["show", "HEAD^:scripts/baselines/file-size.json"], { cwd: repoRoot, encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] }));
-} catch {
-  // First baseline creation has no parent version.
+  previous = readPreviousBaseline(repoRoot, "scripts/baselines/file-size.json");
+} catch (error) {
+  console.error(error.message);
+  process.exit(2);
 }
 if (previous && (baseline.maximum > previous.maximum || (baseline.violations ?? []).length > (previous.violations ?? []).length)) {
   console.error("File-size baseline expanded");

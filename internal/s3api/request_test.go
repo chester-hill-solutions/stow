@@ -26,6 +26,7 @@ func TestPutObjectRejectsInvalidContentLength(t *testing.T) {
 		contentLength int64
 	}{
 		{name: "missing", contentLength: -1},
+		{name: "empty without header", contentLength: 0},
 	} {
 		t.Run(testCase.name, func(t *testing.T) {
 			req, err := http.NewRequest(http.MethodPut, ts.URL+"/length-bucket/key", strings.NewReader("body"))

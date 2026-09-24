@@ -116,7 +116,15 @@ func main() {
 }
 
 func previousBaseline(path string) (report, bool) {
-	command := exec.Command("git", "show", "HEAD^:"+filepath.ToSlash(path))
+	ref := strings.TrimSpace(os.Getenv("STOW_BASELINE_REF"))
+	if ref == "" {
+		ref = "HEAD^"
+	}
+	if _, err := exec.Command("git", "rev-parse", "--verify", ref).Output(); err != nil {
+		fmt.Fprintf(os.Stderr, "cannot resolve ratchet base %s; check out full history or set STOW_BASELINE_REF\\n", ref)
+		os.Exit(2)
+	}
+	command := exec.Command("git", "show", ref+":"+filepath.ToSlash(path))
 	data, err := command.Output()
 	if err != nil {
 		return report{}, false
@@ -192,18 +200,23 @@ func scanFile(path string, result *report, seen map[string]int) error {
 			continue
 		}
 		checkFunction(fn.Name.Name, fn.Body, fn.Type.Params, fset.Position(fn.Pos()).Line)
-	}
-	literalNumber := 0
-	ast.Inspect(file, func(node ast.Node) bool {
-		literal, ok := node.(*ast.FuncLit)
-		if !ok {
-			return true
+		literalNumber := 0
+		var inspectLiterals func(ast.Node)
+		inspectLiterals = func(node ast.Node) {
+			ast.Inspect(node, func(child ast.Node) bool {
+				literal, isLiteral := child.(*ast.FuncLit)
+				if !isLiteral {
+					return true
+				}
+				literalNumber++
+				name := fmt.Sprintf("%s/func-literal-%d", fn.Name.Name, literalNumber)
+				checkFunction(name, literal.Body, literal.Type.Params, fset.Position(literal.Pos()).Line)
+				inspectLiterals(literal.Body)
+				return false
+			})
 		}
-		literalNumber++
-		name := fmt.Sprintf("func-literal-%d", literalNumber)
-		checkFunction(name, literal.Body, literal.Type.Params, fset.Position(literal.Pos()).Line)
-		return true
-	})
+		inspectLiterals(fn.Body)
+	}
 	ast.Inspect(file, func(node ast.Node) bool {
 		switch typed := node.(type) {
 		case *ast.Ident:

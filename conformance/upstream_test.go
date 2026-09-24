@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -24,10 +26,16 @@ func TestUpstreamRunThrough(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 	defer cancel()
 	upstream, adapter := liveAdapter(t, ctx, upstreamConfig)
-	key := fmt.Sprintf("stow-conformance/%d", time.Now().UnixNano())
+	prefix := strings.Trim(strings.TrimSpace(os.Getenv("STOW_LIVE_BUCKET_PREFIX")), "/")
+	if prefix == "" {
+		prefix = "stow-conformance"
+	}
+	key := fmt.Sprintf("%s/%d", prefix, time.Now().UnixNano())
 	body := []byte("live run-through conformance")
 	defer func() {
-		_ = upstream.DeleteObject(context.Background(), upstreamConfig.Bucket, key)
+		if err := upstream.DeleteObject(context.Background(), upstreamConfig.Bucket, key); err != nil {
+			t.Logf("upstream cleanup: %v", err)
+		}
 	}()
 
 	meta, err := adapter.PutObject(ctx, upstreamConfig.Bucket, key, bytes.NewReader(body), storage.PutOptions{ContentType: "text/plain"})
@@ -68,11 +76,15 @@ func liveAdapter(t *testing.T, ctx context.Context, config runthrough.UpstreamCo
 	if err := local.CreateBucket(ctx, config.Bucket); err != nil {
 		t.Fatalf("create local bucket: %v", err)
 	}
+	outbox, err := runthrough.NewFileOutbox(filepath.Join(t.TempDir(), "outbox.json"))
+	if err != nil {
+		t.Fatalf("new file outbox: %v", err)
+	}
 	adapter := runthrough.NewWithOutbox(runthrough.Config{
 		Policy:          runthrough.PolicyMirrorWrites,
 		AllowLiveWrites: true,
 		Upstream:        config,
-	}, local, cache, upstream, runthrough.NewMemoryOutbox())
+	}, local, cache, upstream, outbox)
 	t.Cleanup(func() {
 		if err := adapter.Close(); err != nil {
 			t.Logf("adapter close: %v", err)

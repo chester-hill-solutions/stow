@@ -77,11 +77,6 @@
       "message": "function serveRange has 7 parameters (maximum 5)"
     },
     {
-      "rule": "max-params",
-      "identity": "internal/s3api/handlers_multipart.go:validateMultipartRoute#1",
-      "message": "function validateMultipartRoute has 6 parameters (maximum 5)"
-    },
-    {
       "rule": "complexity",
       "identity": "internal/s3api/router.go:parseRoute#1",
       "message": "function parseRoute has complexity 16 (maximum 15)"
@@ -95,6 +90,6 @@
   "counts": {
     "any": 5,
     "complexity": 4,
-    "max-params": 9
+    "max-params": 8
   }
 }

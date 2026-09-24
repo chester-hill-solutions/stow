@@ -97,6 +97,9 @@ func outboxRetryDelay(attempts int) time.Duration {
 func (a *Adapter) RetryPending(ctx context.Context) error {
 	now := time.Now()
 	for _, entry := range a.outbox.Pending() {
+		if entry.Terminal {
+			continue
+		}
 		if !entry.NextAttempt.IsZero() && entry.NextAttempt.After(now) {
 			continue
 		}

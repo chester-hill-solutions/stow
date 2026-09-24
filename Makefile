@@ -22,7 +22,8 @@ lint:
 
 check-generated:
 	cd packages/stow && npm ci --ignore-scripts && npm run build
-	git diff --exit-code -- packages/stow/dist
+	@git diff --quiet -- packages/stow/dist || (git status --short -- packages/stow/dist; exit 1)
+	@test -z "$$(git ls-files --others --exclude-standard -- packages/stow/dist)" || (git ls-files --others --exclude-standard -- packages/stow/dist; exit 1)
 
 format-check:
 	@test -z "$$(gofmt -l $$(find cmd internal conformance tools -name '*.go' -type f))" || (gofmt -l $$(find cmd internal conformance tools -name '*.go' -type f); exit 1)

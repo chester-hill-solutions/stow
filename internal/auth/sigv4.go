@@ -220,7 +220,7 @@ func verifySignedRequest(r *http.Request, creds Credentials, region string, maxS
 	if err != nil {
 		return err
 	}
-	if err := validateCredentialScope(sr, creds, region); err != nil {
+	if err := validateCredentialScope(r, sr, creds, region); err != nil {
 		return err
 	}
 	if err := validateRequestTime(r, sr, maxSkew, now); err != nil {
@@ -239,7 +239,7 @@ func verifySignedRequest(r *http.Request, creds Credentials, region string, maxS
 	return nil
 }
 
-func validateCredentialScope(sr signedRequest, creds Credentials, region string) error {
+func validateCredentialScope(r *http.Request, sr signedRequest, creds Credentials, region string) error {
 	if sr.credential.accessKeyID != creds.AccessKeyID {
 		return authError("AccessDenied", "unknown access key")
 	}
@@ -252,8 +252,17 @@ func validateCredentialScope(sr signedRequest, creds Credentials, region string)
 	if !containsHeader(sr.signedHeaders, "host") {
 		return authError("AccessDenied", "host must be signed")
 	}
-	if !sr.presigned && !containsHeader(sr.signedHeaders, "x-amz-date") && !containsHeader(sr.signedHeaders, "date") {
-		return authError("AccessDenied", "date must be signed")
+	if !sr.presigned {
+		dateHeader := "date"
+		if headerValue(r.Header, "X-Amz-Date") != "" {
+			dateHeader = "x-amz-date"
+		}
+		if !containsHeader(sr.signedHeaders, dateHeader) {
+			return authError("AccessDenied", "date must be signed")
+		}
+		if headerValue(r.Header, "X-Amz-Content-Sha256") != "" && !containsHeader(sr.signedHeaders, "x-amz-content-sha256") {
+			return authError("AccessDenied", "x-amz-content-sha256 must be signed")
+		}
 	}
 	if !strings.HasPrefix(sr.amzDate, sr.credential.dateStamp) {
 		return authError("AccessDenied", "credential date mismatch")

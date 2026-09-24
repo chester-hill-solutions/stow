@@ -58,6 +58,12 @@ func TestMemoryOutboxLifecycle(t *testing.T) {
 	if got := outbox.Pending()[0].LastError; got != "temporary" {
 		t.Fatalf("last error = %q", got)
 	}
+	if err := outbox.MarkFailure(pending[0].ID, runthrough.ErrOutboxVersionConflict, time.Now()); err != nil {
+		t.Fatalf("mark terminal failure: %v", err)
+	}
+	if !outbox.Pending()[0].Terminal {
+		t.Fatal("expected version conflict to be terminal")
+	}
 	if err := outbox.MarkSuccess(pending[0].ID); err != nil {
 		t.Fatalf("mark success: %v", err)
 	}

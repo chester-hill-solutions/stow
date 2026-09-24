@@ -3,6 +3,7 @@ package s3api
 import (
 	"context"
 	"encoding/xml"
+	"errors"
 	"io"
 	"net/http"
 	"net/url"
@@ -14,9 +15,9 @@ import (
 
 const minPartSize = 5 * 1024 * 1024
 
-func (s *Server) validateMultipartRoute(ctx context.Context, w http.ResponseWriter, r *http.Request, bucket, key, uploadID string) bool {
-	if err := s.store.ValidateMultipartUpload(ctx, uploadID, bucket, key); err != nil {
-		writeError(w, r, mapStorageError(err, resourcePath(bucket, key)))
+func (s *Server) validateMultipartRoute(ctx context.Context, w http.ResponseWriter, r *http.Request, route routeInfo, uploadID string) bool {
+	if err := s.store.ValidateMultipartUpload(ctx, uploadID, route.bucket, route.key); err != nil {
+		writeError(w, r, mapStorageError(err, resourcePath(route.bucket, route.key)))
 		return false
 	}
 	return true
@@ -42,7 +43,7 @@ func (s *Server) handleUploadPart(ctx context.Context, w http.ResponseWriter, r 
 		return
 	}
 	uploadID := q.Get("uploadId")
-	if !s.validateMultipartRoute(ctx, w, r, bucket, key, uploadID) {
+	if !s.validateMultipartRoute(ctx, w, r, routeInfo{bucket: bucket, key: key}, uploadID) {
 		return
 	}
 
@@ -51,7 +52,20 @@ func (s *Server) handleUploadPart(ctx context.Context, w http.ResponseWriter, r 
 		return
 	}
 	if err := verifyContentMD5(r); err != nil {
-		writeError(w, r, s3Error{Code: "InvalidArgument", Message: err.Error(), Resource: resourcePath(bucket, key), StatusCode: http.StatusBadRequest})
+		code := "InvalidArgument"
+		if errors.Is(err, storage.ErrMD5Mismatch) {
+			code = "BadDigest"
+		}
+		writeError(w, r, s3Error{Code: code, Message: err.Error(), Resource: resourcePath(bucket, key), StatusCode: http.StatusBadRequest})
+		return
+	}
+	checksumAlgorithm, checksumValue, err := checksumFromRequest(r)
+	if err != nil {
+		code := "InvalidArgument"
+		if errors.Is(err, storage.ErrChecksumMismatch) {
+			code = "BadDigest"
+		}
+		writeError(w, r, s3Error{Code: code, Message: err.Error(), Resource: resourcePath(bucket, key), StatusCode: http.StatusBadRequest})
 		return
 	}
 	part, err := s.store.UploadPart(ctx, uploadID, partNum, r.Body)
@@ -60,11 +74,14 @@ func (s *Server) handleUploadPart(ctx context.Context, w http.ResponseWriter, r 
 		return
 	}
 	w.Header().Set("ETag", part.ETag)
+	if checksumAlgorithm != "" {
+		w.Header().Set("x-amz-checksum-"+strings.ToLower(checksumAlgorithm), checksumValue)
+	}
 	writeXML(w, r, http.StatusOK, uploadPartResult{ETag: part.ETag})
 }
 
 func (s *Server) handleCompleteMultipartUpload(ctx context.Context, w http.ResponseWriter, r *http.Request, bucket, key, uploadID string) {
-	if !s.validateMultipartRoute(ctx, w, r, bucket, key, uploadID) {
+	if !s.validateMultipartRoute(ctx, w, r, routeInfo{bucket: bucket, key: key}, uploadID) {
 		return
 	}
 	var req completeMultipartUploadRequest
@@ -113,7 +130,7 @@ func (s *Server) handleCompleteMultipartUpload(ctx context.Context, w http.Respo
 }
 
 func (s *Server) handleAbortMultipartUpload(ctx context.Context, w http.ResponseWriter, r *http.Request, bucket, key, uploadID string) {
-	if !s.validateMultipartRoute(ctx, w, r, bucket, key, uploadID) {
+	if !s.validateMultipartRoute(ctx, w, r, routeInfo{bucket: bucket, key: key}, uploadID) {
 		return
 	}
 	err := s.store.AbortMultipartUpload(ctx, uploadID)
@@ -168,7 +185,7 @@ func (s *Server) handleListMultipartUploads(ctx context.Context, w http.Response
 }
 
 func (s *Server) handleListParts(ctx context.Context, w http.ResponseWriter, r *http.Request, bucket, key, uploadID string) {
-	if !s.validateMultipartRoute(ctx, w, r, bucket, key, uploadID) {
+	if !s.validateMultipartRoute(ctx, w, r, routeInfo{bucket: bucket, key: key}, uploadID) {
 		return
 	}
 	parts, err := s.store.ListParts(ctx, uploadID)

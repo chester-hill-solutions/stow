@@ -45,6 +45,7 @@ npm run check:dry
 - A new identity fails the gate.
 - A stale identity also fails the gate, forcing the baseline to be lowered after debt is removed.
 - A baseline-generation command is allowed only as an explicit maintenance action after reviewing the diff. It is not a way to approve a regression.
+- CI checks out full history (`fetch-depth: 0`) and compares against the explicit parent/merge-base; a shallow checkout is a hard failure, never a skipped ratchet.
 - Inline suppressions are themselves counted where the check can detect them. A suppression requires a precise explanation and does not reset the ratchet.
 - Existing test fixtures and generated output are excluded only when their exclusion is documented in the check configuration.
 
