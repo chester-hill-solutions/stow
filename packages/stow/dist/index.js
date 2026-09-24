@@ -1,4 +1,4 @@
-import { buildAwsSdkV3Config } from "./instance.js";
+import { buildAwsSdkV3Config, createStowConnection } from "./instance.js";
 import { startStow } from "./start.js";
 import { upstreamFromEnv } from "./upstream.js";
 export { parseReadyLine } from "./start.js";
@@ -7,6 +7,9 @@ export { upstreamFromEnv } from "./upstream.js";
 export const Stow = {
     start(options) {
         return startStow(options);
+    },
+    connect(options) {
+        return createStowConnection(options);
     },
     awsSdkV3Config(options) {
         if ("secretAccessKey" in options && "endpoint" in options) {

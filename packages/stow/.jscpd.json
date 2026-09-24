@@ -1,0 +1,10 @@
+{
+  "path": ["src", "test"],
+  "ignore": ["dist/**", "node_modules/**", "**/*.d.ts"],
+  "minTokens": 40,
+  "reporters": ["json"],
+  "output": "./node_modules/.cache/jscpd",
+  "gitignore": true,
+  "silent": true,
+  "absolute": false
+}

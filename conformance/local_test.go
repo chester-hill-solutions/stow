@@ -3,6 +3,9 @@ package conformance_test
 import (
 	"bytes"
 	"context"
+	"crypto/md5"
+	"encoding/base64"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"io"
@@ -90,6 +93,56 @@ func TestPutGetRoundtrip(t *testing.T) {
 	}
 }
 
+func TestPutObjectConditionalWrite(t *testing.T) {
+	env := newTestEnv(t)
+	ctx := context.Background()
+	bucket := uniqueBucket(t, "conditional")
+	createBucket(ctx, t, env.Client, bucket)
+
+	first, err := env.Client.PutObject(ctx, &s3.PutObjectInput{
+		Bucket: aws.String(bucket),
+		Key:    aws.String("key"),
+		Body:   strings.NewReader("first"),
+	})
+	if err != nil {
+		t.Fatalf("first PutObject: %v", err)
+	}
+	_, err = env.Client.PutObject(ctx, &s3.PutObjectInput{
+		Bucket:      aws.String(bucket),
+		Key:         aws.String("key"),
+		Body:        strings.NewReader("second"),
+		IfNoneMatch: first.ETag,
+	})
+	if err == nil {
+		t.Fatal("expected conditional write failure")
+	}
+	var responseErr *smithyhttp.ResponseError
+	if !errors.As(err, &responseErr) || responseErr.HTTPStatusCode() != http.StatusPreconditionFailed {
+		t.Fatalf("expected 412, got %v", err)
+	}
+}
+
+func TestPutObjectRejectsWrongContentMD5(t *testing.T) {
+	env := newTestEnv(t)
+	ctx := context.Background()
+	bucket := uniqueBucket(t, "checksum")
+	createBucket(ctx, t, env.Client, bucket)
+	bad := base64.StdEncoding.EncodeToString([]byte("not-the-body"))
+	_, err := env.Client.PutObject(ctx, &s3.PutObjectInput{
+		Bucket:     aws.String(bucket),
+		Key:        aws.String("key"),
+		Body:       strings.NewReader("body"),
+		ContentMD5: aws.String(bad),
+	})
+	if err == nil {
+		t.Fatal("expected checksum mismatch")
+	}
+	var responseErr *smithyhttp.ResponseError
+	if !errors.As(err, &responseErr) || responseErr.HTTPStatusCode() != http.StatusBadRequest {
+		t.Fatalf("expected 400, got %v", err)
+	}
+}
+
 func TestListObjectsV2Prefix(t *testing.T) {
 	env := newTestEnv(t)
 	ctx := context.Background()
@@ -123,6 +176,33 @@ func TestListObjectsV2Prefix(t *testing.T) {
 		if !strings.HasPrefix(k, "a/") {
 			t.Fatalf("unexpected key %q in prefix listing", k)
 		}
+	}
+}
+
+func TestGetObjectConditionalPrecondition(t *testing.T) {
+	env := newTestEnv(t)
+	ctx := context.Background()
+	bucket := uniqueBucket(t, "get-conditional")
+	createBucket(ctx, t, env.Client, bucket)
+	put, err := env.Client.PutObject(ctx, &s3.PutObjectInput{
+		Bucket: aws.String(bucket),
+		Key:    aws.String("key"),
+		Body:   strings.NewReader("body"),
+	})
+	if err != nil {
+		t.Fatalf("PutObject: %v", err)
+	}
+	_, err = env.Client.GetObject(ctx, &s3.GetObjectInput{
+		Bucket:      aws.String(bucket),
+		Key:         aws.String("key"),
+		IfNoneMatch: put.ETag,
+	})
+	if err == nil {
+		t.Fatal("expected conditional GET failure")
+	}
+	var responseErr *smithyhttp.ResponseError
+	if !errors.As(err, &responseErr) || responseErr.HTTPStatusCode() != http.StatusPreconditionFailed {
+		t.Fatalf("expected 412, got %v", err)
 	}
 }
 
@@ -204,6 +284,79 @@ func TestCopyObject(t *testing.T) {
 	}
 }
 
+func TestCopyObjectReplaceMetadata(t *testing.T) {
+	env := newTestEnv(t)
+	ctx := context.Background()
+	srcBucket := uniqueBucket(t, "src")
+	dstBucket := uniqueBucket(t, "dst")
+	createBucket(ctx, t, env.Client, srcBucket)
+	createBucket(ctx, t, env.Client, dstBucket)
+
+	_, err := env.Client.PutObject(ctx, &s3.PutObjectInput{
+		Bucket:      aws.String(srcBucket),
+		Key:         aws.String("source"),
+		Body:        strings.NewReader("copy me"),
+		ContentType: aws.String("text/plain"),
+		Metadata:    map[string]string{"origin": "source"},
+	})
+	if err != nil {
+		t.Fatalf("PutObject source: %v", err)
+	}
+	_, err = env.Client.CopyObject(ctx, &s3.CopyObjectInput{
+		Bucket:            aws.String(dstBucket),
+		Key:               aws.String("replacement"),
+		CopySource:        aws.String(srcBucket + "/source"),
+		MetadataDirective: types.MetadataDirectiveReplace,
+		ContentType:       aws.String("application/json"),
+		Metadata:          map[string]string{"origin": "replacement"},
+	})
+	if err != nil {
+		t.Fatalf("CopyObject replace: %v", err)
+	}
+
+	head, err := env.Client.HeadObject(ctx, &s3.HeadObjectInput{
+		Bucket: aws.String(dstBucket),
+		Key:    aws.String("replacement"),
+	})
+	if err != nil {
+		t.Fatalf("HeadObject replacement: %v", err)
+	}
+	if got := aws.ToString(head.ContentType); got != "application/json" {
+		t.Fatalf("content type = %q, want application/json", got)
+	}
+	if got := head.Metadata["origin"]; got != "replacement" {
+		t.Fatalf("metadata origin = %q, want replacement", got)
+	}
+}
+
+func TestCopyObjectPreconditionFailure(t *testing.T) {
+	env := newTestEnv(t)
+	ctx := context.Background()
+	bucket := uniqueBucket(t, "precondition")
+	createBucket(ctx, t, env.Client, bucket)
+	put, err := env.Client.PutObject(ctx, &s3.PutObjectInput{
+		Bucket: aws.String(bucket),
+		Key:    aws.String("source"),
+		Body:   strings.NewReader("source"),
+	})
+	if err != nil {
+		t.Fatalf("PutObject: %v", err)
+	}
+	_, err = env.Client.CopyObject(ctx, &s3.CopyObjectInput{
+		Bucket:                aws.String(bucket),
+		Key:                   aws.String("copy"),
+		CopySource:            aws.String(bucket + "/source"),
+		CopySourceIfNoneMatch: put.ETag,
+	})
+	if err == nil {
+		t.Fatal("expected copy precondition failure")
+	}
+	var responseErr *smithyhttp.ResponseError
+	if !errors.As(err, &responseErr) || responseErr.HTTPStatusCode() != http.StatusPreconditionFailed {
+		t.Fatalf("expected 412, got %v", err)
+	}
+}
+
 func TestRangeGetObject(t *testing.T) {
 	env := newTestEnv(t)
 	ctx := context.Background()
@@ -270,6 +423,48 @@ func TestRangeGetObject(t *testing.T) {
 	var respErr *smithyhttp.ResponseError
 	if !errors.As(err, &respErr) || respErr.HTTPStatusCode() != http.StatusRequestedRangeNotSatisfiable {
 		t.Fatalf("expected 416, got %v", err)
+	}
+}
+
+func TestListMultipartUploads(t *testing.T) {
+	env := newTestEnv(t)
+	ctx := context.Background()
+	bucket := uniqueBucket(t, "uploads")
+	createBucket(ctx, t, env.Client, bucket)
+
+	created, err := env.Client.CreateMultipartUpload(ctx, &s3.CreateMultipartUploadInput{
+		Bucket: aws.String(bucket),
+		Key:    aws.String("large/object.bin"),
+	})
+	if err != nil {
+		t.Fatalf("CreateMultipartUpload: %v", err)
+	}
+	uploadID := aws.ToString(created.UploadId)
+	if uploadID == "" {
+		t.Fatal("expected upload ID")
+	}
+	t.Cleanup(func() {
+		_, _ = env.Client.AbortMultipartUpload(ctx, &s3.AbortMultipartUploadInput{
+			Bucket:   aws.String(bucket),
+			Key:      aws.String("large/object.bin"),
+			UploadId: aws.String(uploadID),
+		})
+	})
+
+	out, err := env.Client.ListMultipartUploads(ctx, &s3.ListMultipartUploadsInput{
+		Bucket: aws.String(bucket),
+	})
+	if err != nil {
+		t.Fatalf("ListMultipartUploads: %v", err)
+	}
+	if len(out.Uploads) != 1 {
+		t.Fatalf("expected one in-progress upload, got %d", len(out.Uploads))
+	}
+	if got := aws.ToString(out.Uploads[0].Key); got != "large/object.bin" {
+		t.Fatalf("upload key = %q, want %q", got, "large/object.bin")
+	}
+	if got := aws.ToString(out.Uploads[0].UploadId); got != uploadID {
+		t.Fatalf("upload ID = %q, want %q", got, uploadID)
 	}
 }
 
@@ -350,6 +545,13 @@ func TestMultipartUpload(t *testing.T) {
 	if completeOut.ETag == nil || *completeOut.ETag == "" {
 		t.Fatal("expected composite ETag")
 	}
+	part1Hash := md5.Sum(part1)
+	part2Hash := md5.Sum(part2)
+	combinedHash := md5.Sum(append(append([]byte{}, part1Hash[:]...), part2Hash[:]...))
+	wantETag := fmt.Sprintf("\"%s-2\"", hex.EncodeToString(combinedHash[:]))
+	if got := aws.ToString(completeOut.ETag); got != wantETag {
+		t.Fatalf("composite ETag = %q, want %q", got, wantETag)
+	}
 
 	getOut, err := env.Client.GetObject(ctx, &s3.GetObjectInput{
 		Bucket: aws.String(bucket),
@@ -367,6 +569,50 @@ func TestMultipartUpload(t *testing.T) {
 	if !bytes.Equal(data[:minPart], part1) || !bytes.Equal(data[minPart:], part2) {
 		t.Fatal("multipart object bytes mismatch")
 	}
+}
+
+func TestCompleteMultipartRejectsWrongETag(t *testing.T) {
+	env := newTestEnv(t)
+	ctx := context.Background()
+	bucket := uniqueBucket(t, "wrong-etag")
+	createBucket(ctx, t, env.Client, bucket)
+	created, err := env.Client.CreateMultipartUpload(ctx, &s3.CreateMultipartUploadInput{
+		Bucket: aws.String(bucket),
+		Key:    aws.String("object"),
+	})
+	if err != nil {
+		t.Fatalf("CreateMultipartUpload: %v", err)
+	}
+	uploadID := aws.ToString(created.UploadId)
+	part, err := env.Client.UploadPart(ctx, &s3.UploadPartInput{
+		Bucket:     aws.String(bucket),
+		Key:        aws.String("object"),
+		UploadId:   aws.String(uploadID),
+		PartNumber: aws.Int32(1),
+		Body:       strings.NewReader("body"),
+	})
+	if err != nil {
+		t.Fatalf("UploadPart: %v", err)
+	}
+	_, err = env.Client.CompleteMultipartUpload(ctx, &s3.CompleteMultipartUploadInput{
+		Bucket:   aws.String(bucket),
+		Key:      aws.String("object"),
+		UploadId: aws.String(uploadID),
+		MultipartUpload: &types.CompletedMultipartUpload{
+			Parts: []types.CompletedPart{{ETag: aws.String("\"wrong\""), PartNumber: aws.Int32(1)}},
+		},
+	})
+	if err == nil {
+		t.Fatal("expected wrong ETag completion to fail")
+	}
+	var responseErr *smithyhttp.ResponseError
+	if !errors.As(err, &responseErr) || responseErr.HTTPStatusCode() != http.StatusBadRequest {
+		t.Fatalf("expected 400, got %v", err)
+	}
+	_, _ = env.Client.AbortMultipartUpload(ctx, &s3.AbortMultipartUploadInput{
+		Bucket: aws.String(bucket), Key: aws.String("object"), UploadId: aws.String(uploadID),
+	})
+	_ = part
 }
 
 func TestPresignedGetPut(t *testing.T) {

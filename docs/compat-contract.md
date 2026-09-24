@@ -6,6 +6,40 @@ This document is the authoritative contract for `@chs/stow` v1. Implementers and
 
 **Non-goals (v1):** Versioning, Object Lock, ACLs, bucket policies, IAM, KMS/SSE, lifecycle rules, replication, notifications, S3 Select, batch operations.
 
+## 0. 0.2.0 SDK compatibility amendments
+
+This section is normative for the 0.2.0 remediation release and is linked by `docs/adr/0002-sdk-compatibility-and-mirror-writes.md`. It amends the original v1 contract where the two differ.
+
+### 0.1 Compatibility profile
+
+The supported external profile is the version-pinned AWS SDK v3 (Node) and AWS SDK for Go v2. Stow accepts the safe union of behavior observable through those SDKs. It does not require undocumented Amazon-service strictness. Benign unknown headers are ignored; semantic markers for unsupported operations fail before they can fall through to a supported operation.
+
+Raw HTTP tests cover authentication, routing, safety, malformed input, and protocol edges. Every shared conformance scenario must run through both SDK runners and both storage backends.
+
+### 0.2 Naming and path decoding
+
+Bucket names use 3–63 characters from `[a-z0-9._-]`. This local extension permits leading/trailing hyphens and underscores but never path separators, control characters, or traversal syntax. S3 reserved-name and IP-address rules remain rejected. Object keys are opaque strings; `.` and `..` are valid content and are encoded reversibly by persistent storage. HTTP paths are decoded exactly once.
+
+### 0.3 Authentication compatibility
+
+Header authentication may use the SDK-compatible `Date` header when `X-Amz-Date` is absent, provided the selected date header is in `SignedHeaders` and the signature validates. Presigned URLs still require `X-Amz-Date`. Presigned methods are GET, PUT, and HEAD; `X-Amz-Expires` must be in `1..604800`.
+
+The shared corpus must cover missing/malformed auth, both date forms, wrong secret, skew, expired presigns, 604800, 604801, unsupported methods, and anonymous requests.
+
+### 0.4 Policies and propagation
+
+The public policies are `readThroughCache` and `mirrorWrites`; `local` is a mode, not a policy. `readThroughCache` writes locally unless the separate live-write flag is enabled. `mirrorWrites` explicitly enables propagation and emits a loud startup warning. The legacy `proxy` policy is rejected with a migration error.
+
+Local mutations commit before upstream propagation. A durable per-key outbox stores an immutable versioned reference, retries transient failures with bounded backoff, and retains deterministic failures for inspection. Admin retry/discard actions are loopback-only.
+
+### 0.5 Conditional operations and checksums
+
+The SDK profile includes atomic `If-None-Match: *` and `If-Match` conditional writes, conditional GET/HEAD validators, Content-MD5, CRC32, CRC32C, SHA-1, and SHA-256. Header names, encodings, response headers, multipart behavior, and error codes are normative in the shared corpus; unknown checksum algorithms fail clearly.
+
+### 0.6 Backends and versioning
+
+Filesystem is the default. Memory is an explicitly selected ephemeral backend with the same behavioral contract. The old sidecar format is not migrated; startup warns and continues with the new atomic format. The package is 0.2.0 while the package remains pre-1.0; the existing major-version rule is amended as recorded in ADR 0002. The npm version, binary version, and status version use one source.
+
 ---
 
 ## 1. Supported Operations
@@ -22,7 +56,7 @@ All S3 operations use **AWS Signature Version 4 (SigV4)** unless served via a **
 | **DeleteBucket** | `DELETE` | `/{bucket}` | `Authorization` | `204 No Content` if empty bucket deleted; `404` if missing; `409 Conflict` if bucket contains objects |
 
 **Notes:**
-- Bucket names MUST follow S3 naming rules (3–63 chars, lowercase, DNS-compliant). Invalid names: `400 InvalidBucketName`.
+- Bucket names MUST satisfy the amended local grammar in §0.2. Invalid names: `400 InvalidBucketName`.
 - `CreateBucket` MUST NOT require `LocationConstraint` for v1 (single implicit region).
 - `x-amz-acl`, `x-amz-grant-*`, and policy headers are ignored on supported bucket ops (no ACL enforcement).
 
@@ -114,7 +148,7 @@ Bucket-specific CORS XML configuration APIs are **out of scope**; CORS is a fixe
 
 ## 2. SDK Flows to Test (Conformance Suite)
 
-Each flow below MUST pass against the local endpoint using AWS SDK v3 (`@aws-sdk/client-s3`) with `endpoint`, `forcePathStyle` / virtual-hosted toggles, and stow-issued local dev credentials.
+Each flow below MUST pass against the local endpoint using the pinned AWS SDK v3 (`@aws-sdk/client-s3`) and AWS SDK for Go v2 runners, with `endpoint`, `forcePathStyle` / virtual-hosted toggles, and stow-issued local dev credentials. The shared corpus is the source of truth; the two runners must agree on the safe union of SDK-observable behavior.
 
 ### 2.1 PutObject — Basic Write/Read Round-Trip
 
@@ -229,7 +263,7 @@ Both MUST succeed on the same bucket/object.
 | Requirement | Contract |
 |-------------|----------|
 | Algorithm | `AWS4-HMAC-SHA256` only |
-| Signed headers | Must include `host` and `x-amz-date` (and `x-amz-content-sha256` when present) |
+| Signed headers | Must include `host` and `x-amz-date`; the amended SDK profile permits `date` as a signed fallback when `x-amz-date` is absent (and `x-amz-content-sha256` when present) |
 | Credential scope | `{date}/{region}/s3/aws4_request` — region MUST match stow configured region (default `us-east-1`) |
 | Access key | Stow-issued **local dev credentials** printed at startup / returned from `Stow.start()` |
 | Secret key | Paired with local access key; NEVER upstream credentials for local endpoint auth |
@@ -301,9 +335,9 @@ Run-through mode is enabled by explicit config or **auto-detect** when upstream 
 
 | Policy | Reads | Writes |
 |--------|-------|--------|
-| **local-only** (default when no upstream) | Local store only | Local store only |
+| **local mode** (default when no upstream) | Local store only | Local store only |
 | **readThroughCache** (default when upstream detected) | Local miss → fetch upstream, cache locally, serve; hit → serve local with optional revalidation | **Local store only** unless `allowLiveWrites: true` |
-| **readThroughCache + allowLiveWrites** | Same as above | Dual-write: local first, then upstream (upstream failure → surface error after local commit; document in logs) |
+| **mirrorWrites** | Same read-through behavior | Local first, then upstream with durable outbox; startup warning required |
 
 ### 6.2 Read-Through Cache Semantics
 
@@ -312,7 +346,7 @@ GET/HeadObject flow (readThroughCache):
 1. If object exists locally → return local bytes/metadata
    - If upstream configured AND revalidation enabled (default): compare ETag/Last-Modified with upstream HEAD
      - If upstream newer → refresh local copy, then serve
-     - If upstream 404 → optionally evict local (config: evictOnUpstreamMissing, default true in run-through)
+     - If upstream 404 → evict only an entry marked as upstream-derived; never evict a local-only write
 2. If local miss → HEAD/GET upstream
    - 404 → pass through 404 to client
    - 200 → persist to local backend, then serve
@@ -322,7 +356,7 @@ GET/HeadObject flow (readThroughCache):
 - Returns **union** of local keys and upstream keys (deduplicated by key name).
 - For duplicate keys, **local metadata wins** for `ETag`/`Size`/`LastModified` in listing (local is authoritative for dev).
 - Implementation fetches complete prefix sets from both sources, merges, then applies client `max-keys` / continuation locally so pagination tokens stay stable.
-- Under `proxy` policy, listing is upstream-only (matches proxy Get/Head).
+- Under `readThroughCache` and `mirrorWrites`, listing is the merged local/upstream result described above; the legacy `proxy` policy is not supported.
 
 **Object size / buffering (v1, intentional):**
 - Single-part Put and multipart Complete buffer object/part bytes in memory to compute MD5 ETags. Stow is a **dev/test** bucket service — not production object storage. Large-object streaming without full buffering is out of scope for v1.
@@ -333,8 +367,8 @@ GET/HeadObject flow (readThroughCache):
 - `DeleteBucket` deletes locally; upstream bucket untouched.
 
 **CopyObject / Multipart / DeleteObject / DeleteObjects:**
-- Execute against **local store only** in default run-through.
-- With `allowLiveWrites: true`, mutating ops also propagate to upstream (same key path).
+- Execute against the local store first.
+- With `readThroughCache + allowLiveWrites` or `mirrorWrites`, supported mutations propagate to upstream through the durable outbox and use the same key path.
 
 **Presigned URLs:**
 - Signed against local endpoint; reads/writes hit local policy layer (not direct upstream bypass).
@@ -345,8 +379,8 @@ On every `Stow.start()`, log to stdout (and expose via `/_stow/status`):
 
 - Mode: `local-only` | `run-through`
 - Upstream endpoint (host only; no secrets)
-- Cache policy: `readThroughCache` | none
-- Write policy: `local-only` | `allowLiveWrites`
+- Cache policy: `readThroughCache` | `mirrorWrites` | none
+- Write policy: `local-only` | `allowLiveWrites` | `mirrorWrites`
 - Override hints: `STOW_MODE=local`, `allowLiveWrites` flag
 
 ### 6.4 Conformance Tests (Run-Through)
@@ -358,6 +392,7 @@ Required manual/CI scenarios (against AWS S3, Cloudflare R2, or custom endpoint)
 3. Upstream 404 on cached key → local evicted, client receives 404.
 4. Write with default policy → upstream unchanged (verify with upstream SDK).
 5. Write with `allowLiveWrites: true` → visible on upstream.
+6. Failed upstream propagation → local result is retained, an immutable outbox entry is recorded, and a transient retry/manual retry can propagate the exact version.
 
 ---
 
@@ -369,9 +404,10 @@ Non-S3 HTTP routes for observability and debugging. **No SigV4 required** (local
 |-------|--------|------|----------|
 | `/_stow/health` | `GET` | None | `200 OK` JSON: `{ "status": "ok" }` — liveness probe |
 | `/_stow/status` | `GET` | None | `200 OK` JSON: mode, listen address, region, bucket count, object count (approx), cache policy, write policy, upstream endpoint (redacted), uptime seconds, version |
-| `/_stow/inspect` | `GET` | None | `200 OK` JSON: detailed snapshot — buckets with object counts, in-flight multipart uploads, cache hit/miss counters, last upstream error (if any). Query `?bucket={name}` scopes to one bucket |
+| `/_stow/inspect` | `GET` | None | `200 OK` JSON: detailed snapshot — buckets with object counts, in-flight multipart uploads, cache hit/miss counters, last upstream error (if any), and outbox entries. Query `?bucket={name}` scopes to one bucket |
+| `/_stow/metrics` | `GET` | None | `200 OK` Prometheus exposition: cache, upstream, multipart, retry, and outbox metrics |
 
-**Security:** Admin routes MUST NOT be exposed on `0.0.0.0` in default configuration; document risk if binding publicly.
+**Security:** Admin routes, including `/_stow/metrics`, MUST NOT be exposed on `0.0.0.0` in default configuration; require an explicit public-exposure flag and warning before binding publicly.
 
 **Errors:** Unknown `/_stow/*` paths → `404` JSON `{ "error": "not found" }`.
 
@@ -396,6 +432,6 @@ Non-S3 HTTP routes for observability and debugging. **No SigV4 required** (local
 
 ## Appendix B — Versioning This Contract
 
-- Breaking changes to any table in §1 or §6 require a major version bump of `@chs/stow`.
+- The 0.2.0 pre-1.0 release may contain documented breaking behavior as specified by ADR 0002; the stable `@chs/stow` 1.x boundary is reserved for the first non-breaking stable contract.
 - New operations may be added in minor versions if marked **experimental** in changelog first.
 - Conformance test suite in repo MUST reference this file by path and commit SHA in CI logs.

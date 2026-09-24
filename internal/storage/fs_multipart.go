@@ -102,20 +102,25 @@ func (s *FilesystemStore) CompleteMultipartUpload(_ context.Context, uploadID st
 
 	sort.Slice(parts, func(i, j int) bool { return parts[i].PartNumber < parts[j].PartNumber })
 	var combined []byte
+	partETags := make([]string, 0, len(parts))
 	for _, p := range parts {
 		partPath := filepath.Join(dir, fmt.Sprintf("part-%05d", p.PartNumber))
 		data, err := os.ReadFile(partPath)
 		if err != nil {
 			return nil, ErrInvalidPart
 		}
+		storedETag := etagForBytes(data)
+		if p.ETag == "" || !etagEqual(p.ETag, storedETag) {
+			return nil, ErrInvalidPart
+		}
+		partETags = append(partETags, storedETag)
 		combined = append(combined, data...)
 	}
-
+	etag := compositeETag(partETags)
 	objPath := s.objectPath(manifest.Bucket, manifest.Key)
 	if err := writeBytesAtomic(objPath, combined); err != nil {
 		return nil, err
 	}
-	etag := etagForBytes(combined)
 	sidecar := objectSidecar{ETag: etag}
 	if err := writeJSONAtomic(s.metaPath(manifest.Bucket, manifest.Key), sidecar); err != nil {
 		return nil, err
@@ -130,6 +135,42 @@ func (s *FilesystemStore) CompleteMultipartUpload(_ context.Context, uploadID st
 		ETag:         etag,
 		LastModified: now,
 	}, nil
+}
+
+func (s *FilesystemStore) ListMultipartUploads(_ context.Context, bucket string, opts MultipartListOptions) (*MultipartListResult, error) {
+	if err := validateBucketName(bucket); err != nil {
+		return nil, err
+	}
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	if _, err := os.Stat(s.bucketDir(bucket)); os.IsNotExist(err) {
+		return nil, ErrBucketNotFound
+	}
+	entries, err := os.ReadDir(filepath.Join(s.dataDir, ".multipart"))
+	if err != nil {
+		if os.IsNotExist(err) {
+			return PaginateMultipartUploads(nil, opts), nil
+		}
+		return nil, err
+	}
+	uploads := make([]MultipartUpload, 0, len(entries))
+	for _, entry := range entries {
+		if !entry.IsDir() {
+			continue
+		}
+		manifest, err := readMultipartManifest(filepath.Join(s.dataDir, ".multipart", entry.Name()))
+		if err != nil || manifest.Bucket != bucket {
+			continue
+		}
+		uploads = append(uploads, MultipartUpload{
+			UploadID:  entry.Name(),
+			Bucket:    manifest.Bucket,
+			Key:       manifest.Key,
+			Initiated: manifest.Initiated,
+		})
+	}
+	return PaginateMultipartUploads(uploads, opts), nil
 }
 
 func (s *FilesystemStore) AbortMultipartUpload(_ context.Context, uploadID string) error {

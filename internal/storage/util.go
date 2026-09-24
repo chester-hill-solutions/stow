@@ -5,20 +5,30 @@ import (
 	"encoding/hex"
 	"fmt"
 	"io"
-	"path"
 	"sort"
 	"strings"
+	"unicode/utf8"
 )
 
 func validateBucketName(name string) error {
-	if name == "" || strings.Contains(name, "/") || strings.Contains(name, "..") {
-		return ErrBucketNotFound
+	if len(name) < 3 || len(name) > 63 || strings.Contains(name, "..") {
+		return ErrInvalidBucketName
+	}
+	for _, c := range name {
+		if (c >= 'a' && c <= 'z') || (c >= '0' && c <= '9') || c == '-' || c == '_' || c == '.' {
+			continue
+		}
+		return ErrInvalidBucketName
 	}
 	return nil
 }
 
+func ValidBucketName(name string) bool {
+	return validateBucketName(name) == nil
+}
+
 func validateKey(key string) error {
-	if key == "" || strings.HasPrefix(key, "/") || strings.Contains(key, "..") {
+	if key == "" || len(key) > 1024 || !utf8.ValidString(key) || strings.IndexByte(key, 0) >= 0 {
 		return ErrInvalidKey
 	}
 	return nil
@@ -27,6 +37,21 @@ func validateKey(key string) error {
 func etagForBytes(data []byte) string {
 	sum := md5.Sum(data)
 	return fmt.Sprintf("\"%s\"", hex.EncodeToString(sum[:]))
+}
+
+func etagEqual(left, right string) bool {
+	return strings.Trim(left, "\"") == strings.Trim(right, "\"")
+}
+
+func compositeETag(partETags []string) string {
+	h := md5.New()
+	for _, etag := range partETags {
+		raw, err := hex.DecodeString(strings.Trim(etag, "\""))
+		if err == nil {
+			_, _ = h.Write(raw)
+		}
+	}
+	return fmt.Sprintf("\"%s-%d\"", hex.EncodeToString(h.Sum(nil)), len(partETags))
 }
 
 func etagForReader(r io.Reader) (string, []byte, error) {
@@ -74,42 +99,118 @@ func maxKeysOrDefault(max int) int {
 	return max
 }
 
-// PaginateObjects applies ListObjectsV2 continuation/delimiter/max-keys semantics
-// to a sorted slice of ObjectMeta. Callers must pre-filter by prefix and sort by key.
-func PaginateObjects(items []ObjectMeta, opts ListOptions) *ListResult {
-	startAfter := listStartAfter(opts)
-	maxKeys := maxKeysOrDefault(opts.MaxKeys)
-	result := &ListResult{}
-	prefixSet := map[string]struct{}{}
+func maxUploadsOrDefault(max int) int {
+	if max <= 0 {
+		return 1000
+	}
+	return max
+}
 
-	for _, meta := range items {
-		key := meta.Key
-		if startAfter != "" && key <= startAfter {
+func PaginateMultipartUploads(items []MultipartUpload, opts MultipartListOptions) *MultipartListResult {
+	maxUploads := maxUploadsOrDefault(opts.MaxUploads)
+	sort.Slice(items, func(i, j int) bool {
+		if items[i].Key != items[j].Key {
+			return items[i].Key < items[j].Key
+		}
+		if !items[i].Initiated.Equal(items[j].Initiated) {
+			return items[i].Initiated.Before(items[j].Initiated)
+		}
+		return items[i].UploadID < items[j].UploadID
+	})
+
+	result := &MultipartListResult{
+		Prefix:         opts.Prefix,
+		Delimiter:      opts.Delimiter,
+		KeyMarker:      opts.KeyMarker,
+		UploadIDMarker: opts.UploadIDMarker,
+		MaxUploads:     maxUploads,
+	}
+	for _, upload := range items {
+		if opts.Prefix != "" && !strings.HasPrefix(upload.Key, opts.Prefix) {
 			continue
 		}
-		if cp := commonPrefixFor(key, opts.Prefix, opts.Delimiter); cp != "" {
-			if _, ok := prefixSet[cp]; !ok {
-				prefixSet[cp] = struct{}{}
-				result.CommonPrefixes = append(result.CommonPrefixes, cp)
+		if opts.KeyMarker != "" {
+			if upload.Key < opts.KeyMarker {
+				continue
 			}
-			continue
+			if upload.Key == opts.KeyMarker && opts.UploadIDMarker != "" && upload.UploadID <= opts.UploadIDMarker {
+				continue
+			}
 		}
-		if len(result.Objects) >= maxKeys {
+		if len(result.Uploads) >= maxUploads {
 			result.IsTruncated = true
-			result.NextContinuationToken = key
+			result.NextKeyMarker = upload.Key
+			result.NextUploadIDMarker = upload.UploadID
 			break
 		}
-		result.Objects = append(result.Objects, meta)
-	}
-	sort.Strings(result.CommonPrefixes)
-	result.KeyCount = len(result.Objects) + len(result.CommonPrefixes)
-	if opts.ContinuationToken != "" {
-		result.ContinuationToken = opts.ContinuationToken
+		result.Uploads = append(result.Uploads, upload)
 	}
 	return result
 }
 
-// objectRelPath returns the relative path under a bucket's objects directory.
+// PaginateObjects applies ListObjectsV2 continuation/delimiter/max-keys semantics
+// to a sorted slice of ObjectMeta. Callers must pre-filter by prefix and sort by key.
+func PaginateObjects(items []ObjectMeta, opts ListOptions) *ListResult {
+	maxKeys := maxKeysOrDefault(opts.MaxKeys)
+	startAfter := opts.ContinuationToken
+	if startAfter == "" {
+		startAfter = opts.StartAfter
+	}
+
+	type logicalEntry struct {
+		value  string
+		object *ObjectMeta
+		prefix bool
+	}
+	entries := make([]logicalEntry, 0, len(items))
+	prefixes := make(map[string]struct{})
+	for i := range items {
+		meta := items[i]
+		if cp := commonPrefixFor(meta.Key, opts.Prefix, opts.Delimiter); cp != "" {
+			if _, seen := prefixes[cp]; !seen {
+				prefixes[cp] = struct{}{}
+				entries = append(entries, logicalEntry{value: cp, prefix: true})
+			}
+			continue
+		}
+		entries = append(entries, logicalEntry{value: meta.Key, object: &meta})
+	}
+	sort.Slice(entries, func(i, j int) bool { return entries[i].value < entries[j].value })
+
+	result := &ListResult{}
+	if opts.ContinuationToken != "" {
+		result.ContinuationToken = opts.ContinuationToken
+	}
+	for _, entry := range entries {
+		if startAfter != "" && entry.value <= startAfter {
+			continue
+		}
+		if len(result.Objects)+len(result.CommonPrefixes) >= maxKeys {
+			result.IsTruncated = true
+			result.NextContinuationToken = entry.value
+			break
+		}
+		if entry.prefix {
+			result.CommonPrefixes = append(result.CommonPrefixes, entry.value)
+		} else {
+			result.Objects = append(result.Objects, *entry.object)
+		}
+	}
+	result.KeyCount = len(result.Objects) + len(result.CommonPrefixes)
+	return result
+}
+
+// objectRelPath returns a reversible, flat filesystem name for an object key.
+// Encoding the complete key avoids path traversal and preserves empty, repeated,
+// and dot path segments.
 func objectRelPath(key string) string {
-	return path.Clean("/" + key)[1:]
+	return hex.EncodeToString([]byte(key))
+}
+
+func objectKeyFromFilename(name string) (string, bool) {
+	decoded, err := hex.DecodeString(name)
+	if err != nil {
+		return "", false
+	}
+	return string(decoded), true
 }

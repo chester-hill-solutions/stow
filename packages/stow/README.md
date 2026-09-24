@@ -23,6 +23,7 @@ const bucket = await Stow.start({
   dataDir: ".dev-bucket",
   buckets: ["uploads"],
   port: 0,
+  backend: "filesystem",
 });
 
 process.env.S3_ENDPOINT = bucket.endpoint;
@@ -31,6 +32,8 @@ process.env.S3_SECRET_ACCESS_KEY = bucket.secretAccessKey;
 
 await bucket.stop();
 ```
+
+`Stow.start()` owns the child process it launches. Use `backend: "memory"` for an explicitly ephemeral instance. To use an already-running endpoint, call `Stow.connect({ endpoint, accessKeyId, secretAccessKey, region })`; its connection is disconnected by the caller rather than by the managed-process `stop()` method.
 
 CLI equivalent:
 

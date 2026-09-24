@@ -28,7 +28,7 @@ jobs:
           cache: true
 
       - name: Build
-        run: go build ./cmd/stow
+        run: make build
 
       - name: Vet
         run: go vet ./...
@@ -66,6 +66,60 @@ jobs:
 
       - name: Conformance
         run: make test-conformance
+
+  node:
+    name: TypeScript package and shared corpus
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    strategy:
+      fail-fast: false
+      matrix:
+        node: [20, 22, 24]
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: "1.24"
+          cache: true
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node }}
+          cache: npm
+          cache-dependency-path: packages/stow/package-lock.json
+      - name: Build binary
+        run: make build
+      - name: Install package dependencies
+        run: npm ci
+        working-directory: packages/stow
+      - name: Build and test package
+        run: npm test
+        working-directory: packages/stow
+      - name: Check generated output
+        run: git diff --exit-code -- packages/stow/dist
+
+  standards:
+    name: Ratcheted standards
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: "1.24"
+          cache: true
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: packages/stow/package-lock.json
+      - name: Run standards gate
+        run: make standards
 
   lint:
     name: Lint

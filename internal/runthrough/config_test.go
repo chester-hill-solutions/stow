@@ -16,6 +16,7 @@ func TestUpstreamConfigFromEnv_Precedence(t *testing.T) {
 	t.Setenv("S3_ACCESS_KEY_ID", "s3-key")
 	t.Setenv("AWS_ACCESS_KEY_ID", "aws-key")
 	t.Setenv("STOW_SECRET_ACCESS_KEY", "stow-secret")
+	t.Setenv("STOW_SESSION_TOKEN", "stow-session")
 	t.Setenv("S3_SECRET_ACCESS_KEY", "s3-secret")
 	t.Setenv("AWS_SECRET_ACCESS_KEY", "aws-secret")
 	t.Setenv("STOW_REGION", "stow-region")
@@ -35,6 +36,9 @@ func TestUpstreamConfigFromEnv_Precedence(t *testing.T) {
 	}
 	if cfg.SecretKey != "stow-secret" {
 		t.Fatalf("secret key = %q, want stow precedence", cfg.SecretKey)
+	}
+	if cfg.SessionToken != "stow-session" {
+		t.Fatalf("session token = %q, want stow precedence", cfg.SessionToken)
 	}
 	if cfg.Region != "stow-region" {
 		t.Fatalf("region = %q, want stow precedence", cfg.Region)
@@ -144,6 +148,18 @@ func TestConfigFromEnv_Revalidate(t *testing.T) {
 	cfg = runthrough.ConfigFromEnv()
 	if cfg.Revalidate {
 		t.Fatal("expected revalidation disabled via STOW_REVALIDATE=false")
+	}
+}
+
+func TestConfigFromEnvCheckedRejectsUnknownPolicy(t *testing.T) {
+	os.Clearenv()
+	t.Setenv("STOW_POLICY", "proxy")
+	if _, err := runthrough.ConfigFromEnvChecked(); err == nil {
+		t.Fatal("expected proxy policy to be rejected")
+	}
+	t.Setenv("STOW_POLICY", "not-a-policy")
+	if _, err := runthrough.ConfigFromEnvChecked(); err == nil {
+		t.Fatal("expected unknown policy to be rejected")
 	}
 }
 

@@ -9,8 +9,10 @@ import {
 import { createStowS3Client } from "./s3-client.js";
 import type {
   AwsSdkV3ConfigOptions,
+  ConnectOptions,
   ObjectSnapshot,
   PutFixtureOptions,
+  StowConnection,
   StowInstance,
   StowMode,
 } from "./types.js";
@@ -141,6 +143,26 @@ export function createStowInstance(options: StowInstanceOptions): StowInstance {
       client.destroy();
       snapshots.sort((a, b) => a.key.localeCompare(b.key));
       return snapshots;
+    },
+  };
+}
+
+export function createStowConnection(options: ConnectOptions): StowConnection {
+  const region = options.region ?? DEFAULT_REGION;
+  const config = buildAwsSdkV3Config({ ...options, region });
+  const client = createStowS3Client(config);
+  let disconnected = false;
+  return {
+    endpoint: options.endpoint,
+    accessKeyId: options.accessKeyId,
+    secretAccessKey: options.secretAccessKey,
+    region,
+    awsSdkV3Config: () => config,
+    disconnect: () => {
+      if (!disconnected) {
+        disconnected = true;
+        client.destroy();
+      }
     },
   };
 }

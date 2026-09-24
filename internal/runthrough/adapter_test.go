@@ -5,10 +5,12 @@ import (
 	"context"
 	"crypto/md5"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"io"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/chester-hill-solutions/stow/internal/runthrough"
 	"github.com/chester-hill-solutions/stow/internal/storage"
@@ -21,6 +23,7 @@ type mockUpstream struct {
 	getCalls  int
 	putCalls  int
 	delCalls  int
+	putErr    error
 
 	objects map[string]storage.ObjectMeta
 	bodies  map[string][]byte
@@ -67,6 +70,9 @@ func (m *mockUpstream) PutObject(_ context.Context, bucket, key string, body io.
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.putCalls++
+	if m.putErr != nil {
+		return m.putErr
+	}
 	data, err := io.ReadAll(body)
 	if err != nil {
 		return err
@@ -130,7 +136,7 @@ func bytesHasPrefix(s, prefix string) bool {
 func TestAdapter_WriteGuardBlocksUpstreamPut(t *testing.T) {
 	local := storage.NewMemoryStore()
 	ctx := context.Background()
-	_ = local.CreateBucket(ctx, "b")
+	_ = local.CreateBucket(ctx, "bucket")
 
 	up := newMockUpstream()
 	cfg := runthrough.Config{
@@ -140,7 +146,7 @@ func TestAdapter_WriteGuardBlocksUpstreamPut(t *testing.T) {
 	}
 	adapter := runthrough.New(cfg, local, up)
 
-	_, err := adapter.PutObject(ctx, "b", "k", bytes.NewReader([]byte("x")), storage.PutOptions{})
+	_, err := adapter.PutObject(ctx, "bucket", "k", bytes.NewReader([]byte("x")), storage.PutOptions{})
 	if err != runthrough.ErrLiveWritesDisabled {
 		t.Fatalf("PutObject() error = %v, want ErrLiveWritesDisabled", err)
 	}
@@ -152,7 +158,7 @@ func TestAdapter_WriteGuardBlocksUpstreamPut(t *testing.T) {
 func TestAdapter_PutObjectLocalOnlyWithoutLiveWrites(t *testing.T) {
 	local := storage.NewMemoryStore()
 	ctx := context.Background()
-	_ = local.CreateBucket(ctx, "b")
+	_ = local.CreateBucket(ctx, "bucket")
 
 	up := newMockUpstream()
 	cfg := runthrough.Config{
@@ -162,14 +168,14 @@ func TestAdapter_PutObjectLocalOnlyWithoutLiveWrites(t *testing.T) {
 	}
 	adapter := runthrough.New(cfg, local, up)
 
-	_, err := adapter.PutObject(ctx, "b", "k", bytes.NewReader([]byte("hello")), storage.PutOptions{})
+	_, err := adapter.PutObject(ctx, "bucket", "k", bytes.NewReader([]byte("hello")), storage.PutOptions{})
 	if err != nil {
 		t.Fatalf("PutObject() error = %v", err)
 	}
 	if up.putCalls != 0 {
 		t.Fatalf("upstream put calls = %d, want 0", up.putCalls)
 	}
-	rc, meta, err := local.GetObject(ctx, "b", "k")
+	rc, meta, err := local.GetObject(ctx, "bucket", "k")
 	if err != nil {
 		t.Fatalf("local GetObject() error = %v", err)
 	}
@@ -186,7 +192,7 @@ func TestAdapter_PutObjectLocalOnlyWithoutLiveWrites(t *testing.T) {
 func TestAdapter_PutObjectDualWriteWithLiveWrites(t *testing.T) {
 	local := storage.NewMemoryStore()
 	ctx := context.Background()
-	_ = local.CreateBucket(ctx, "b")
+	_ = local.CreateBucket(ctx, "bucket")
 
 	up := newMockUpstream()
 	cfg := runthrough.Config{
@@ -196,14 +202,14 @@ func TestAdapter_PutObjectDualWriteWithLiveWrites(t *testing.T) {
 	}
 	adapter := runthrough.New(cfg, local, up)
 
-	_, err := adapter.PutObject(ctx, "b", "k", bytes.NewReader([]byte("live")), storage.PutOptions{ContentType: "text/plain"})
+	_, err := adapter.PutObject(ctx, "bucket", "k", bytes.NewReader([]byte("live")), storage.PutOptions{ContentType: "text/plain"})
 	if err != nil {
 		t.Fatalf("PutObject() error = %v", err)
 	}
 	if up.putCalls != 1 {
 		t.Fatalf("upstream put calls = %d, want 1", up.putCalls)
 	}
-	rc, _, err := up.GetObject(ctx, "b", "k")
+	rc, _, err := up.GetObject(ctx, "bucket", "k")
 	if err != nil {
 		t.Fatalf("upstream GetObject() error = %v", err)
 	}
@@ -214,13 +220,50 @@ func TestAdapter_PutObjectDualWriteWithLiveWrites(t *testing.T) {
 	}
 }
 
+func TestAdapter_QueuesFailedMirrorWrite(t *testing.T) {
+	ctx := context.Background()
+	local := storage.NewMemoryStore()
+	_ = local.CreateBucket(ctx, "bucket")
+	up := newMockUpstream()
+	up.putErr = errors.New("temporary upstream failure")
+	outbox := runthrough.NewMemoryOutbox()
+	adapter := runthrough.NewWithOutbox(runthrough.Config{
+		Policy:          runthrough.PolicyMirrorWrites,
+		AllowLiveWrites: true,
+		Revalidate:      false,
+	}, local, local, up, outbox)
+
+	_, err := adapter.PutObject(ctx, "bucket", "key", bytes.NewReader([]byte("payload")), storage.PutOptions{})
+	if err == nil {
+		t.Fatal("expected upstream failure")
+	}
+	if _, err := local.HeadObject(ctx, "bucket", "key"); err != nil {
+		t.Fatalf("local object was not committed: %v", err)
+	}
+	if len(outbox.Pending()) != 1 {
+		t.Fatalf("outbox entries = %d, want 1", len(outbox.Pending()))
+	}
+
+	up.putErr = nil
+	// Force the entry due for this deterministic test.
+	entry := outbox.Pending()[0]
+	entry.NextAttempt = time.Time{}
+	_ = outbox.MarkFailure(entry.ID, nil, time.Time{})
+	if err := adapter.RetryPending(ctx); err != nil {
+		t.Fatalf("retry pending: %v", err)
+	}
+	if len(outbox.Pending()) != 0 {
+		t.Fatal("expected successful retry to clear outbox")
+	}
+}
+
 func TestAdapter_ReadThroughCacheMiss(t *testing.T) {
 	local := storage.NewMemoryStore()
 	ctx := context.Background()
-	_ = local.CreateBucket(ctx, "b")
+	_ = local.CreateBucket(ctx, "bucket")
 
 	up := newMockUpstream()
-	_ = up.PutObject(ctx, "b", "k", bytes.NewReader([]byte("upstream-bytes")), storage.PutOptions{})
+	_ = up.PutObject(ctx, "bucket", "k", bytes.NewReader([]byte("upstream-bytes")), storage.PutOptions{})
 
 	cfg := runthrough.Config{
 		Policy:     runthrough.PolicyReadThroughCache,
@@ -228,7 +271,7 @@ func TestAdapter_ReadThroughCacheMiss(t *testing.T) {
 	}
 	adapter := runthrough.New(cfg, local, up)
 
-	rc, meta, err := adapter.GetObject(ctx, "b", "k")
+	rc, meta, err := adapter.GetObject(ctx, "bucket", "k")
 	if err != nil {
 		t.Fatalf("GetObject() error = %v", err)
 	}
@@ -244,20 +287,47 @@ func TestAdapter_ReadThroughCacheMiss(t *testing.T) {
 		t.Fatalf("expected upstream get, got %d", up.getCalls)
 	}
 
-	_, err = local.HeadObject(ctx, "b", "k")
+	_, err = local.HeadObject(ctx, "bucket", "k")
 	if err != nil {
 		t.Fatalf("expected local cache populated, got %v", err)
+	}
+}
+
+func TestAdapter_SeparateCacheDoesNotEvictLocalObjects(t *testing.T) {
+	ctx := context.Background()
+	local := storage.NewMemoryStore()
+	cache := storage.NewMemoryStore()
+	_ = local.CreateBucket(ctx, "bucket")
+	_ = cache.CreateBucket(ctx, "bucket")
+	_, _ = local.PutObject(ctx, "bucket", "local", bytes.NewReader([]byte("local")), storage.PutOptions{})
+	_, _ = cache.PutObject(ctx, "bucket", "cached", bytes.NewReader([]byte("cached")), storage.PutOptions{})
+
+	adapter := runthrough.NewWithCache(runthrough.Config{
+		Policy:                 runthrough.PolicyReadThroughCache,
+		Revalidate:             true,
+		EvictOnUpstreamMissing: true,
+	}, local, cache, newMockUpstream())
+
+	_, _, err := adapter.GetObject(ctx, "bucket", "cached")
+	if err != storage.ErrObjectNotFound {
+		t.Fatalf("cached object error = %v, want not found", err)
+	}
+	if _, err := cache.HeadObject(ctx, "bucket", "cached"); err != storage.ErrObjectNotFound {
+		t.Fatalf("cache object survived upstream miss: %v", err)
+	}
+	if _, err := local.HeadObject(ctx, "bucket", "local"); err != nil {
+		t.Fatalf("local object was evicted: %v", err)
 	}
 }
 
 func TestAdapter_RevalidationSkipsUpstreamWhenDisabled(t *testing.T) {
 	local := storage.NewMemoryStore()
 	ctx := context.Background()
-	_ = local.CreateBucket(ctx, "b")
-	_, _ = local.PutObject(ctx, "b", "k", bytes.NewReader([]byte("local")), storage.PutOptions{})
+	_ = local.CreateBucket(ctx, "bucket")
+	_, _ = local.PutObject(ctx, "bucket", "k", bytes.NewReader([]byte("local")), storage.PutOptions{})
 
 	up := newMockUpstream()
-	_ = up.PutObject(ctx, "b", "k", bytes.NewReader([]byte("newer-upstream")), storage.PutOptions{})
+	_ = up.PutObject(ctx, "bucket", "k", bytes.NewReader([]byte("newer-upstream")), storage.PutOptions{})
 
 	cfg := runthrough.Config{
 		Policy:     runthrough.PolicyReadThroughCache,
@@ -265,7 +335,7 @@ func TestAdapter_RevalidationSkipsUpstreamWhenDisabled(t *testing.T) {
 	}
 	adapter := runthrough.New(cfg, local, up)
 
-	rc, _, err := adapter.GetObject(ctx, "b", "k")
+	rc, _, err := adapter.GetObject(ctx, "bucket", "k")
 	if err != nil {
 		t.Fatalf("GetObject() error = %v", err)
 	}
@@ -314,7 +384,7 @@ func TestAdapter_BucketFilter(t *testing.T) {
 func TestAdapter_ProxyPutPropagatesUpstream(t *testing.T) {
 	local := storage.NewMemoryStore()
 	ctx := context.Background()
-	_ = local.CreateBucket(ctx, "b")
+	_ = local.CreateBucket(ctx, "bucket")
 
 	up := newMockUpstream()
 	cfg := runthrough.Config{
@@ -324,14 +394,14 @@ func TestAdapter_ProxyPutPropagatesUpstream(t *testing.T) {
 	}
 	adapter := runthrough.New(cfg, local, up)
 
-	_, err := adapter.PutObject(ctx, "b", "k", bytes.NewReader([]byte("proxied")), storage.PutOptions{})
+	_, err := adapter.PutObject(ctx, "bucket", "k", bytes.NewReader([]byte("proxied")), storage.PutOptions{})
 	if err != nil {
 		t.Fatalf("PutObject() error = %v", err)
 	}
 	if up.putCalls != 1 {
 		t.Fatalf("upstream put calls = %d, want 1", up.putCalls)
 	}
-	rc, _, err := up.GetObject(ctx, "b", "k")
+	rc, _, err := up.GetObject(ctx, "bucket", "k")
 	if err != nil {
 		t.Fatalf("upstream GetObject() error = %v", err)
 	}

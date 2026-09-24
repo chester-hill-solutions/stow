@@ -10,27 +10,35 @@ A local, S3-compatible HTTP endpoint intended for development and automated test
 
 ### Run-Through Adapter
 
-A routing layer that accepts S3 requests at a local endpoint and forwards them to a live upstream provider using the developer's existing environment credentials.
+A routing layer that accepts S3 requests at a local endpoint and, when configured, reads from or propagates supported mutations to a live upstream provider using the developer's existing environment credentials. Upstream propagation requires the explicit `mirrorWrites` policy or the agreed live-write opt-in.
 
 ### Upstream Configuration
 
-The credentials and endpoint used by the run-through adapter to reach a live S3-compatible provider. Resolved from environment variables with precedence: `STOW_*` > `S3_*` > `AWS_*`.
+The endpoint and credentials used by the run-through adapter to reach a live S3-compatible provider, including an optional session token for short-lived credentials. Resolved from environment variables with precedence: `STOW_*` > `S3_*` > `AWS_*`.
 
 ### Auto-Detect Mode
 
-When no explicit operational mode is configured, stow inspects environment variables for upstream credentials. If present, it starts in run-through mode with `readThroughCache` policy; otherwise it starts local-only.
+When no explicit operational mode is configured, stow inspects environment variables for upstream credentials. If present, it starts in run-through mode with `readThroughCache` policy; otherwise it starts local-only. `STOW_MODE=local` always forces local-only behavior.
 
 ### Read-Through Cache
 
-Local copy of upstream objects populated on cache miss. On cache hit, optionally revalidated against upstream via ETag/Last-Modified before serving.
+Isolated local copy of upstream-derived objects populated on cache miss. On cache hit, it can be revalidated against upstream via ETag/Last-Modified before serving. Transient upstream failures may serve stale cached data; local-only writes are never evicted merely because upstream lacks the key.
+
+### Mirror-Writes Policy
+
+An explicit run-through policy that combines read-through behavior with propagation of supported local mutations to upstream. It emits a startup warning and records failed propagation in a durable per-key outbox.
+
+### Write Outbox
+
+A durable, per-key ordered record of upstream propagation intents. Each entry references an immutable committed local object version, retries transient failures, and supports loopback-only inspection and retry/discard actions.
 
 ### Persisted Backend
 
-Filesystem-backed storage with JSON sidecar metadata (`.stowmeta`) beside each object. Default for local development.
+Filesystem-backed storage using atomic object records and a versioned data format. It is the default backend. The former `.stowmeta` sidecar format is not migrated by 0.2.0.
 
 ### In-Memory Backend
 
-Ephemeral storage backend with no filesystem persistence. Used by unit/conformance tests via `storage.NewMemoryStore()`; not exposed as a `stow serve` flag in v1.
+Ephemeral storage backend with no filesystem persistence. It is explicitly selectable through the backend option and must satisfy the same behavioral storage contract as the filesystem backend.
 
 ### Local Dev Credentials
 

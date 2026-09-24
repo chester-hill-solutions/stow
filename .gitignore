@@ -21,12 +21,16 @@ npm-debug.log*
 yarn-debug.log*
 yarn-error.log*
 .pnpm-debug.log*
-package-lock.json
 
 # Local data
 .stow/
+.cache/
+coverage/
 
 # IDE / OS
 .DS_Store
 .idea/
 .vscode/
+/CLIPBOARD.md
+/.agent/
+/.repl/

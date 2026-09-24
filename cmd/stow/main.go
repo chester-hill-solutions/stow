@@ -42,15 +42,21 @@ func serve(args []string) {
 	fs := flag.NewFlagSet("serve", flag.ExitOnError)
 	port := fs.Int("port", 9000, "HTTP listen port (0 = ephemeral)")
 	dataDir := fs.String("data-dir", ".stow", "Data directory for object storage")
+	backend := fs.String("backend", "filesystem", "Storage backend (filesystem or memory)")
 	accessKey := fs.String("access-key", "", "Access key (generated if omitted)")
 	secretKey := fs.String("secret-key", "", "Secret key (generated if omitted)")
 	host := fs.String("host", "127.0.0.1", "Listen host")
+	baseHost := fs.String("base-host", "", "Host suffix for virtual-hosted-style routing")
+	allowPublicAdmin := fs.Bool("allow-public-admin", false, "Allow unauthenticated admin and metrics routes on non-loopback requests")
 	modeFlag := fs.String("mode", "auto", "Operational mode: local, run-through, or auto (default)")
 	allowLiveWrites := fs.Bool("allow-live-writes", false, "Propagate writes to upstream S3")
 	cacheDir := fs.String("cache-dir", "", "Run-through cache directory (default: <data-dir>/cache)")
 	fs.Parse(args)
 
-	rtCfg := runthrough.ConfigFromEnv()
+	rtCfg, cfgErr := runthrough.ConfigFromEnvChecked()
+	if cfgErr != nil {
+		log.Fatal(cfgErr)
+	}
 	mode := runthrough.DetectMode()
 	switch strings.ToLower(strings.TrimSpace(*modeFlag)) {
 	case "auto", "":
@@ -62,6 +68,9 @@ func serve(args []string) {
 		log.Fatalf("invalid --mode %q (want local, run-through, or auto)", *modeFlag)
 	}
 
+	if *allowPublicAdmin {
+		log.Printf("WARNING: admin and metrics routes are exposed without authentication")
+	}
 	if *allowLiveWrites {
 		rtCfg.AllowLiveWrites = true
 	}
@@ -72,26 +81,66 @@ func serve(args []string) {
 	localDataDir := *dataDir
 	if mode == runthrough.ModeRunThrough {
 		if rtCfg.CacheDir == "" {
-			rtCfg.CacheDir = filepath.Join(*dataDir, "cache")
+			rtCfg.CacheDir = filepath.Join(localDataDir, "cache")
 		}
-		localDataDir = rtCfg.CacheDir
 		if rtCfg.Upstream.Endpoint == "" || rtCfg.Upstream.AccessKey == "" || rtCfg.Upstream.SecretKey == "" {
 			log.Fatal("run-through mode requires upstream credentials (set STOW_*, S3_*, or AWS_* env vars)")
 		}
 	}
 
-	localStore, err := storage.NewFilesystemStore(localDataDir)
+	var localStore storage.Store
+	var err error
+	switch *backend {
+	case "filesystem":
+		localStore, err = storage.NewFilesystemStore(localDataDir)
+	case "memory":
+		localStore = storage.NewMemoryStore()
+	default:
+		log.Fatalf("invalid --backend %q (want filesystem or memory)", *backend)
+	}
 	if err != nil {
 		log.Fatalf("open store: %v", err)
 	}
 
 	var store storage.Store = localStore
+	var adapter *runthrough.Adapter
 	if mode == runthrough.ModeRunThrough {
+		var cacheStore storage.Store
+		if *backend == "filesystem" {
+			cacheStore, err = storage.NewFilesystemStore(rtCfg.CacheDir)
+		} else {
+			cacheStore = storage.NewMemoryStore()
+		}
+		if err != nil {
+			log.Fatalf("open cache store: %v", err)
+		}
 		upstreamClient, err := runthrough.NewS3Client(rtCfg.Upstream)
 		if err != nil {
 			log.Fatalf("upstream client: %v", err)
 		}
-		store = runthrough.New(rtCfg, localStore, upstreamClient)
+		outbox, err := runthrough.NewFileOutbox(filepath.Join(rtCfg.CacheDir, "outbox.json"))
+		if err != nil {
+			log.Fatalf("open outbox: %v", err)
+		}
+		adapter = runthrough.NewWithOutbox(rtCfg, localStore, cacheStore, upstreamClient, outbox)
+		store = adapter
+	}
+
+	retryCtx, retryCancel := context.WithCancel(context.Background())
+	defer retryCancel()
+	if adapter != nil {
+		go func() {
+			ticker := time.NewTicker(time.Second)
+			defer ticker.Stop()
+			for {
+				select {
+				case <-retryCtx.Done():
+					return
+				case <-ticker.C:
+					_ = adapter.RetryPending(retryCtx)
+				}
+			}
+		}()
 	}
 
 	creds := auth.Credentials{}
@@ -115,19 +164,21 @@ func serve(args []string) {
 	upstreamHost := ""
 	if mode == runthrough.ModeRunThrough {
 		cachePolicy = string(rtCfg.Policy)
-		upstreamHost = strings.TrimSpace(rtCfg.Upstream.Endpoint)
+		upstreamHost = runthrough.RedactEndpoint(rtCfg.Upstream.Endpoint)
 	}
 	srv, err := s3api.New(s3api.Config{
-		Store:        store,
-		Auth:         s3api.SigV4Auth(verifier, creds),
-		Host:         *host,
-		Port:         *port,
-		DataDir:      localDataDir,
-		Region:       auth.DefaultRegion,
-		Mode:         string(mode),
-		CachePolicy:  cachePolicy,
-		WritePolicy:  writePolicy,
-		UpstreamHost: upstreamHost,
+		Store:            store,
+		Auth:             s3api.SigV4Auth(verifier, creds),
+		Host:             *host,
+		BaseHost:         strings.TrimSpace(*baseHost),
+		Port:             *port,
+		DataDir:          localDataDir,
+		Region:           auth.DefaultRegion,
+		Mode:             string(mode),
+		CachePolicy:      cachePolicy,
+		WritePolicy:      writePolicy,
+		UpstreamHost:     upstreamHost,
+		AllowPublicAdmin: *allowPublicAdmin,
 	})
 	if err != nil {
 		log.Fatalf("create server: %v", err)
@@ -159,6 +210,7 @@ func serve(args []string) {
 	select {
 	case sig := <-sigCh:
 		fmt.Printf("\nshutting down (%s)...\n", sig)
+		retryCancel()
 		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer cancel()
 		if err := srv.Shutdown(ctx); err != nil {

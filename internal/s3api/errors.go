@@ -61,6 +61,8 @@ func mapStorageError(err error, resource string) s3Error {
 	switch {
 	case errors.Is(err, storage.ErrBucketNotFound):
 		return s3Error{Code: "NoSuchBucket", Message: "The specified bucket does not exist", Resource: resource, StatusCode: http.StatusNotFound}
+	case errors.Is(err, storage.ErrInvalidBucketName):
+		return s3Error{Code: "InvalidBucketName", Message: "The specified bucket name is not valid", Resource: resource, StatusCode: http.StatusBadRequest}
 	case errors.Is(err, storage.ErrObjectNotFound):
 		return s3Error{Code: "NoSuchKey", Message: "The specified key does not exist", Resource: resource, StatusCode: http.StatusNotFound}
 	case errors.Is(err, storage.ErrBucketNotEmpty):

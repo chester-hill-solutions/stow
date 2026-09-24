@@ -32,6 +32,11 @@ export function upstreamFromEnv(): UpstreamConfig | null {
     "S3_SECRET_ACCESS_KEY",
     "AWS_SECRET_ACCESS_KEY",
   ]);
+  const sessionToken = envFirst([
+    "STOW_SESSION_TOKEN",
+    "S3_SESSION_TOKEN",
+    "AWS_SESSION_TOKEN",
+  ]);
 
   if (!endpoint || !accessKey || !secretKey) {
     return null;
@@ -41,6 +46,7 @@ export function upstreamFromEnv(): UpstreamConfig | null {
     endpoint,
     accessKey,
     secretKey,
+    sessionToken,
     region: envFirst([
       "STOW_REGION",
       "S3_REGION",

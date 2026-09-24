@@ -35,11 +35,16 @@ func (s *Server) handleUploadPart(ctx context.Context, w http.ResponseWriter, r 
 	}
 	uploadID := q.Get("uploadId")
 
+	if err := verifyContentMD5(r); err != nil {
+		writeError(w, r, s3Error{Code: "InvalidArgument", Message: err.Error(), Resource: resourcePath(bucket, key), StatusCode: http.StatusBadRequest})
+		return
+	}
 	part, err := s.store.UploadPart(ctx, uploadID, partNum, r.Body)
 	if err != nil {
 		writeError(w, r, mapStorageError(err, resourcePath(bucket, key)))
 		return
 	}
+	w.Header().Set("ETag", part.ETag)
 	writeXML(w, r, http.StatusOK, uploadPartResult{ETag: part.ETag})
 }
 
@@ -98,6 +103,47 @@ func (s *Server) handleAbortMultipartUpload(ctx context.Context, w http.Response
 	w.Header().Set("x-amz-request-id", requestIDFromContext(ctx))
 	setCORS(w, r)
 	w.WriteHeader(http.StatusNoContent)
+}
+
+func (s *Server) handleListMultipartUploads(ctx context.Context, w http.ResponseWriter, r *http.Request, bucket string, q url.Values) {
+	maxUploads := 1000
+	if raw := q.Get("max-uploads"); raw != "" {
+		if value, err := strconv.Atoi(raw); err == nil && value > 0 {
+			maxUploads = value
+		}
+	}
+	result, err := s.store.ListMultipartUploads(ctx, bucket, storage.MultipartListOptions{
+		Prefix:         q.Get("prefix"),
+		Delimiter:      q.Get("delimiter"),
+		KeyMarker:      q.Get("key-marker"),
+		UploadIDMarker: q.Get("upload-id-marker"),
+		MaxUploads:     maxUploads,
+	})
+	if err != nil {
+		writeError(w, r, mapStorageError(err, "/"+bucket))
+		return
+	}
+	uploads := make([]multipartUploadXML, 0, len(result.Uploads))
+	for _, upload := range result.Uploads {
+		uploads = append(uploads, multipartUploadXML{
+			Key:       upload.Key,
+			UploadID:  upload.UploadID,
+			Initiated: formatTime(upload.Initiated),
+		})
+	}
+	writeXML(w, r, http.StatusOK, listMultipartUploadsResult{
+		Xmlns:              xmlNS,
+		Bucket:             bucket,
+		KeyMarker:          result.KeyMarker,
+		UploadIDMarker:     result.UploadIDMarker,
+		NextKeyMarker:      result.NextKeyMarker,
+		NextUploadIDMarker: result.NextUploadIDMarker,
+		Prefix:             result.Prefix,
+		Delimiter:          result.Delimiter,
+		MaxUploads:         result.MaxUploads,
+		IsTruncated:        result.IsTruncated,
+		Uploads:            uploads,
+	})
 }
 
 func (s *Server) handleListParts(ctx context.Context, w http.ResponseWriter, r *http.Request, bucket, key, uploadID string) {

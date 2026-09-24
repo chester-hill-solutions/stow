@@ -98,6 +98,25 @@ export function createStowInstance(options) {
         },
     };
 }
+export function createStowConnection(options) {
+    const region = options.region ?? DEFAULT_REGION;
+    const config = buildAwsSdkV3Config({ ...options, region });
+    const client = createStowS3Client(config);
+    let disconnected = false;
+    return {
+        endpoint: options.endpoint,
+        accessKeyId: options.accessKeyId,
+        secretAccessKey: options.secretAccessKey,
+        region,
+        awsSdkV3Config: () => config,
+        disconnect: () => {
+            if (!disconnected) {
+                disconnected = true;
+                client.destroy();
+            }
+        },
+    };
+}
 export async function verifyObjectReadable(instance, bucket, key) {
     const client = createStowS3Client(instance.awsSdkV3Config());
     const response = await client.send(new GetObjectCommand({ Bucket: bucket, Key: key }));

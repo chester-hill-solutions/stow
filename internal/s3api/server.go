@@ -17,6 +17,7 @@ type Config struct {
 	Auth        AuthFunc
 	Host        string // listen host, default 127.0.0.1
 	Port        int    // 0 = ephemeral
+	BaseHost    string // host suffix for virtual-hosted-style routing
 	DataDir     string
 	CORSOrigins []string
 	Region      string
@@ -28,6 +29,8 @@ type Config struct {
 	WritePolicy string
 	// UpstreamHost is a redacted upstream endpoint host for status (no secrets).
 	UpstreamHost string
+	// AllowPublicAdmin explicitly permits admin and metrics routes on non-loopback requests.
+	AllowPublicAdmin bool
 }
 
 // Server is the S3-compatible HTTP server.
@@ -42,10 +45,13 @@ type Server struct {
 	startTime  time.Time
 }
 
-// New creates a Server from config. Auth defaults to DevBypass if nil.
+// New creates a Server from config. Authentication must be explicit.
 func New(cfg Config) (*Server, error) {
 	if cfg.Store == nil {
 		return nil, fmt.Errorf("s3api: Store is required")
+	}
+	if cfg.Auth == nil {
+		return nil, fmt.Errorf("s3api: Auth is required")
 	}
 	if cfg.Host == "" {
 		cfg.Host = "127.0.0.1"
@@ -53,15 +59,16 @@ func New(cfg Config) (*Server, error) {
 	if cfg.Region == "" {
 		cfg.Region = "us-east-1"
 	}
-	authFn := cfg.Auth
-	if authFn == nil {
-		authFn = DevBypass
+	baseHost := cfg.BaseHost
+	if baseHost == "" {
+		baseHost = hostWithoutPort(cfg.Host)
 	}
+	authFn := cfg.Auth
 	return &Server{
 		config:    cfg,
 		store:     cfg.Store,
 		auth:      authFn,
-		baseHost:  cfg.Host,
+		baseHost:  baseHost,
 		startTime: time.Now(),
 	}, nil
 }
@@ -75,11 +82,11 @@ func (s *Server) ListenAndServe() error {
 	}
 	s.listener = ln
 	s.listenAddr = ln.Addr().String()
-	// Update baseHost for virtual-hosted routing with actual bound port
-	if host, port, err := net.SplitHostPort(s.listenAddr); err == nil {
-		s.baseHost = host
-		if s.config.Port == 0 {
-			_ = port
+	// Use an explicitly configured base host for virtual-hosted routing. Otherwise
+	// derive the suffix from the actual bound address.
+	if s.config.BaseHost == "" {
+		if host, _, err := net.SplitHostPort(s.listenAddr); err == nil {
+			s.baseHost = host
 		}
 	}
 	s.httpServer = &http.Server{Handler: s}
@@ -94,9 +101,14 @@ func (s *Server) Addr() string {
 // Shutdown gracefully stops the server.
 func (s *Server) Shutdown(ctx context.Context) error {
 	if s.httpServer == nil {
-		return nil
+		return s.store.Close()
 	}
-	return s.httpServer.Shutdown(ctx)
+	shutdownErr := s.httpServer.Shutdown(ctx)
+	closeErr := s.store.Close()
+	if shutdownErr != nil {
+		return shutdownErr
+	}
+	return closeErr
 }
 
 // ServeHTTP implements http.Handler.
@@ -113,6 +125,11 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if isAdminPath(r.URL.Path) {
+		if !s.config.AllowPublicAdmin && !isLoopbackRequest(r) {
+			http.NotFound(rw, r)
+			s.logRequest(r, rw.status, time.Since(start))
+			return
+		}
 		s.handleAdmin(rw, r)
 		s.logRequest(r, rw.status, time.Since(start))
 		return
@@ -166,6 +183,19 @@ func (r *statusRecorder) Write(b []byte) (int, error) {
 
 func (s *Server) logRequest(r *http.Request, status int, dur time.Duration) {
 	log.Printf("%s %s %d %v", r.Method, r.URL.Path, status, dur)
+}
+
+func isLoopbackRequest(r *http.Request) bool {
+	remote := r.RemoteAddr
+	if remote == "" {
+		return true
+	}
+	host, _, err := net.SplitHostPort(remote)
+	if err != nil {
+		host = remote
+	}
+	ip := net.ParseIP(host)
+	return ip != nil && ip.IsLoopback()
 }
 
 // Handler returns an http.Handler for httptest.

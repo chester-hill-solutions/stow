@@ -42,7 +42,7 @@ func NewS3Client(cfg UpstreamConfig) (*S3Client, error) {
 		config.WithCredentialsProvider(credentials.NewStaticCredentialsProvider(
 			cfg.AccessKey,
 			cfg.SecretKey,
-			"",
+			cfg.SessionToken,
 		)),
 	)
 	if err != nil {

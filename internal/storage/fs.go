@@ -3,6 +3,7 @@ package storage
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"os"
 	"path/filepath"
@@ -23,8 +24,10 @@ type objectSidecar struct {
 // FilesystemStore persists object bytes on disk with atomic writes.
 // Object metadata is stored alongside each object as a JSON sidecar (.stowmeta).
 type FilesystemStore struct {
-	dataDir string
-	mu      sync.RWMutex
+	dataDir   string
+	lockPath  string
+	mu        sync.RWMutex
+	closeOnce sync.Once
 }
 
 // NewFilesystemStore creates a filesystem-backed store rooted at dataDir.
@@ -35,7 +38,16 @@ func NewFilesystemStore(dataDir string) (*FilesystemStore, error) {
 	if err := os.MkdirAll(filepath.Join(dataDir, ".multipart"), 0o755); err != nil {
 		return nil, err
 	}
-	return &FilesystemStore{dataDir: dataDir}, nil
+	lockPath := filepath.Join(dataDir, ".stow.lock")
+	lock, err := os.OpenFile(lockPath, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
+	if err != nil {
+		return nil, fmt.Errorf("acquire store lock: %w", err)
+	}
+	if err := lock.Close(); err != nil {
+		_ = os.Remove(lockPath)
+		return nil, err
+	}
+	return &FilesystemStore{dataDir: dataDir, lockPath: lockPath}, nil
 }
 
 func (s *FilesystemStore) bucketDir(bucket string) string {
@@ -312,6 +324,16 @@ func readBucketCreated(dir string) (time.Time, error) {
 		return time.Time{}, err
 	}
 	return payload.CreatedAt.UTC(), nil
+}
+
+func (s *FilesystemStore) Close() error {
+	var err error
+	s.closeOnce.Do(func() {
+		if s.lockPath != "" {
+			err = os.Remove(s.lockPath)
+		}
+	})
+	return err
 }
 
 func bucketHasObjects(root string) (bool, error) {

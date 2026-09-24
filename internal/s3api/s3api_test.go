@@ -28,6 +28,17 @@ func newTestServer(t *testing.T) *httptest.Server {
 	return httptest.NewServer(srv.Handler())
 }
 
+func TestNewRequiresAuthentication(t *testing.T) {
+	_, err := s3api.New(s3api.Config{
+		Store: storage.NewMemoryStore(),
+		Host:  "127.0.0.1",
+		Port:  0,
+	})
+	if err == nil {
+		t.Fatal("expected server creation to reject missing authentication")
+	}
+}
+
 func TestPutGetRoundtrip(t *testing.T) {
 	ts := newTestServer(t)
 	defer ts.Close()
@@ -74,6 +85,32 @@ func TestPutGetRoundtrip(t *testing.T) {
 	got, _ := io.ReadAll(resp.Body)
 	if string(got) != "hello world" {
 		t.Fatalf("body = %q", string(got))
+	}
+}
+
+func TestUnsupportedMarkersDoNotFallThrough(t *testing.T) {
+	ts := newTestServer(t)
+	defer ts.Close()
+
+	req, _ := http.NewRequest(http.MethodPut, ts.URL+"/mybucket?versioning", strings.NewReader(""))
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("versioning request: %v", err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusNotImplemented {
+		t.Fatalf("versioning status = %d, want 501", resp.StatusCode)
+	}
+
+	req, _ = http.NewRequest(http.MethodPut, ts.URL+"/mybucket/object", strings.NewReader("body"))
+	req.Header.Set("X-Amz-Server-Side-Encryption", "aws:kms")
+	resp, err = http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("encryption request: %v", err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Fatalf("encryption status = %d, want 400", resp.StatusCode)
 	}
 }
 

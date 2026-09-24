@@ -2,6 +2,7 @@ package storage_test
 
 import (
 	"context"
+	"encoding/hex"
 	"io"
 	"os"
 	"path/filepath"
@@ -10,6 +11,25 @@ import (
 
 	"github.com/chester-hill-solutions/stow/internal/storage"
 )
+
+func TestFilesystemStoreSingleOwnerLock(t *testing.T) {
+	dir := t.TempDir()
+	first, err := storage.NewFilesystemStore(dir)
+	if err != nil {
+		t.Fatalf("first store: %v", err)
+	}
+	if _, err := storage.NewFilesystemStore(dir); err == nil {
+		t.Fatal("expected second store to fail while lock is held")
+	}
+	if err := first.Close(); err != nil {
+		t.Fatalf("close first store: %v", err)
+	}
+	second, err := storage.NewFilesystemStore(dir)
+	if err != nil {
+		t.Fatalf("second store after close: %v", err)
+	}
+	_ = second.Close()
+}
 
 func TestFilesystemStoreObjectLifecycle(t *testing.T) {
 	ctx := context.Background()
@@ -30,7 +50,7 @@ func TestFilesystemStoreObjectLifecycle(t *testing.T) {
 		t.Fatalf("put object: %v", err)
 	}
 
-	objPath := filepath.Join(dir, "buckets", "photos", "objects", "a", "b.txt")
+	objPath := filepath.Join(dir, "buckets", "photos", "objects", hex.EncodeToString([]byte("a/b.txt")))
 	if _, err := os.Stat(objPath); err != nil {
 		t.Fatalf("object file missing: %v", err)
 	}
@@ -64,6 +84,38 @@ func TestFilesystemStoreObjectLifecycle(t *testing.T) {
 	}
 	if _, err := os.Stat(objPath); !os.IsNotExist(err) {
 		t.Fatalf("object still exists after delete")
+	}
+}
+
+func TestFilesystemStoreOpaqueKeys(t *testing.T) {
+	ctx := context.Background()
+	dir := t.TempDir()
+	store, err := storage.NewFilesystemStore(dir)
+	if err != nil {
+		t.Fatalf("new store: %v", err)
+	}
+	if err := store.CreateBucket(ctx, "opaque"); err != nil {
+		t.Fatalf("create bucket: %v", err)
+	}
+
+	keys := []string{"..", "a/../b", "a//b", "/leading"}
+	for _, key := range keys {
+		if _, err := store.PutObject(ctx, "opaque", key, strings.NewReader(key), storage.PutOptions{}); err != nil {
+			t.Fatalf("put %q: %v", key, err)
+		}
+		rc, _, err := store.GetObject(ctx, "opaque", key)
+		if err != nil {
+			t.Fatalf("get %q: %v", key, err)
+		}
+		_ = rc.Close()
+	}
+
+	list, err := store.ListObjectsV2(ctx, "opaque", storage.ListOptions{})
+	if err != nil {
+		t.Fatalf("list: %v", err)
+	}
+	if len(list.Objects) != len(keys) {
+		t.Fatalf("listed %d keys, want %d: %+v", len(list.Objects), len(keys), list.Objects)
 	}
 }
 
@@ -117,10 +169,10 @@ func TestFilesystemStoreDeleteBucketNotEmpty(t *testing.T) {
 	ctx := context.Background()
 	dir := t.TempDir()
 	store, _ := storage.NewFilesystemStore(dir)
-	_ = store.CreateBucket(ctx, "b")
-	_, _ = store.PutObject(ctx, "b", "k", strings.NewReader("x"), storage.PutOptions{})
+	_ = store.CreateBucket(ctx, "bucket")
+	_, _ = store.PutObject(ctx, "bucket", "k", strings.NewReader("x"), storage.PutOptions{})
 
-	if err := store.DeleteBucket(ctx, "b"); err != storage.ErrBucketNotEmpty {
+	if err := store.DeleteBucket(ctx, "bucket"); err != storage.ErrBucketNotEmpty {
 		t.Fatalf("delete bucket = %v, want ErrBucketNotEmpty", err)
 	}
 }

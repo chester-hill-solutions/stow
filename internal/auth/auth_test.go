@@ -168,6 +168,20 @@ func TestAuthenticateExpiredPresignedURL(t *testing.T) {
 	assertAuthCode(t, err, "AccessDenied")
 }
 
+func TestAuthenticateRejectsOversizedPresignedExpiry(t *testing.T) {
+	creds := auth.Credentials{
+		AccessKeyID:     "AKIAEXAMPLE",
+		SecretAccessKey: "SECRETKEYEXAMPLESECRETKEYEXAMPLE12",
+	}
+	now := time.Now().UTC().Truncate(time.Second)
+	reqURL := signPresignedURL(t, http.MethodGet, "http://127.0.0.1:9000/demo/object.txt", creds, "us-east-1", now, 604801, nil)
+	req := httptestRequest(t, http.MethodGet, reqURL, nil)
+	req.Header.Set("Host", "127.0.0.1:9000")
+
+	err := auth.Authenticate(req, creds)
+	assertAuthCode(t, err, "AccessDenied")
+}
+
 func TestAuthenticateRequestTimeTooSkewed(t *testing.T) {
 	creds := auth.Credentials{
 		AccessKeyID:     "AKIAEXAMPLE",

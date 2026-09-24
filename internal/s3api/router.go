@@ -17,7 +17,7 @@ func parseRoute(r *http.Request, baseHost string) (routeInfo, s3Error) {
 	host := hostWithoutPort(r.Host)
 	info := routeInfo{host: host}
 
-	path := r.URL.Path
+	path := r.URL.EscapedPath()
 	if path == "" {
 		path = "/"
 	}
@@ -28,10 +28,14 @@ func parseRoute(r *http.Request, baseHost string) (routeInfo, s3Error) {
 		if bucket == "" || strings.Contains(bucket, ".") {
 			return info, s3Error{Code: "InvalidBucketName", Message: "Invalid bucket name", StatusCode: http.StatusBadRequest}
 		}
-		info.bucket = bucket
-		info.key = strings.TrimPrefix(path, "/")
-		if info.key != "" {
-			key, err := url.PathUnescape(info.key)
+		decodedBucket, err := url.PathUnescape(bucket)
+		if err != nil || strings.Contains(decodedBucket, "/") {
+			return info, s3Error{Code: "InvalidBucketName", Message: "Invalid bucket name", StatusCode: http.StatusBadRequest}
+		}
+		info.bucket = decodedBucket
+		keyPart := strings.TrimPrefix(path, "/")
+		if keyPart != "" {
+			key, err := url.PathUnescape(keyPart)
 			if err != nil {
 				return info, s3Error{Code: "InvalidArgument", Message: "Invalid key", StatusCode: http.StatusBadRequest}
 			}
@@ -46,7 +50,11 @@ func parseRoute(r *http.Request, baseHost string) (routeInfo, s3Error) {
 		return info, s3Error{}
 	}
 	parts := strings.SplitN(trimmed, "/", 2)
-	info.bucket = parts[0]
+	bucket, err := url.PathUnescape(parts[0])
+	if err != nil || strings.Contains(bucket, "/") {
+		return info, s3Error{Code: "InvalidBucketName", Message: "Invalid bucket name", StatusCode: http.StatusBadRequest}
+	}
+	info.bucket = bucket
 	if len(parts) == 2 {
 		key, err := url.PathUnescape(parts[1])
 		if err != nil {

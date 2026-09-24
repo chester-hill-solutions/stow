@@ -104,6 +104,15 @@ export async function startStow(options = {}) {
     }
     const binary = resolveStowBinary();
     const args = ["serve", "--port", String(port), "--data-dir", dataDir, "--host", host];
+    if (options.baseHost) {
+        args.push("--base-host", options.baseHost);
+    }
+    if (options.allowPublicAdmin) {
+        args.push("--allow-public-admin");
+    }
+    if (options.backend) {
+        args.push("--backend", options.backend);
+    }
     if (options.mode) {
         args.push("--mode", options.mode);
     }

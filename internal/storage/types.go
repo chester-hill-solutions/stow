@@ -54,6 +54,26 @@ type MultipartUpload struct {
 	Initiated time.Time
 }
 
+type MultipartListOptions struct {
+	Prefix         string
+	Delimiter      string
+	KeyMarker      string
+	UploadIDMarker string
+	MaxUploads     int
+}
+
+type MultipartListResult struct {
+	Uploads            []MultipartUpload
+	Prefix             string
+	Delimiter          string
+	KeyMarker          string
+	UploadIDMarker     string
+	NextKeyMarker      string
+	NextUploadIDMarker string
+	MaxUploads         int
+	IsTruncated        bool
+}
+
 // PartInfo describes a single uploaded part.
 type PartInfo struct {
 	PartNumber   int

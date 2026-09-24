@@ -1,5 +1,5 @@
 import { accessSync, constants, existsSync } from "node:fs";
-import { dirname, join, resolve } from "node:path";
+import { delimiter, dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 const PACKAGE_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 function isExecutable(path) {
@@ -10,6 +10,26 @@ function isExecutable(path) {
     catch {
         return false;
     }
+}
+function findOnPath(name) {
+    const extensions = process.platform === "win32"
+        ? (process.env.PATHEXT ?? ".EXE;.CMD;.BAT").split(";")
+        : [""];
+    for (const directory of (process.env.PATH ?? "").split(delimiter)) {
+        if (!directory) {
+            continue;
+        }
+        for (const extension of extensions) {
+            const candidate = join(directory, `${name}${extension.toLowerCase()}`);
+            if (isExecutable(candidate)) {
+                return candidate;
+            }
+            if (process.platform !== "win32") {
+                break;
+            }
+        }
+    }
+    return undefined;
 }
 function findMonorepoBinary() {
     let dir = PACKAGE_ROOT;
@@ -50,6 +70,6 @@ export function stowBinaryAvailable() {
     if (bin !== "stow") {
         return isExecutable(bin);
     }
-    return false;
+    return findOnPath("stow") !== undefined;
 }
 //# sourceMappingURL=bin.js.map

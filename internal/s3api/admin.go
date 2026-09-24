@@ -4,9 +4,12 @@ import (
 	"context"
 	"encoding/json"
 	"net/http"
+	"net/url"
+	"strings"
 	"time"
 
 	"github.com/chester-hill-solutions/stow/internal/storage"
+	"github.com/chester-hill-solutions/stow/internal/version"
 )
 
 func (s *Server) handleAdmin(w http.ResponseWriter, r *http.Request) {
@@ -72,7 +75,7 @@ func (s *Server) writeStatus(w http.ResponseWriter, r *http.Request) {
 		"cache_policy": cachePolicy,
 		"write_policy": writePolicy,
 		"uptime_sec":   int(time.Since(s.startTime).Seconds()),
-		"version":      "0.1.0",
+		"version":      version.Version,
 	}
 	if s.config.UpstreamHost != "" {
 		payload["upstream"] = s.config.UpstreamHost
@@ -118,6 +121,14 @@ func (s *Server) writeInspect(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) dispatch(ctx context.Context, w http.ResponseWriter, r *http.Request, route routeInfo) {
 	q := r.URL.Query()
+	if code, message, ok := unsupportedSemanticMarker(r, q); ok {
+		status := http.StatusNotImplemented
+		if code == "InvalidArgument" {
+			status = http.StatusBadRequest
+		}
+		writeError(w, r, s3Error{Code: code, Message: message, Resource: resourcePath(route.bucket, route.key), StatusCode: status})
+		return
+	}
 
 	if route.bucket == "" {
 		if r.Method == http.MethodGet && r.URL.Path == "/" {
@@ -146,7 +157,7 @@ func (s *Server) dispatch(ctx context.Context, w http.ResponseWriter, r *http.Re
 				return
 			}
 			if q.Has("uploads") {
-				writeError(w, r, s3Error{Code: "NotImplemented", Message: "Not implemented", StatusCode: http.StatusNotImplemented})
+				s.handleListMultipartUploads(ctx, w, r, route.bucket, q)
 				return
 			}
 			writeError(w, r, s3Error{Code: "InvalidRequest", Message: "Invalid request", StatusCode: http.StatusBadRequest})
@@ -200,4 +211,24 @@ func (s *Server) dispatch(ctx context.Context, w http.ResponseWriter, r *http.Re
 	default:
 		writeError(w, r, s3Error{Code: "MethodNotAllowed", Message: "Method not allowed", StatusCode: http.StatusMethodNotAllowed})
 	}
+}
+
+func unsupportedSemanticMarker(r *http.Request, q url.Values) (code, message string, ok bool) {
+	for _, marker := range []string{
+		"versioning", "acl", "policy", "lifecycle", "replication", "notification",
+		"tagging", "website", "logging", "accelerate", "requestPayment", "encryption",
+		"object-lock", "inventory", "metrics", "analytics", "intelligent-tiering", "select",
+	} {
+		if q.Has(marker) {
+			return "NotImplemented", "operation is not implemented", true
+		}
+	}
+	if q.Has("versionId") {
+		return "InvalidArgument", "versionId is not supported", true
+	}
+	if strings.EqualFold(r.Header.Get("X-Amz-Server-Side-Encryption"), "aws:kms") ||
+		strings.EqualFold(r.Header.Get("X-Amz-Server-Side-Encryption"), "aws:kms:dsse") {
+		return "InvalidArgument", "KMS encryption is not supported", true
+	}
+	return "", "", false
 }

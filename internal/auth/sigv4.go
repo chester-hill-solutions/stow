@@ -107,10 +107,9 @@ func parsePresignedQuery(query url.Values) (signedRequest, error) {
 
 	expiresRaw := queryValue(query, "X-Amz-Expires")
 	expires, err := strconv.Atoi(expiresRaw)
-	if err != nil || expires <= 0 {
+	if err != nil || expires <= 0 || expires > 604800 {
 		return signedRequest{}, authError("AccessDenied", "invalid X-Amz-Expires")
 	}
-
 	signedHeaders := parseSignedHeaders(queryValue(query, "X-Amz-SignedHeaders"))
 	if len(signedHeaders) == 0 {
 		return signedRequest{}, authError("AccessDenied", "missing X-Amz-SignedHeaders")
@@ -232,6 +231,9 @@ func verifySignedRequest(r *http.Request, creds Credentials, region string, maxS
 	}
 
 	if sr.presigned {
+		if r.Method != http.MethodGet && r.Method != http.MethodPut && r.Method != http.MethodHead {
+			return authError("AccessDenied", "unsupported presigned method")
+		}
 		expiry := requestTime.Add(time.Duration(sr.expires) * time.Second)
 		if now.After(expiry) {
 			return authError("AccessDenied", "request has expired")

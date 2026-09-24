@@ -1,9 +1,11 @@
 import type { S3ClientConfig } from "@aws-sdk/client-s3";
-import { buildAwsSdkV3Config } from "./instance.js";
+import { buildAwsSdkV3Config, createStowConnection } from "./instance.js";
 import { startStow } from "./start.js";
 import type {
   AwsSdkV3ConfigOptions,
+  ConnectOptions,
   StartOptions,
+  StowConnection,
   StowInstance,
   UpstreamConfig,
 } from "./types.js";
@@ -11,9 +13,11 @@ import { upstreamFromEnv } from "./upstream.js";
 
 export type {
   AwsSdkV3ConfigOptions,
+  ConnectOptions,
   ObjectSnapshot,
   PutFixtureOptions,
   StartOptions,
+  StowConnection,
   StowInstance,
   StowMode,
   UpstreamConfig,
@@ -26,6 +30,10 @@ export { upstreamFromEnv } from "./upstream.js";
 export const Stow = {
   start(options?: StartOptions): Promise<StowInstance> {
     return startStow(options);
+  },
+
+  connect(options: ConnectOptions): StowConnection {
+    return createStowConnection(options);
   },
 
   awsSdkV3Config(

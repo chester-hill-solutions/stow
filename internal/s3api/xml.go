@@ -27,19 +27,19 @@ type bucketEntry struct {
 }
 
 type listBucketResult struct {
-	XMLName               xml.Name         `xml:"ListBucketResult"`
-	Xmlns                 string           `xml:"xmlns,attr"`
-	Name                  string           `xml:"Name"`
-	Prefix                string           `xml:"Prefix"`
-	KeyCount              int              `xml:"KeyCount"`
-	MaxKeys               int              `xml:"MaxKeys"`
-	IsTruncated           bool             `xml:"IsTruncated"`
-	Contents              []objectEntry    `xml:"Contents"`
-	CommonPrefixes        []commonPrefix   `xml:"CommonPrefixes"`
-	ContinuationToken     string           `xml:"ContinuationToken,omitempty"`
-	NextContinuationToken string           `xml:"NextContinuationToken,omitempty"`
-	Delimiter             string           `xml:"Delimiter,omitempty"`
-	EncodingType          string           `xml:"EncodingType,omitempty"`
+	XMLName               xml.Name       `xml:"ListBucketResult"`
+	Xmlns                 string         `xml:"xmlns,attr"`
+	Name                  string         `xml:"Name"`
+	Prefix                string         `xml:"Prefix"`
+	KeyCount              int            `xml:"KeyCount"`
+	MaxKeys               int            `xml:"MaxKeys"`
+	IsTruncated           bool           `xml:"IsTruncated"`
+	Contents              []objectEntry  `xml:"Contents"`
+	CommonPrefixes        []commonPrefix `xml:"CommonPrefixes"`
+	ContinuationToken     string         `xml:"ContinuationToken,omitempty"`
+	NextContinuationToken string         `xml:"NextContinuationToken,omitempty"`
+	Delimiter             string         `xml:"Delimiter,omitempty"`
+	EncodingType          string         `xml:"EncodingType,omitempty"`
 }
 
 type objectEntry struct {
@@ -89,11 +89,11 @@ type initiateMultipartUploadResult struct {
 }
 
 type completeMultipartUploadResult struct {
-	XMLName xml.Name `xml:"CompleteMultipartUploadResult"`
-	Bucket  string   `xml:"Bucket"`
-	Key     string   `xml:"Key"`
-	ETag    string   `xml:"ETag"`
-	Location string  `xml:"Location"`
+	XMLName  xml.Name `xml:"CompleteMultipartUploadResult"`
+	Bucket   string   `xml:"Bucket"`
+	Key      string   `xml:"Key"`
+	ETag     string   `xml:"ETag"`
+	Location string   `xml:"Location"`
 }
 
 type listPartsResult struct {
@@ -115,8 +115,29 @@ type partEntry struct {
 	Size         int64  `xml:"Size"`
 }
 
+type listMultipartUploadsResult struct {
+	XMLName            xml.Name             `xml:"ListMultipartUploadsResult"`
+	Xmlns              string               `xml:"xmlns,attr"`
+	Bucket             string               `xml:"Bucket"`
+	KeyMarker          string               `xml:"KeyMarker,omitempty"`
+	UploadIDMarker     string               `xml:"UploadIdMarker,omitempty"`
+	NextKeyMarker      string               `xml:"NextKeyMarker,omitempty"`
+	NextUploadIDMarker string               `xml:"NextUploadIdMarker,omitempty"`
+	Prefix             string               `xml:"Prefix"`
+	Delimiter          string               `xml:"Delimiter,omitempty"`
+	MaxUploads         int                  `xml:"MaxUploads"`
+	IsTruncated        bool                 `xml:"IsTruncated"`
+	Uploads            []multipartUploadXML `xml:"Upload"`
+}
+
+type multipartUploadXML struct {
+	Key       string `xml:"Key"`
+	UploadID  string `xml:"UploadId"`
+	Initiated string `xml:"Initiated"`
+}
+
 type uploadPartResult struct {
-	XMLName xml.Name `xml:"Part"`
+	XMLName xml.Name `xml:"UploadPartResult"`
 	ETag    string   `xml:"ETag"`
 }
 
@@ -131,8 +152,8 @@ type deleteObjectItem struct {
 }
 
 type completeMultipartUploadRequest struct {
-	XMLName xml.Name              `xml:"CompleteMultipartUpload"`
-	Parts   []completePartEntry   `xml:"Part"`
+	XMLName xml.Name            `xml:"CompleteMultipartUpload"`
+	Parts   []completePartEntry `xml:"Part"`
 }
 
 type completePartEntry struct {
@@ -142,8 +163,8 @@ type completePartEntry struct {
 
 func newListBucketsResult(items []bucketEntry) listBucketsResult {
 	return listBucketsResult{
-		Xmlns: xmlNS,
-		Owner: owner{ID: "stow", DisplayName: "stow"},
+		Xmlns:   xmlNS,
+		Owner:   owner{ID: "stow", DisplayName: "stow"},
 		Buckets: buckets{Items: items},
 	}
 }

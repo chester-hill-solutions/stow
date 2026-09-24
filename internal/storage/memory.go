@@ -325,15 +325,20 @@ func (s *MemoryStore) CompleteMultipartUpload(_ context.Context, uploadID string
 
 	sort.Slice(parts, func(i, j int) bool { return parts[i].PartNumber < parts[j].PartNumber })
 	var combined []byte
+	partETags := make([]string, 0, len(parts))
 	for _, p := range parts {
 		part, ok := mp.parts[p.PartNumber]
 		if !ok {
 			return nil, ErrInvalidPart
 		}
+		if p.ETag == "" || !etagEqual(p.ETag, part.info.ETag) {
+			return nil, ErrInvalidPart
+		}
+		partETags = append(partETags, part.info.ETag)
 		combined = append(combined, part.data...)
 	}
 
-	etag := etagForBytes(combined)
+	etag := compositeETag(partETags)
 	now := time.Now().UTC()
 	meta := ObjectMeta{
 		Bucket:       mp.upload.Bucket,
@@ -378,6 +383,25 @@ func (s *MemoryStore) ListParts(_ context.Context, uploadID string) ([]PartInfo,
 		out = append(out, mp.parts[n].info)
 	}
 	return out, nil
+}
+
+func (s *MemoryStore) Close() error {
+	return nil
+}
+
+func (s *MemoryStore) ListMultipartUploads(_ context.Context, bucket string, opts MultipartListOptions) (*MultipartListResult, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	b, ok := s.buckets[bucket]
+	if !ok {
+		return nil, ErrBucketNotFound
+	}
+	uploads := make([]MultipartUpload, 0, len(b.multipart))
+	for _, upload := range b.multipart {
+		uploads = append(uploads, upload.upload)
+	}
+	return PaginateMultipartUploads(uploads, opts), nil
 }
 
 func (s *MemoryStore) findMultipart(uploadID string) (*memMultipart, *memBucket, bool) {

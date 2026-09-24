@@ -7,8 +7,33 @@ on:
 
 permissions:
   contents: write
+  id-token: write
 
 jobs:
+  test:
+    name: Verify release
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: "1.24"
+          cache: true
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: packages/stow/package-lock.json
+      - name: Verify build and standards
+        run: |
+          make build
+          make standards
+      - name: Verify generated output
+        run: git diff --exit-code -- packages/stow/dist
+
   build:
     name: Build (${{ matrix.os }}/${{ matrix.arch }})
     runs-on: ubuntu-latest
@@ -53,7 +78,7 @@ jobs:
 
   release:
     name: Release
-    needs: build
+    needs: [build, test]
     runs-on: ubuntu-latest
     if: startsWith(github.ref, 'refs/tags/v')
     steps:
@@ -63,6 +88,22 @@ jobs:
           path: dist
           merge-multiple: true
 
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          registry-url: https://registry.npmjs.org
+          cache: npm
+          cache-dependency-path: packages/stow/package-lock.json
+      - name: Verify package metadata
+        working-directory: packages/stow
+        run: |
+          test "$(node -p "require('./package.json').version")" = "${GITHUB_REF_NAME#v}"
+          npm ci
+          npm test
+      - name: Publish npm package
+        working-directory: packages/stow
+        run: npm publish --access public --provenance
       - name: Checksums
         run: |
           cd dist
@@ -76,7 +117,7 @@ jobs:
             dist/stow-*.tar.gz
             dist/SHA256SUMS.txt
           body: |
-            ## stow v0.1.0
+            ## stow ${{ github.ref_name }}
 
             Docker-free, S3-compatible bucket service for development and tests. PGLite-inspired: install a package, start an endpoint, point the AWS SDK at it.
 
@@ -101,4 +142,4 @@ jobs:
 
             Checksums for all artifacts are in `SHA256SUMS.txt`.
 
-            Note: this release workflow builds and packages only; tests (`make test`) are not required for the publish.
+            The Go, TypeScript, shared corpus, and live-provider gates must pass before this tag is published.

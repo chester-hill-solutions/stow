@@ -1,0 +1,38 @@
+name: Live conformance
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "17 3 * * 1"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: live-conformance-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  upstream:
+    name: Run-through providers
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: "1.24"
+          cache: true
+      - name: Build
+        run: make build
+      - name: Run live conformance
+        env:
+          STOW_CONFORMANCE_UPSTREAM: "1"
+          STOW_ENDPOINT: ${{ secrets.STOW_LIVE_ENDPOINT }}
+          STOW_ACCESS_KEY_ID: ${{ secrets.STOW_LIVE_ACCESS_KEY_ID }}
+          STOW_SECRET_ACCESS_KEY: ${{ secrets.STOW_LIVE_SECRET_ACCESS_KEY }}
+          STOW_SESSION_TOKEN: ${{ secrets.STOW_LIVE_SESSION_TOKEN }}
+          STOW_LIVE_BUCKET_PREFIX: ${{ vars.STOW_LIVE_BUCKET_PREFIX }}
+        run: make test-conformance

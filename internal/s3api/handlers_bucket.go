@@ -3,11 +3,13 @@ package s3api
 import (
 	"context"
 	"encoding/xml"
+	"errors"
 	"io"
 	"net/http"
 	"net/url"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/chester-hill-solutions/stow/internal/storage"
 )
@@ -88,16 +90,26 @@ func (s *Server) handleListObjectsV2(ctx context.Context, w http.ResponseWriter,
 	}
 
 	encodeURL := encodingType == "url"
+	respPrefix := prefix
+	respDelimiter := delimiter
+	respContinuation := result.ContinuationToken
+	respNextContinuation := result.NextContinuationToken
+	if encodeURL {
+		respPrefix = urlEncodeKey(respPrefix)
+		respDelimiter = urlEncodeKey(respDelimiter)
+		respContinuation = urlEncodeKey(respContinuation)
+		respNextContinuation = urlEncodeKey(respNextContinuation)
+	}
 	resp := listBucketResult{
 		Xmlns:                 xmlNS,
 		Name:                  bucket,
-		Prefix:                prefix,
+		Prefix:                respPrefix,
 		KeyCount:              result.KeyCount,
 		MaxKeys:               maxKeys,
 		IsTruncated:           result.IsTruncated,
-		ContinuationToken:     result.ContinuationToken,
-		NextContinuationToken: result.NextContinuationToken,
-		Delimiter:             delimiter,
+		ContinuationToken:     respContinuation,
+		NextContinuationToken: respNextContinuation,
+		Delimiter:             respDelimiter,
 	}
 	if encodeURL {
 		resp.EncodingType = "url"
@@ -118,6 +130,19 @@ func (s *Server) handleListObjectsV2(ctx context.Context, w http.ResponseWriter,
 }
 
 func (s *Server) handlePutObject(ctx context.Context, w http.ResponseWriter, r *http.Request, bucket, key string) {
+	if err := enforceContentLength(r); err != nil {
+		writeError(w, r, s3Error{Code: "InvalidArgument", Message: err.Error(), Resource: resourcePath(bucket, key), StatusCode: http.StatusBadRequest})
+		return
+	}
+	if err := verifyContentMD5(r); err != nil {
+		writeError(w, r, s3Error{Code: "InvalidArgument", Message: err.Error(), Resource: resourcePath(bucket, key), StatusCode: http.StatusBadRequest})
+		return
+	}
+	if err := s.checkPutPreconditions(ctx, bucket, key, r.Header); err != nil {
+		writeError(w, r, mapStorageError(err, resourcePath(bucket, key)))
+		return
+	}
+
 	cl := r.ContentLength
 	if cl < 0 {
 		writeError(w, r, s3Error{Code: "InvalidArgument", Message: "Content-Length required", Resource: resourcePath(bucket, key), StatusCode: http.StatusBadRequest})
@@ -156,6 +181,10 @@ func (s *Server) handleGetObject(ctx context.Context, w http.ResponseWriter, r *
 		return
 	}
 	defer rc.Close()
+	if err := checkReadPreconditions(r.Header, meta); err != nil {
+		writeError(w, r, mapStorageError(err, resourcePath(bucket, key)))
+		return
+	}
 
 	rangeHdr := r.Header.Get("Range")
 	if rangeHdr != "" {
@@ -173,6 +202,10 @@ func (s *Server) handleGetObject(ctx context.Context, w http.ResponseWriter, r *
 func (s *Server) handleHeadObject(ctx context.Context, w http.ResponseWriter, r *http.Request, bucket, key string) {
 	meta, err := s.store.HeadObject(ctx, bucket, key)
 	if err != nil {
+		writeError(w, r, mapStorageError(err, resourcePath(bucket, key)))
+		return
+	}
+	if err := checkReadPreconditions(r.Header, meta); err != nil {
 		writeError(w, r, mapStorageError(err, resourcePath(bucket, key)))
 		return
 	}
@@ -196,7 +229,7 @@ func (s *Server) handleDeleteObject(ctx context.Context, w http.ResponseWriter, 
 func (s *Server) handleDeleteObjects(ctx context.Context, w http.ResponseWriter, r *http.Request, bucket string) {
 	var req deleteObjectsRequest
 	if err := xml.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeError(w, r, s3Error{Code: "MalformedXML", Message: "Malformed XML", Resource: "/"+bucket, StatusCode: http.StatusBadRequest})
+		writeError(w, r, s3Error{Code: "MalformedXML", Message: "Malformed XML", Resource: "/" + bucket, StatusCode: http.StatusBadRequest})
 		return
 	}
 	keys := make([]string, 0, len(req.Objects))
@@ -233,7 +266,30 @@ func (s *Server) handleCopyObject(ctx context.Context, w http.ResponseWriter, r 
 		return
 	}
 
-	meta, err := s.store.CopyObject(ctx, srcBucket, srcKey, dstBucket, dstKey)
+	var meta *storage.ObjectMeta
+	directive := strings.ToUpper(strings.TrimSpace(r.Header.Get("x-amz-metadata-directive")))
+	switch directive {
+	case "", "COPY":
+		meta, err = s.store.CopyObject(ctx, srcBucket, srcKey, dstBucket, dstKey)
+	case "REPLACE":
+		rc, _, openErr := s.store.GetObject(ctx, srcBucket, srcKey)
+		if openErr != nil {
+			writeError(w, r, mapStorageError(openErr, resourcePath(dstBucket, dstKey)))
+			return
+		}
+		defer rc.Close()
+		contentType := r.Header.Get("Content-Type")
+		if contentType == "" {
+			contentType = "application/octet-stream"
+		}
+		meta, err = s.store.PutObject(ctx, dstBucket, dstKey, rc, storage.PutOptions{
+			ContentType: contentType,
+			Metadata:    extractMetadata(r.Header),
+		})
+	default:
+		writeError(w, r, s3Error{Code: "InvalidArgument", Message: "Invalid metadata directive", Resource: resourcePath(dstBucket, dstKey), StatusCode: http.StatusBadRequest})
+		return
+	}
 	if err != nil {
 		writeError(w, r, mapStorageError(err, resourcePath(dstBucket, dstKey)))
 		return
@@ -281,16 +337,7 @@ func metadataSize(m map[string]string) int {
 }
 
 func validBucketName(name string) bool {
-	if len(name) < 3 || len(name) > 63 {
-		return false
-	}
-	for _, c := range name {
-		if (c >= 'a' && c <= 'z') || (c >= '0' && c <= '9') || c == '-' {
-			continue
-		}
-		return false
-	}
-	return true
+	return storage.ValidBucketName(name)
 }
 
 func parseCopySource(src string) (bucket, key string, err error) {
@@ -308,9 +355,97 @@ type copySourceError struct{ msg string }
 
 func (e *copySourceError) Error() string { return e.msg }
 
-func checkCopyPreconditions(h http.Header, meta *storage.ObjectMeta) error {
-	if match := h.Get("x-amz-copy-source-if-match"); match != "" && match != meta.ETag {
+func (s *Server) checkPutPreconditions(ctx context.Context, bucket, key string, h http.Header) error {
+	ifMatch := h.Get("If-Match")
+	ifNoneMatch := h.Get("If-None-Match")
+	if ifMatch == "" && ifNoneMatch == "" {
+		return nil
+	}
+	meta, err := s.store.HeadObject(ctx, bucket, key)
+	if err != nil {
+		if errors.Is(err, storage.ErrObjectNotFound) {
+			if ifMatch != "" {
+				return storage.ErrPreconditionFailed
+			}
+			return nil
+		}
+		return err
+	}
+	if ifMatch != "" && !etagHeaderMatches(ifMatch, meta.ETag) {
+		return storage.ErrPreconditionFailed
+	}
+	if ifNoneMatch != "" && etagHeaderMatches(ifNoneMatch, meta.ETag) {
 		return storage.ErrPreconditionFailed
 	}
 	return nil
+}
+
+func etagHeaderMatches(header, actual string) bool {
+	for _, candidate := range strings.Split(header, ",") {
+		candidate = strings.TrimSpace(candidate)
+		if candidate == "*" || etagMatches(candidate, actual) {
+			return true
+		}
+	}
+	return false
+}
+
+func checkReadPreconditions(h http.Header, meta *storage.ObjectMeta) error {
+	if match := h.Get("If-Match"); match != "" && !etagHeaderMatches(match, meta.ETag) {
+		return storage.ErrPreconditionFailed
+	}
+	if noneMatch := h.Get("If-None-Match"); noneMatch != "" && etagHeaderMatches(noneMatch, meta.ETag) {
+		return storage.ErrPreconditionFailed
+	}
+	if raw := h.Get("If-Modified-Since"); raw != "" {
+		when, err := time.Parse(http.TimeFormat, raw)
+		if err != nil {
+			return storage.ErrPreconditionFailed
+		}
+		if !meta.LastModified.After(when) {
+			return storage.ErrPreconditionFailed
+		}
+	}
+	if raw := h.Get("If-Unmodified-Since"); raw != "" {
+		when, err := time.Parse(http.TimeFormat, raw)
+		if err != nil {
+			return storage.ErrPreconditionFailed
+		}
+		if meta.LastModified.After(when) {
+			return storage.ErrPreconditionFailed
+		}
+	}
+	return nil
+}
+
+func checkCopyPreconditions(h http.Header, meta *storage.ObjectMeta) error {
+	if match := h.Get("x-amz-copy-source-if-match"); match != "" && !etagMatches(match, meta.ETag) {
+		return storage.ErrPreconditionFailed
+	}
+	if noneMatch := h.Get("x-amz-copy-source-if-none-match"); noneMatch != "" && etagMatches(noneMatch, meta.ETag) {
+		return storage.ErrPreconditionFailed
+	}
+	if raw := h.Get("x-amz-copy-source-if-modified-since"); raw != "" {
+		when, err := time.Parse(http.TimeFormat, raw)
+		if err != nil {
+			return storage.ErrPreconditionFailed
+		}
+		if !meta.LastModified.After(when) {
+			return storage.ErrPreconditionFailed
+		}
+	}
+	if raw := h.Get("x-amz-copy-source-if-unmodified-since"); raw != "" {
+		when, err := time.Parse(http.TimeFormat, raw)
+		if err != nil {
+			return storage.ErrPreconditionFailed
+		}
+		if meta.LastModified.After(when) {
+			return storage.ErrPreconditionFailed
+		}
+	}
+	return nil
+}
+
+func etagMatches(condition, actual string) bool {
+	return strings.Trim(condition, "\"") == strings.Trim(actual, "\"")
 }

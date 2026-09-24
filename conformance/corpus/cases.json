@@ -1,0 +1,24 @@
+{
+  "version": 1,
+  "cases": [
+    {
+      "id": "put-get-roundtrip",
+      "operation": "putGetRoundTrip",
+      "bucket": "contract-roundtrip",
+      "key": "hello.txt",
+      "body": "hello conformance",
+      "contentType": "text/plain",
+      "metadata": {
+        "origin": "test"
+      },
+      "expect": {
+        "status": 200,
+        "body": "hello conformance",
+        "contentType": "text/plain",
+        "metadata": {
+          "origin": "test"
+        }
+      }
+    }
+  ]
+}

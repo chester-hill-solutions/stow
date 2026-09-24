@@ -1,6 +1,6 @@
 {
   "name": "@chs/stow",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "TypeScript client for the stow local S3-compatible dev bucket service",
   "type": "module",
   "main": "./dist/index.js",
@@ -15,9 +15,15 @@
     "dist"
   ],
   "scripts": {
-    "build": "tsc",
-    "test": "npm run build && node --experimental-strip-types --test test/integration.test.ts",
-    "prepublishOnly": "npm run build"
+    "clean": "node -e \"require('node:fs').rmSync('dist', { recursive: true, force: true })\"",
+    "build": "npm run clean && tsc",
+    "test": "npm run build && tsx --test test/integration.test.ts",
+    "prepublishOnly": "npm run build",
+    "lint": "eslint .",
+    "check:lint-ratchet": "node ../../scripts/check-lint-ratchet.mjs",
+    "check:type-escapes": "node ../../scripts/check-type-escapes.mjs",
+    "check:dry": "node ../../scripts/check-dry.mjs",
+    "check:standards": "npm run lint && npm run check:lint-ratchet && npm run check:type-escapes && npm run check:dry"
   },
   "dependencies": {
     "@aws-sdk/client-s3": "^3.750.0",
@@ -25,8 +31,15 @@
     "@smithy/types": "^4.1.0"
   },
   "devDependencies": {
+    "@eslint/js": "^9.39.5",
     "@types/node": "^22.13.10",
-    "typescript": "^5.8.2"
+    "eslint": "^9.39.5",
+    "eslint-plugin-import": "^2.32.0",
+    "globals": "^16.5.0",
+    "jscpd": "^5.0.12",
+    "tsx": "^4.23.15",
+    "typescript": "^5.8.2",
+    "typescript-eslint": "^8.63.0"
   },
   "engines": {
     "node": ">=20"

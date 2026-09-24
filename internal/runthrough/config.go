@@ -1,6 +1,7 @@
 package runthrough
 
 import (
+	"fmt"
 	"os"
 	"strings"
 )
@@ -24,10 +25,11 @@ const (
 
 // UpstreamConfig holds credentials and endpoint for upstream S3-compatible storage.
 type UpstreamConfig struct {
-	Endpoint  string
-	AccessKey string
-	SecretKey string
-	Region    string
+	Endpoint     string
+	AccessKey    string
+	SecretKey    string
+	SessionToken string
+	Region       string
 	// Bucket optionally restricts upstream access to a single bucket name.
 	Bucket string
 }
@@ -63,13 +65,19 @@ func (UpstreamConfig) FromEnv() (UpstreamConfig, bool) {
 		"S3_SECRET_ACCESS_KEY",
 		"AWS_SECRET_ACCESS_KEY",
 	)
+	sessionToken := envFirst(
+		"STOW_SESSION_TOKEN",
+		"S3_SESSION_TOKEN",
+		"AWS_SESSION_TOKEN",
+	)
 	if endpoint == "" || accessKey == "" || secretKey == "" {
 		return UpstreamConfig{}, false
 	}
 	return UpstreamConfig{
-		Endpoint:  endpoint,
-		AccessKey: accessKey,
-		SecretKey: secretKey,
+		Endpoint:     endpoint,
+		AccessKey:    accessKey,
+		SecretKey:    secretKey,
+		SessionToken: sessionToken,
 		Region: envFirst(
 			"STOW_REGION",
 			"S3_REGION",
@@ -118,10 +126,23 @@ func ConfigFromEnv() Config {
 	return cfg
 }
 
-// ParsePolicy maps a string to a known Policy.
+// ConfigFromEnvChecked resolves configuration and reports invalid policy values.
+// Callers that start a server should use this instead of silently accepting an
+// unknown STOW_POLICY value.
+func ConfigFromEnvChecked() (Config, error) {
+	cfg := ConfigFromEnv()
+	if raw := strings.TrimSpace(os.Getenv("STOW_POLICY")); raw != "" {
+		if _, ok := ParsePolicy(raw); !ok {
+			return cfg, fmt.Errorf("invalid STOW_POLICY %q", raw)
+		}
+	}
+	return cfg, nil
+}
+
+// ParsePolicy maps a string to a known public Policy.
 func ParsePolicy(raw string) (Policy, bool) {
 	switch Policy(strings.TrimSpace(raw)) {
-	case PolicyProxy, PolicyReadThroughCache, PolicyMirrorWrites:
+	case PolicyReadThroughCache, PolicyMirrorWrites:
 		return Policy(strings.TrimSpace(raw)), true
 	default:
 		return "", false

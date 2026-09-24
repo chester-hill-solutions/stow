@@ -19,29 +19,30 @@ func (s *FilesystemStore) ListObjectsV2(_ context.Context, bucket string, opts L
 		return nil, ErrBucketNotFound
 	}
 
-	var items []ObjectMeta
 	root := s.objectsDir(bucket)
-	err := filepath.WalkDir(root, func(p string, d os.DirEntry, err error) error {
-		if err != nil {
-			return err
+	entries, err := os.ReadDir(root)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return PaginateObjects(nil, opts), nil
 		}
-		if d.IsDir() {
-			return nil
+		return nil, err
+	}
+	items := make([]ObjectMeta, 0, len(entries))
+	for _, entry := range entries {
+		if entry.IsDir() || strings.HasSuffix(entry.Name(), metaSuffix) {
+			continue
 		}
-		if strings.HasSuffix(d.Name(), metaSuffix) {
-			return nil
+		key, ok := objectKeyFromFilename(entry.Name())
+		if !ok {
+			continue
 		}
-		rel, err := filepath.Rel(root, p)
-		if err != nil {
-			return err
-		}
-		key := filepath.ToSlash(rel)
 		if opts.Prefix != "" && !strings.HasPrefix(key, opts.Prefix) {
-			return nil
+			continue
 		}
-		st, err := d.Info()
+		p := filepath.Join(root, entry.Name())
+		st, err := entry.Info()
 		if err != nil {
-			return err
+			return nil, err
 		}
 		sidecar, _ := readObjectSidecar(p + metaSuffix)
 		items = append(items, ObjectMeta{
@@ -53,10 +54,6 @@ func (s *FilesystemStore) ListObjectsV2(_ context.Context, bucket string, opts L
 			Metadata:     cloneMetadata(sidecar.Metadata),
 			ETag:         sidecar.ETag,
 		})
-		return nil
-	})
-	if err != nil {
-		return nil, err
 	}
 	sort.Slice(items, func(i, j int) bool { return items[i].Key < items[j].Key })
 	return PaginateObjects(items, opts), nil

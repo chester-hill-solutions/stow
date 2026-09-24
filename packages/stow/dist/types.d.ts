@@ -9,9 +9,12 @@ export interface UpstreamConfig {
 }
 export interface StartOptions {
     dataDir?: string;
+    backend?: "filesystem" | "memory";
     buckets?: string[];
     port?: number;
     host?: string;
+    baseHost?: string;
+    allowPublicAdmin?: boolean;
     cleanSlate?: boolean;
     accessKey?: string;
     secretKey?: string;
@@ -19,8 +22,6 @@ export interface StartOptions {
     mode?: StowMode | "auto";
     cacheDir?: string;
     allowLiveWrites?: boolean;
-    /** Reserved: prefer env vars consumed by the Go CLI for run-through. */
-    upstream?: UpstreamConfig;
 }
 export interface AwsSdkV3ConfigOptions {
     endpoint: string;
@@ -28,6 +29,15 @@ export interface AwsSdkV3ConfigOptions {
     secretAccessKey: string;
     region?: string;
     forcePathStyle?: boolean;
+}
+export type ConnectOptions = AwsSdkV3ConfigOptions;
+export interface StowConnection {
+    endpoint: string;
+    accessKeyId: string;
+    secretAccessKey: string;
+    region: string;
+    awsSdkV3Config(): S3ClientConfig;
+    disconnect(): void;
 }
 export interface PutFixtureOptions {
     contentType?: string;

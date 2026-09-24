@@ -5,6 +5,21 @@ import (
 	"time"
 )
 
+func TestValidBucketName(t *testing.T) {
+	valid := []string{"abc", "a-b", "-abc", "abc-", "a_b", "a.b"}
+	invalid := []string{"", "ab", "a/b", "a..b", "ABC", "a b", "a\\b", "a\nb"}
+	for _, name := range valid {
+		if !ValidBucketName(name) {
+			t.Errorf("ValidBucketName(%q) = false, want true", name)
+		}
+	}
+	for _, name := range invalid {
+		if ValidBucketName(name) {
+			t.Errorf("ValidBucketName(%q) = true, want false", name)
+		}
+	}
+}
+
 func TestPaginateObjects_DelimiterAndTruncation(t *testing.T) {
 	now := time.Now().UTC()
 	items := []ObjectMeta{
@@ -18,10 +33,13 @@ func TestPaginateObjects_DelimiterAndTruncation(t *testing.T) {
 	if len(result.CommonPrefixes) != 1 || result.CommonPrefixes[0] != "a/" {
 		t.Fatalf("common prefixes = %v", result.CommonPrefixes)
 	}
-	if len(result.Objects) != 1 || result.Objects[0].Key != "b.txt" {
-		t.Fatalf("objects = %+v", result.Objects)
+	if len(result.Objects) != 0 {
+		t.Fatalf("objects = %+v, want none", result.Objects)
 	}
-	if !result.IsTruncated || result.NextContinuationToken != "c.txt" {
+	if result.KeyCount != 1 {
+		t.Fatalf("key count = %d, want 1", result.KeyCount)
+	}
+	if !result.IsTruncated || result.NextContinuationToken != "b.txt" {
 		t.Fatalf("truncation = truncated=%v token=%q", result.IsTruncated, result.NextContinuationToken)
 	}
 }

@@ -1,0 +1,6 @@
+{
+  "violations": [
+    "packages/stow/src/s3-client.ts:5:50:explicit-any",
+    "packages/stow/src/s3-client.ts:5:55:explicit-any"
+  ]
+}

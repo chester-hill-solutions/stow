@@ -4,6 +4,8 @@ Docker-free, S3-compatible bucket service for development and tests. PGLite-insp
 
 **Scope:** local and run-through caching for apps — not production object storage.
 
+Stow targets the version-pinned AWS SDK v3 and AWS SDK for Go v2 behavior. It preserves local safety boundaries even where SDKs are more permissive than Amazon service documentation.
+
 ## Quick start (CLI)
 
 ```bash
@@ -38,7 +40,8 @@ await stow.stop();
 | Mode | When |
 |------|------|
 | `local` | Default when no upstream credentials; force with `--mode local` or `STOW_MODE=local` |
-| `run-through` | Auto when `STOW_*` / `S3_*` / `AWS_*` endpoint + keys are set; policy `readThroughCache` |
+| `readThroughCache` | Auto when `STOW_*` / `S3_*` / `AWS_*` endpoint + keys are set; local writes remain local |
+| `mirrorWrites` | Explicit read-through plus upstream propagation; emits a loud startup warning |
 
 Live writes to upstream require `--allow-live-writes` / `STOW_ALLOW_LIVE_WRITES=true`.
 
