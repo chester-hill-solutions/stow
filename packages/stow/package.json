@@ -1,6 +1,6 @@
 {
   "name": "@chs/stow",
-  "version": "0.0.0",
+  "version": "0.1.0",
   "description": "TypeScript client for the stow local S3-compatible dev bucket service",
   "type": "module",
   "main": "./dist/index.js",
