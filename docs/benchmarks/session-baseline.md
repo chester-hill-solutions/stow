@@ -113,17 +113,55 @@ Two consequences, both of which redirect phase 2:
 - Removing redundant copies is worth doing for clarity and for the CPU spent
   hashing the body more than once, but it will not move peak RSS. Expect no
   memory number from it, and do not re-run this experiment expecting one.
-- The lever that actually works is not holding the whole body resident, and the
-  cheapest available version of that is GC tuning. Whether `stow` should lower
-  `GOGC` for a session, and at what cost to a long-lived server, is an open
-  decision, not a measurement. Streaming the write path would still remove the
-  live set itself, and remains the only route to a multiplier near 1.
 
-**2. The 64 MiB / 10,000 object default is wrong for an ephemeral agent
-session.** At the measured multiplier, a 64 MiB session budget implies roughly
-300 MB of peak RSS per session. One hundred parallel sessions would need
-around 30 GB, which the plan's "100 parallel default sessions all acquire and
-release successfully" target cannot assume on an ordinary machine.
+### 1b. Removing the two redundant copies on the runtime side does help
+
+The copies that are *simultaneously live* are what peak RSS tracks. Two of them
+were redundant: the store adapter read the body into a second buffer, and the
+runtime then copied it a third time before handing it to a store that copies it
+again anyway, through `ETagForReader`.
+
+Both stores in this package make their own copy of the body, so the runtime's
+copy was doubly redundant and could not introduce aliasing. The adapter now
+takes the bytes from a reader that already holds them, and the runtime hands the
+caller's buffer to the store as it is.
+
+Three sweep runs per build, same machine, same session defaults:
+
+| Build | multiplier samples | median | 4 MiB put p50 |
+|---|---:|---:|---:|
+| before | 4.61, 4.59, 4.53 | 4.59 | 85.5 ms |
+| after | 4.23, 4.22, 4.20 | 4.22 | 84.7 ms |
+
+The distributions do not overlap, and put latency is unchanged, so unlike the
+s3api change this one is free.
+
+**A floor remains at 2x live**, which is why 4.22 rather than the 2.3 the
+arithmetic suggested. The request buffer and the store's own retained copy are
+live at the same moment, and only the store's is unavoidable. Removing
+intermediates shaves the GC headroom on top of a live set it cannot shrink.
+Bringing the live set below 2x means the store adopting a caller's buffer, which
+is a contract change to `storage.Store` rather than a local optimisation.
+
+**The safety of removing the runtime's copy was incidental and is now
+enforced.** It holds only while the runtime cannot hand the store a reader that
+exposes the caller's bytes, which today is true solely because `bytes.Reader` has
+no `Bytes` method. `TestRuntimeNeverExposesCallerBytesToTheStore` pins that, so a
+later optimisation that exposes the bytes fails there instead of letting a store
+silently adopt a buffer the caller may reuse.
+
+**Correction to the GC figures in 1a.** The 4 MiB put latency was 111.7 ms when
+they were taken, so GOGC=20 looked like it cost about 1%. With the two redundant
+copies gone the baseline is 85 ms and the same setting costs about 20%
+(100.7 ms). The copy work was masking the GC cost. GC tuning is a real trade, not
+a free win, and the two levers are independent rather than alternatives:
+
+| Build | GOGC=100 | GOGC=50 | GOGC=20 |
+|---|---:|---:|---:|
+| with the copy fix | 4.19 | 3.27 | 2.96 |
+
+Streaming the write path would remove the live set itself rather than shaving
+headroom, and remains the only route to a multiplier near 1.
 
 **2. The 64 MiB / 10,000 object default is wrong for an ephemeral agent
 session.** At the measured multiplier, a 64 MiB session budget implies roughly

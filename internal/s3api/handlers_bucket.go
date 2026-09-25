@@ -178,7 +178,7 @@ func (s *Server) handlePutObject(ctx context.Context, w http.ResponseWriter, r *
 		}
 	}
 
-	meta, err := s.store.PutObject(ctx, bucket, key, r.Body, storage.PutOptions{
+	meta, err := s.store.PutObject(ctx, bucket, key, newBodyReader(body), storage.PutOptions{
 		ContentType:       contentType,
 		Metadata:          metadata,
 		ChecksumAlgorithm: checksumAlgorithm,

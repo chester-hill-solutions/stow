@@ -202,8 +202,9 @@ func (i *Instance) PutObject(ctx context.Context, bucket, key string, data []byt
 	}
 	target := objectTarget(bucket, key)
 	_, targetReserved := i.reservedTargets[target]
-	copyData := append([]byte(nil), data...)
-	meta, err := i.store.PutObject(ctx, bucket, key, bytes.NewReader(copyData), storage.PutOptions{
+	// Not copied: every store copies the body through ETagForReader, so a copy
+	// here was a redundant allocation. See storage.ByteReader for the ownership rule.
+	meta, err := i.store.PutObject(ctx, bucket, key, bytes.NewReader(data), storage.PutOptions{
 		ContentType:       options.ContentType,
 		Metadata:          storage.CloneMetadata(options.Metadata),
 		ChecksumAlgorithm: options.ChecksumAlgorithm,
@@ -219,7 +220,7 @@ func (i *Instance) PutObject(ctx context.Context, bucket, key string, data []byt
 	} else {
 		i.usage.Objects++
 	}
-	i.usage.Bytes += int64(len(copyData))
+	i.usage.Bytes += int64(len(data))
 	if targetReserved {
 		i.consumeTargetReservation(target)
 	}

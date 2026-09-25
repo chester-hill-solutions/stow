@@ -88,7 +88,12 @@ func (a *StoreAdapter) PutObject(ctx context.Context, bucket, key string, body i
 	if body == nil {
 		body = bytes.NewReader(nil)
 	}
-	data, err := io.ReadAll(body)
+	// A caller that already holds the body in memory, such as the S3 handler
+	// which read it once for the SigV4, Content-Length, Content-MD5 and
+	// checksum checks, hands those bytes over instead of being read again into
+	// a second full-size buffer. The runtime does not retain them; the store
+	// makes its own copy.
+	data, err := storage.BytesOf(body)
 	if err != nil {
 		return nil, err
 	}

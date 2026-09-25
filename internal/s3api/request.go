@@ -24,6 +24,23 @@ type bodyCache struct {
 	read bool
 }
 
+// bodyReader exposes the already-materialised request body to the store, so the
+// bytes this layer read for the SigV4, Content-Length, Content-MD5 and checksum
+// checks are the same bytes the store takes, instead of being read a second time
+// into a full-size buffer on the way down.
+type bodyReader struct {
+	*bytes.Reader
+	data []byte
+}
+
+func newBodyReader(data []byte) bodyReader {
+	return bodyReader{Reader: bytes.NewReader(data), data: data}
+}
+
+// Bytes implements storage.ByteReader. The returned slice is the request's body
+// buffer and must be treated as read-only by the consumer.
+func (b bodyReader) Bytes() []byte { return b.data }
+
 type bodyCacheKey struct{}
 
 // withBodyCache returns a request carrying a fresh body cache.
