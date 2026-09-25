@@ -1,0 +1,52 @@
+[build-system]
+requires = ["hatchling>=1.21"]
+build-backend = "hatchling.build"
+
+[project]
+name = "stow-s3"
+version = "0.2.0"
+description = "Python client for the stow local S3-compatible dev bucket service"
+readme = "README.md"
+requires-python = ">=3.10"
+license = "Apache-2.0"
+authors = [{ name = "Chester Hill Solutions" }]
+keywords = ["s3", "testing", "fixtures", "local", "mock"]
+classifiers = [
+  "Development Status :: 3 - Alpha",
+  "Intended Audience :: Developers",
+  "License :: OSI Approved :: Apache Software License",
+  "Programming Language :: Python :: 3.10",
+  "Programming Language :: Python :: 3.11",
+  "Programming Language :: Python :: 3.12",
+  "Programming Language :: Python :: 3.13",
+  "Topic :: Software Development :: Testing",
+]
+# No runtime dependencies. boto3 is an extra so that a user who wants to build
+# their own client, or use a different S3 library, is not forced to install one.
+dependencies = []
+
+[project.optional-dependencies]
+boto3 = ["boto3>=1.34"]
+
+[project.urls]
+Homepage = "https://github.com/chester-hill-solutions/stow"
+
+# The native binary is shipped inside the wheel, in the package data below, so
+# an install needs no network access, no Go toolchain, and no PATH entry. A
+# wheel is published per platform, and PyPI selects the matching one at install
+# time from its platform tag.
+#
+# The source path is the repository's build output, because the binary is built
+# by the Go toolchain before the wheel. The release pipeline cross-compiles the
+# binary for the target platform and points this at the result.
+[tool.hatch.build.targets.wheel]
+packages = ["src/stow_s3"]
+
+[tool.hatch.build.targets.wheel.force-include]
+"../../bin/stow" = "stow_s3/_bin/stow"
+
+[tool.hatch.build.targets.sdist]
+include = ["src/stow_s3", "tests", "README.md", "pyproject.toml"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

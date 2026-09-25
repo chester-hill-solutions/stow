@@ -24,6 +24,22 @@ yarn-debug.log*
 yarn-error.log*
 .pnpm-debug.log*
 
+# Python
+__pycache__/
+*.py[cod]
+.eggs/
+.venv/
+venv/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+# Scoped to the Python package. A bare dist/ or build/ would be wrong here, since
+# packages/stow/dist is generated but deliberately tracked.
+packages/stow-py/dist/
+packages/stow-py/build/
+packages/stow-py/*.egg-info/
+packages/stow-py/src/*.egg-info/
+
 # Local data
 .stow/
 .cache/

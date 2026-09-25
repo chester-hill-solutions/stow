@@ -24,6 +24,30 @@ const PLATFORM_PACKAGES = [
 
 const optional = packageJson.optionalDependencies ?? {};
 
+// The PyPI distribution ships the same binary, so it must be in step too. A skew
+// here would publish a wheel whose binary is from a different release than the
+// Python code that resolves it, which is the same failure the npm platform
+// packages are checked for above.
+const pythonProject = readFileSync(resolve(root, "packages/stow-py/pyproject.toml"), "utf8");
+const pythonVersion = pythonProject.match(/^version = "([^"]+)"/m)?.[1];
+if (!pythonVersion) {
+  problems.push("packages/stow-py/pyproject.toml has no top-level version");
+} else if (pythonVersion !== goVersion) {
+  problems.push(
+    `version mismatch: internal/version=${goVersion}, packages/stow-py=${pythonVersion}`,
+  );
+}
+
+// The Python package reports its own __version__, and a user comparing it with
+// the binary version needs the two to be the same number.
+const pythonInit = readFileSync(resolve(root, "packages/stow-py/src/stow_s3/__init__.py"), "utf8");
+const pythonInitVersion = pythonInit.match(/^__version__ = "([^"]+)"/m)?.[1];
+if (pythonInitVersion !== pythonVersion) {
+  problems.push(
+    `stow_s3.__version__=${pythonInitVersion ?? "missing"} does not match pyproject version=${pythonVersion}`,
+  );
+}
+
 // Outside a git work tree, such as a source export, there is no index to
 // consult and the tracked-file check below is skipped.
 function inGitWorkTree(cwd) {

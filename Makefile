@@ -1,4 +1,4 @@
-.PHONY: build build-wasm test test-race test-conformance test-node test-wasm test-all lint format-check check-go-quality check-ts-quality check-type-escapes check-dry check-file-size check-coverage check-version standards check-generated benchmark
+.PHONY: build build-wasm test test-race test-conformance test-node test-python test-wasm test-all lint format-check check-go-quality check-ts-quality check-type-escapes check-dry check-file-size check-coverage check-version standards check-generated benchmark
 
 BINARY := bin/stow
 
@@ -24,11 +24,22 @@ test-conformance:
 test-node: build build-wasm
 	cd packages/stow && npm ci && npm test
 
+# The Python client speaks the same ready protocol as the TypeScript one, so its
+# tests run against a binary built from this tree. The venv is created outside
+# the source tree so nothing here is left behind by a test run.
+PYTHON_VENV ?= $(CURDIR)/.cache/venv
+test-python: build
+	python3 -m venv --without-pip $(PYTHON_VENV)
+	$(PYTHON_VENV)/bin/python -c "import pip" 2>/dev/null || curl -sS https://bootstrap.pypa.io/get-pip.py | $(PYTHON_VENV)/bin/python -
+	$(PYTHON_VENV)/bin/pip install --quiet --upgrade pip
+	$(PYTHON_VENV)/bin/pip install --quiet -e "packages/stow-py[boto3]" pytest
+	STOW_BIN=$(CURDIR)/$(BINARY) $(PYTHON_VENV)/bin/python -m pytest packages/stow-py/tests
+
 test-wasm: build-wasm
 	cd packages/stow && npm ci --ignore-scripts && npm run build
 	node --test wasm/runtime.test.mjs
 
-test-all: build test test-race test-conformance test-node test-wasm
+test-all: build test test-race test-conformance test-node test-python test-wasm
 
 lint:
 	go vet ./...
