@@ -33,7 +33,7 @@ test-all: build test test-race test-conformance test-node test-wasm
 lint:
 	go vet ./...
 
-check-generated:
+check-generated: build-wasm
 	cd packages/stow && npm ci --ignore-scripts && npm run build
 	@git diff --quiet HEAD -- packages/stow/dist || (git status --short -- packages/stow/dist; exit 1)
 	@test -z "$$(git ls-files --others --exclude-standard -- packages/stow/dist)" || (git ls-files --others --exclude-standard -- packages/stow/dist; exit 1)
