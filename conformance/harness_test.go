@@ -6,12 +6,15 @@ import (
 	"fmt"
 	"net/http"
 	"os"
+	"sync"
 	"testing"
 	"time"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/credentials"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
+	"github.com/aws/smithy-go/middleware"
+	smithyhttp "github.com/aws/smithy-go/transport/http"
 	"github.com/chester-hill-solutions/stow/internal/auth"
 	"github.com/chester-hill-solutions/stow/internal/s3api"
 	"github.com/chester-hill-solutions/stow/internal/storage"
@@ -27,6 +30,32 @@ type testEnv struct {
 	Client   *s3.Client
 	Presign  *s3.PresignClient
 	Endpoint string
+	Status   *responseStatusCapture
+}
+
+type responseStatusCapture struct {
+	mu     sync.Mutex
+	status int
+}
+
+func (c *responseStatusCapture) capture(stack *middleware.Stack) error {
+	return stack.Deserialize.Add(middleware.DeserializeMiddlewareFunc("conformance-status", func(ctx context.Context, in middleware.DeserializeInput, next middleware.DeserializeHandler) (middleware.DeserializeOutput, middleware.Metadata, error) {
+		out, metadata, err := next.HandleDeserialize(ctx, in)
+		if err == nil {
+			if response, ok := out.RawResponse.(*smithyhttp.Response); ok && response.Response != nil {
+				c.mu.Lock()
+				c.status = response.StatusCode
+				c.mu.Unlock()
+			}
+		}
+		return out, metadata, err
+	}), middleware.After)
+}
+
+func (c *responseStatusCapture) StatusCode() int {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.status
 }
 
 func newTestEnv(t *testing.T) *testEnv {
@@ -76,7 +105,8 @@ func newTestEnv(t *testing.T) *testEnv {
 	}
 
 	endpoint := "http://" + srv.Addr()
-	client := newS3Client(t, endpoint, creds)
+	status := &responseStatusCapture{}
+	client := newS3Client(t, endpoint, creds, status)
 
 	t.Cleanup(func() {
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
@@ -101,10 +131,11 @@ func newTestEnv(t *testing.T) *testEnv {
 		Client:   client,
 		Presign:  s3.NewPresignClient(client),
 		Endpoint: endpoint,
+		Status:   status,
 	}
 }
 
-func newS3Client(t *testing.T, endpoint string, creds auth.Credentials) *s3.Client {
+func newS3Client(t *testing.T, endpoint string, creds auth.Credentials, status *responseStatusCapture) *s3.Client {
 	t.Helper()
 
 	cfg := aws.Config{
@@ -119,6 +150,7 @@ func newS3Client(t *testing.T, endpoint string, creds auth.Credentials) *s3.Clie
 	return s3.NewFromConfig(cfg, func(o *s3.Options) {
 		o.BaseEndpoint = aws.String(endpoint)
 		o.UsePathStyle = true
+		o.APIOptions = append(o.APIOptions, status.capture)
 	})
 }
 

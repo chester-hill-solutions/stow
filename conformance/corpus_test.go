@@ -76,6 +76,9 @@ func TestSharedCorpusRoundTrip(t *testing.T) {
 			if err != nil {
 				t.Fatalf("read body: %v", err)
 			}
+			if status := env.Status.StatusCode(); status != testCase.Expect.Status {
+				t.Fatalf("status = %d, want %d", status, testCase.Expect.Status)
+			}
 			if string(body) != testCase.Expect.Body {
 				t.Fatalf("body = %q, want %q", body, testCase.Expect.Body)
 			}
