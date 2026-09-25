@@ -76,7 +76,7 @@ func mapStorageError(err error, resource string) s3Error {
 	case errors.Is(err, storage.ErrPreconditionFailed):
 		return s3Error{Code: "PreconditionFailed", Message: "At least one of the pre-conditions you specified did not hold", Resource: resource, StatusCode: http.StatusPreconditionFailed}
 	default:
-		return s3Error{Code: "InternalError", Message: err.Error(), Resource: resource, StatusCode: http.StatusInternalServerError}
+		return s3Error{Code: "InternalError", Message: "internal storage error", Resource: resource, StatusCode: http.StatusInternalServerError}
 	}
 }
 

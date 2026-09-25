@@ -76,15 +76,25 @@ func (s *Server) handleAdmin(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
+func writeAdminError(w http.ResponseWriter, status int, message string) {
+	http.Error(w, message, status)
+}
+
 func (s *Server) writeStatus(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
-	buckets, _ := s.store.ListBuckets(ctx)
+	buckets, err := s.store.ListBuckets(ctx)
+	if err != nil {
+		writeAdminError(w, http.StatusInternalServerError, "status is temporarily unavailable")
+		return
+	}
 	objectCount := 0
 	for _, b := range buckets {
 		list, err := s.store.ListObjectsV2(ctx, b.Name, storage.ListOptions{MaxKeys: 10000})
-		if err == nil {
-			objectCount += len(list.Objects)
+		if err != nil {
+			writeAdminError(w, http.StatusInternalServerError, "status is temporarily unavailable")
+			return
 		}
+		objectCount += len(list.Objects)
 	}
 	addr := s.Addr()
 	if addr == "" {
@@ -128,7 +138,11 @@ func (s *Server) writeStatus(w http.ResponseWriter, r *http.Request) {
 func (s *Server) writeInspect(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	bucketFilter := r.URL.Query().Get("bucket")
-	buckets, _ := s.store.ListBuckets(ctx)
+	buckets, err := s.store.ListBuckets(ctx)
+	if err != nil {
+		writeAdminError(w, http.StatusInternalServerError, "inspection is temporarily unavailable")
+		return
+	}
 
 	type bucketSnap struct {
 		Name         string `json:"name"`
@@ -142,14 +156,17 @@ func (s *Server) writeInspect(w http.ResponseWriter, r *http.Request) {
 			continue
 		}
 		list, err := s.store.ListObjectsV2(ctx, b.Name, storage.ListOptions{MaxKeys: 10000})
-		count := 0
-		if err == nil {
-			count = len(list.Objects)
+		if err != nil {
+			writeAdminError(w, http.StatusInternalServerError, "inspection is temporarily unavailable")
+			return
 		}
+		count := len(list.Objects)
 		uploads, uploadErr := s.store.ListMultipartUploads(ctx, b.Name, storage.MultipartListOptions{MaxUploads: 10000})
-		if uploadErr == nil {
-			multipartUploads += len(uploads.Uploads)
+		if uploadErr != nil {
+			writeAdminError(w, http.StatusInternalServerError, "inspection is temporarily unavailable")
+			return
 		}
+		multipartUploads += len(uploads.Uploads)
 		snaps = append(snaps, bucketSnap{
 			Name:         b.Name,
 			ObjectCount:  count,
@@ -187,7 +204,7 @@ func (s *Server) retryOutbox(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err := provider.RetryPending(r.Context()); err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		writeAdminError(w, http.StatusInternalServerError, "outbox retry failed")
 		return
 	}
 	w.Header().Set("Content-Type", "application/json")
@@ -206,7 +223,7 @@ func (s *Server) discardOutbox(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err := provider.DiscardOutboxEntry(id); err != nil {
-		http.Error(w, err.Error(), http.StatusNotFound)
+		writeAdminError(w, http.StatusNotFound, "outbox entry was not found")
 		return
 	}
 	w.Header().Set("Content-Type", "application/json")
@@ -227,12 +244,18 @@ func (s *Server) writeMetrics(w http.ResponseWriter, r *http.Request) {
 		pending, terminal = provider.OutboxStats()
 	}
 	multipartUploads := 0
-	if buckets, err := s.store.ListBuckets(r.Context()); err == nil {
-		for _, bucket := range buckets {
-			if uploads, err := s.store.ListMultipartUploads(r.Context(), bucket.Name, storage.MultipartListOptions{MaxUploads: 10000}); err == nil {
-				multipartUploads += len(uploads.Uploads)
-			}
+	buckets, err := s.store.ListBuckets(r.Context())
+	if err != nil {
+		writeAdminError(w, http.StatusInternalServerError, "metrics are temporarily unavailable")
+		return
+	}
+	for _, bucket := range buckets {
+		uploads, err := s.store.ListMultipartUploads(r.Context(), bucket.Name, storage.MultipartListOptions{MaxUploads: 10000})
+		if err != nil {
+			writeAdminError(w, http.StatusInternalServerError, "metrics are temporarily unavailable")
+			return
 		}
+		multipartUploads += len(uploads.Uploads)
 	}
 
 	w.Header().Set("Content-Type", "text/plain; version=0.0.4; charset=utf-8")

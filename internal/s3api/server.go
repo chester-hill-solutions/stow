@@ -242,7 +242,11 @@ func (r *statusRecorder) Write(b []byte) (int, error) {
 }
 
 func (s *Server) logRequest(r *http.Request, status int, dur time.Duration) {
-	log.Printf("%s %s %d %v", r.Method, r.URL.Path, status, dur)
+	path := r.URL.Path
+	if !isAdminPath(path) {
+		path = "/s3"
+	}
+	log.Printf("%s %s %d %v", r.Method, path, status, dur)
 }
 
 func isLoopbackRequest(r *http.Request) bool {

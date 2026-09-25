@@ -151,6 +151,24 @@ func TestConfigFromEnv_Revalidate(t *testing.T) {
 	}
 }
 
+func TestConfigFromEnv_CacheLimits(t *testing.T) {
+	os.Clearenv()
+	t.Setenv("STOW_CACHE_MAX_BYTES", "4096")
+	t.Setenv("STOW_CACHE_MAX_OBJECTS", "8")
+	cfg := runthrough.ConfigFromEnv()
+	if cfg.Cache.MaxBytes != 4096 || cfg.Cache.MaxObjects != 8 {
+		t.Fatalf("cache limits = %+v", cfg.Cache)
+	}
+}
+
+func TestConfigFromEnvCheckedRejectsInvalidCacheLimit(t *testing.T) {
+	os.Clearenv()
+	t.Setenv("STOW_CACHE_MAX_BYTES", "-1")
+	if _, err := runthrough.ConfigFromEnvChecked(); err == nil {
+		t.Fatal("expected invalid cache limit to be rejected")
+	}
+}
+
 func TestConfigFromEnvPreservesInvalidPolicy(t *testing.T) {
 	os.Clearenv()
 	t.Setenv("STOW_POLICY", "proxy")

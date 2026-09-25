@@ -3,6 +3,7 @@ package runthrough
 import (
 	"fmt"
 	"os"
+	"strconv"
 	"strings"
 )
 
@@ -134,6 +135,7 @@ func ConfigFromEnv() Config {
 		}
 	}
 
+	_ = applyCacheEnv(&cfg)
 	return cfg
 }
 
@@ -142,12 +144,36 @@ func ConfigFromEnv() Config {
 // unknown STOW_POLICY value.
 func ConfigFromEnvChecked() (Config, error) {
 	cfg := ConfigFromEnv()
+	if err := applyCacheEnv(&cfg); err != nil {
+		return cfg, err
+	}
 	if raw := strings.TrimSpace(os.Getenv("STOW_POLICY")); raw != "" {
 		if _, ok := ParsePolicy(raw); !ok {
 			return cfg, fmt.Errorf("invalid STOW_POLICY %q", raw)
 		}
 	}
 	return cfg, nil
+}
+
+func applyCacheEnv(cfg *Config) error {
+	for _, item := range []struct {
+		name  string
+		field *int64
+	}{
+		{name: "STOW_CACHE_MAX_BYTES", field: &cfg.Cache.MaxBytes},
+		{name: "STOW_CACHE_MAX_OBJECTS", field: &cfg.Cache.MaxObjects},
+	} {
+		raw, ok := os.LookupEnv(item.name)
+		if !ok || strings.TrimSpace(raw) == "" {
+			continue
+		}
+		value, err := strconv.ParseInt(strings.TrimSpace(raw), 10, 64)
+		if err != nil || value < 0 {
+			return fmt.Errorf("invalid %s %q: expected a non-negative integer", item.name, raw)
+		}
+		*item.field = value
+	}
+	return nil
 }
 
 // ParsePolicy maps a string to a known public Policy.

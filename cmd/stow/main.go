@@ -49,11 +49,15 @@ func resolveLocalCredentials(accessKey, secretKey string) (string, string) {
 }
 
 func applyCacheLimits(config *runthrough.Config, maxBytes, maxObjects int64) error {
-	if maxBytes < 0 || maxObjects < 0 {
+	if maxBytes < -1 || maxObjects < -1 {
 		return fmt.Errorf("cache limits must not be negative")
 	}
-	config.Cache.MaxBytes = maxBytes
-	config.Cache.MaxObjects = maxObjects
+	if maxBytes >= 0 {
+		config.Cache.MaxBytes = maxBytes
+	}
+	if maxObjects >= 0 {
+		config.Cache.MaxObjects = maxObjects
+	}
 	return nil
 }
 
@@ -70,8 +74,8 @@ func serve(args []string) {
 	modeFlag := fs.String("mode", "auto", "Operational mode: local, run-through, or auto (default)")
 	allowLiveWrites := fs.Bool("allow-live-writes", false, "Propagate writes to upstream S3")
 	cacheDir := fs.String("cache-dir", "", "Run-through cache directory (default: <data-dir>/cache)")
-	cacheMaxBytes := fs.Int64("cache-max-bytes", 0, "Maximum separate cache bytes (0 disables the limit)")
-	cacheMaxObjects := fs.Int64("cache-max-objects", 0, "Maximum separate cache objects (0 disables the limit)")
+	cacheMaxBytes := fs.Int64("cache-max-bytes", -1, "Maximum separate cache bytes (0 disables the limit; -1 uses environment)")
+	cacheMaxObjects := fs.Int64("cache-max-objects", -1, "Maximum separate cache objects (0 disables the limit; -1 uses environment)")
 	fs.Parse(args)
 	*accessKey, *secretKey = resolveLocalCredentials(*accessKey, *secretKey)
 	rtCfg, cfgErr := runthrough.ConfigFromEnvChecked()
