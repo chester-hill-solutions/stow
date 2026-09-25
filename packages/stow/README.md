@@ -78,6 +78,46 @@ for (;;) {
 
 Run `make test-wasm` or `make test-node` to rebuild the packaged asset. Custom hosts may still provide their own synchronous `call(request)` implementation.
 
+### Scoped sessions
+
+`withStow` gives a short-lived execution context a private, disposable S3
+workspace with no lifecycle glue: a local memory backend, a generated bucket and
+credentials, a loopback endpoint, and cleanup on success, failure, or
+cancellation.
+
+```ts
+import { withStow } from "@chs/stow";
+
+const summary = await withStow(async (session) => {
+  await session.s3.send(
+    new PutObjectCommand({ Bucket: session.bucket, Key: "input.json", Body: body }),
+  );
+  const input = await session.s3.send(
+    new GetObjectCommand({ Bucket: session.bucket, Key: "input.json" }),
+  );
+  return summarize(await input.Body.transformToString());
+});
+```
+
+- The native binary is installed automatically as a platform optional package, so
+  a plain `npm install` works with no `PATH` setup. Measured in
+  [`docs/distribution-spike.md`](../../docs/distribution-spike.md).
+- `STOW_*`, `S3_*`, and `AWS_*` are stripped from the child environment, so
+  ambient cloud configuration cannot turn a local session into a run-through one.
+- Defaults are 16 MiB and 1,000 objects, sized from the measured memory profile in
+  [`docs/benchmarks/session-baseline.md`](../../docs/benchmarks/session-baseline.md).
+  Override with `maxBytes` and `maxObjects`.
+- `capabilities()` reports what the server is actually enforcing, parsed from the
+  versioned readiness message. A limit of `0` means the server reported no limit.
+- `handoff()` returns a fresh five-key environment mapping for a child process. It
+  never mutates the parent environment and includes nothing else.
+- `close()` is terminal and idempotent. A failed callback is rethrown even if
+  cleanup also fails, and cleanup removes only a directory the session created.
+
+`openStow` is the same thing without the callback, for manual lifetime control.
+`Stow.start()`, `Stow.connect()`, and `EmbeddedStow` are unchanged and remain the
+advanced process-owned and external-endpoint APIs.
+
 ### Browser persistence profile
 
 The additive [`@chs/stow/browser`](../../docs/browser-persistence.md) entry
