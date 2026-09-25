@@ -1,85 +1,176 @@
 # Stow
 
-Docker-free, S3-compatible bucket service for development and tests. PGLite-inspired: install a package, start an endpoint, point the AWS SDK at it.
+Stow is an S3-compatible object store for local development, tests, and short-lived tools or agents.
 
-**Scope:** local and run-through caching for apps — not production object storage.
+Applications use Stow to create buckets and upload or download files through the S3 APIs they already use. Local mode stores data on the machine or host where Stow runs. Run-through mode can use an upstream S3-compatible service as a cache or write target.
 
-Stow targets the version-pinned AWS SDK v3 and AWS SDK for Go v2 behavior. It preserves local safety boundaries even where SDKs are more permissive than Amazon service documentation.
+A **bucket** is a named container. An **object** is a file stored in a bucket, together with metadata such as its content type, size, and ETag.
 
-## Quick start (CLI)
+## What Stow provides
+
+- An S3 HTTP server for local development and tests.
+- A TypeScript package for Node.js and AWS SDK v3.
+- A Go runtime for in-process, memory-backed storage.
+- A WebAssembly runtime for Node.js and browser integrations.
+- Filesystem persistence for data that must survive a process restart.
+- Read-through caching and explicit upstream write propagation for run-through workflows.
+- SigV4 authentication for the S3 endpoint.
+
+Stow implements the common S3 operations needed by application and test workloads:
+
+- create, inspect, list, and delete buckets;
+- put, get, head, copy, and delete objects;
+- list objects with prefixes and pagination;
+- range reads;
+- conditional writes and reads;
+- MD5, CRC32, CRC32C, SHA-1, and SHA-256 checksums;
+- multipart uploads;
+- presigned requests.
+
+Stow implements a subset of Amazon S3. Versioning, ACLs, bucket policies, lifecycle rules, replication, notifications, tagging, object lock, S3 Select, and KMS-backed encryption are not implemented.
+
+## When to use it
+
+Use Stow when a workload needs S3 behavior without a cloud account or network service:
+
+- local application development;
+- unit and integration tests that need a real S3-shaped API;
+- CI jobs that need disposable object storage;
+- tools and agents that need a private scratch bucket;
+- Go programs that want an in-process object runtime;
+- browser or Node.js integrations that need an embedded runtime;
+- development against an existing upstream S3-compatible service.
+
+## Quick start: CLI server
+
+Build the binary:
 
 ```bash
 make build
+```
+
+Start a filesystem-backed server:
+
+```bash
 ./bin/stow serve --port 0 --data-dir .stow
 ```
 
-Parse the `STOW_READY` line for `endpoint`, `access_key`, and `secret_key`. Create buckets with the AWS SDK (path-style, region `us-east-1`).
+The server prints a machine-readable readiness line:
 
-## Quick start (TypeScript)
+```text
+STOW_READY endpoint=http://127.0.0.1:43127 access_key=... secret_key=... mode=local
+```
+
+Use the printed endpoint and credentials with an S3 client. The server supports path-style requests and uses `us-east-1` as its default region.
+
+For a temporary in-memory server:
 
 ```bash
-make build
-cd packages/stow && npm install && npm run build
+./bin/stow serve --port 0 --backend memory
+```
+
+## Quick start: TypeScript
+
+Install the package and start a managed server:
+
+```bash
+npm install @chs/stow
 ```
 
 ```ts
+import {
+  GetObjectCommand,
+  ListBucketsCommand,
+  PutObjectCommand,
+  S3Client,
+} from "@aws-sdk/client-s3";
 import { Stow } from "@chs/stow";
 
 const stow = await Stow.start({
-  dataDir: ".stow",
+  backend: "memory",
   buckets: ["uploads"],
   port: 0,
 });
 
-const client = new S3Client(stow.awsSdkV3Config());
-await stow.stop();
+try {
+  const s3 = new S3Client(stow.awsSdkV3Config());
 
-// For an endpoint owned by another process:
+  await s3.send(new PutObjectCommand({
+    Bucket: "uploads",
+    Key: "hello.txt",
+    Body: "hello",
+  }));
+
+  const response = await s3.send(new GetObjectCommand({
+    Bucket: "uploads",
+    Key: "hello.txt",
+  }));
+
+  console.log(await response.Body?.transformToString());
+} finally {
+  await stow.stop();
+}
+```
+
+`Stow.start()` starts the `stow` executable, waits until it is ready, creates the requested buckets, and returns an AWS SDK configuration. When the executable is not in the repository's `bin/` directory, place `stow` on `PATH` or set `STOW_BIN`.
+
+Use `Stow.connect()` when an S3 endpoint is already running:
+
+```ts
 const connection = Stow.connect({
   endpoint: "http://127.0.0.1:9000",
   accessKeyId: "access",
   secretAccessKey: "secret",
 });
-connection.client.send(command); // connection owns and destroys this client
-connection.disconnect();
+
+try {
+  await connection.client.send(new ListBucketsCommand({}));
+} finally {
+  connection.disconnect();
+}
 ```
 
 ## Embedded Go runtime
 
-The native `stow serve` path binds its selected local/run-through store to the internal runtime facade before exposing the S3 HTTP adapter. This keeps the public embedded runtime small while making native lifecycle, quota, and reset behavior pass through the same instance boundary. The direct runtime remains an in-process, memory-only profile for Go callers; it does not start an HTTP server or use AWS credentials:
+The public Go package provides an in-process, memory-backed runtime. It does not start an HTTP listener and does not require AWS credentials:
 
 ```go
 package main
 
 import (
   "context"
-  "github.com/chester-hill-solutions/stow/pkg/stow"
+  "log"
+
+  stow "github.com/chester-hill-solutions/stow/pkg/stow"
 )
 
 func main() {
-  runtime, err := stow.Open(stow.Options{MaxBytes: 10 << 20, MaxObjects: 1000})
-  if err != nil { panic(err) }
-  defer runtime.Close()
-  ctx := context.Background()
-  if err := runtime.CreateBucket(ctx, "assets"); err != nil { panic(err) }
-  if _, err := runtime.PutObject(ctx, "assets", "hello.txt", []byte("hello"), stow.PutOptions{}); err != nil { panic(err) }
-}
-```
-
-Object listings return an explicit page. Follow `NextCursor` when `Truncated` is true instead of assuming the default page is complete:
-
-```go
-page, err := runtime.ListObjects(ctx, "assets", stow.ListOptions{Limit: 100})
-for {
-  // use page.Objects
-  if !page.Truncated {
-    break
+  runtime, err := stow.Open(stow.Options{
+    Backend:    stow.BackendMemory,
+    MaxBytes:   10 << 20,
+    MaxObjects: 1000,
+  })
+  if err != nil {
+    log.Fatal(err)
   }
-  page, err = runtime.ListObjects(ctx, "assets", stow.ListOptions{Limit: 100, Cursor: page.NextCursor})
+  defer runtime.Close()
+
+  ctx := context.Background()
+  if err := runtime.CreateBucket(ctx, "assets"); err != nil {
+    log.Fatal(err)
+  }
+
+  if _, err := runtime.PutObject(ctx, "assets", "hello.txt", []byte("hello"), stow.PutOptions{
+    ContentType: "text/plain",
+  }); err != nil {
+    log.Fatal(err)
+  }
 }
 ```
 
-The `js/wasm` bridge exposes the same memory runtime through a versioned JSON/base64 host protocol. The Node package includes the tested WASM asset and loader:
+## Node.js, WebAssembly, and browser profiles
+
+The Node.js WebAssembly profile provides an in-memory object runtime without an HTTP server:
 
 ```ts
 import { EmbeddedStow } from "@chs/stow/embedded";
@@ -87,60 +178,58 @@ import { loadNodeWasmHost } from "@chs/stow/node-wasm";
 
 const host = await loadNodeWasmHost();
 const embedded = EmbeddedStow.open(host);
-// use embedded...
-embedded.close();
-await host.close();
+
+try {
+  embedded.createBucket("assets");
+  embedded.putObject("assets", "hello.txt", new TextEncoder().encode("hello"));
+  const object = embedded.getObject("assets", "hello.txt");
+  console.log(object.data);
+} finally {
+  embedded.close();
+  await host.close();
+}
 ```
 
-```sh
-make test-wasm
+The browser profile requires a compatible embedded host and persistence adapter. It can store snapshots in IndexedDB and restore them when the profile opens again.
+
+## Run-through mode
+
+Local mode keeps all object data in the selected local backend. Run-through mode adds an upstream S3 client and a separate cache.
+
+In run-through mode, local data is authoritative. Reads can fall back to an existing upstream bucket. Upstream configuration comes from `STOW_*`, `S3_*`, or `AWS_*` environment variables, or from the corresponding command-line options.
+
+Live upstream writes require all of the following:
+
+- run-through mode;
+- the filesystem backend;
+- explicit live-write opt-in with `--allow-live-writes` or `STOW_ALLOW_LIVE_WRITES=true`;
+- a durable coordinated outbox.
+
+Stow keeps bucket namespace operations local. It does not create upstream buckets automatically.
+
+## Running on another host
+
+The server can bind to a network interface:
+
+```bash
+./bin/stow serve --host 0.0.0.0 --port 9000
 ```
 
-The native S3 endpoint and the TypeScript `Stow.start()` / `Stow.connect()` contracts remain unchanged.
+Clients on the same network can then connect to the host's port and use S3 operations. Keep the server behind a firewall or private network boundary. Put it behind a TLS-terminating proxy before sending traffic over an untrusted network.
 
-Browser hosts can opt into the additive [`@chs/stow/browser` profile](docs/browser-persistence.md), which commits every embedded mutation durably through IndexedDB and keeps the WASM runtime in memory.
+The S3 routes require the generated or configured credentials. Administrative routes are separate from S3 authentication and must not be exposed publicly. Use the current server for local development and controlled private deployments. It is not a hardened public or multi-tenant storage service.
 
-## Modes and policies
+## Development
 
-| Mode | When |
-|------|------|
-| `local` | Default when no upstream credentials; force with `--mode local` or `STOW_MODE=local` |
-| `run-through` | Auto when `STOW_*` / `S3_*` / `AWS_*` endpoint + keys are set |
-
-| Policy | Behavior |
-|--------|----------|
-| `readThroughCache` | Read upstream on local cache misses; local writes remain local unless live writes are explicitly enabled |
-| `mirrorWrites` | Read-through plus durable upstream propagation; emits a loud startup warning |
-
-Live writes to upstream require `--allow-live-writes` / `STOW_ALLOW_LIVE_WRITES=true`, the filesystem backend, and a durable coordinated outbox. A prepared local-mutation intent is persisted before the local record changes; startup/retry reconciliation commits or discards it using the immutable object version. File-backed workers use expiring per-entry claims and a filesystem lock so separate processes do not concurrently propagate the same key. An entry that was already attempted is checked against upstream before it is replayed, so a crash after an upstream success but before the acknowledgement is normally acknowledged rather than duplicated; the exception is an upstream that cannot be read during recovery or an object another writer has since replaced. `MemoryOutbox` and other uncoordinated outboxes are rejected before a live mutation touches local storage. Every process sharing an outbox file must run the same Stow revision: a file written by a newer schema is rejected at open rather than partially upgraded.
-
-Run-through cache limits can be set with `--cache-max-bytes`, `--cache-max-objects`, and `--cache-ttl`, or with `STOW_CACHE_MAX_BYTES`, `STOW_CACHE_MAX_OBJECTS`, and `STOW_CACHE_TTL`. Cache entries are bounded by LRU and optionally expire after the configured TTL.
-
-See [docs/adr/0001-auto-detect-run-through.md](docs/adr/0001-auto-detect-run-through.md), [docs/adr/0003-embedded-runtime.md](docs/adr/0003-embedded-runtime.md), and [docs/compat-contract.md](docs/compat-contract.md).
-
-## Layout
-
-```
-cmd/stow/           CLI
-internal/s3api/     S3 HTTP + admin routes
-internal/storage/   shared storage contract + memory store
-internal/storage/fs/ filesystem backend (atomic JSON object records on disk)
-internal/auth/      SigV4
-internal/runthrough/ upstream adapter
-pkg/stow/            direct embedded Go runtime
-cmd/stow-wasm/       js/wasm host bridge
-wasm/                Node-hosted WASM tests
-conformance/         AWS SDK Go v2 conformance tests
-packages/stow/      @chs/stow TypeScript wrapper
-```
-
-## Develop
+Run the complete local checks:
 
 ```bash
 make test-all
 make standards
 ```
 
-`make test-node` and `make test-wasm` also rebuild the tested package/WASM artifacts. The release workflow publishes the exact npm tarball produced after these gates.
+The repository contains the Go server, storage backends, runtime packages, WebAssembly bridge, TypeScript package, and shared conformance tests.
 
-License: Apache 2.0
+## License
+
+Apache License 2.0.
