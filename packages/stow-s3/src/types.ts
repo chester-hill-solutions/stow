@@ -18,6 +18,18 @@ export interface StartOptions {
   buckets?: string[];
   port?: number;
   host?: string;
+  /**
+   * Milliseconds allowed for the whole startup: becoming ready and creating the
+   * requested buckets. Defaults to 10 seconds.
+   */
+  timeoutMs?: number;
+  /** Cancels startup. The child is stopped and no session is returned. */
+  signal?: AbortSignal;
+  /**
+   * Region the server should verify signatures against and report in its
+   * readiness message. Defaults to the server's own default.
+   */
+  region?: string;
   baseHost?: string;
   allowPublicAdmin?: boolean;
   /**

@@ -1,5 +1,6 @@
 import { type StowReady } from "./ready.js";
-import type { StartOptions, StowInstance, StowMode } from "./types.js";
+import type { StartOptions, StowInstance } from "./types.js";
+export { parseReadyLine, type ReadyLine } from "./ready-reader.js";
 /**
  * The Go collector target a session's own server runs with.
  *
@@ -8,13 +9,6 @@ import type { StartOptions, StowInstance, StowMode } from "./types.js";
  * value; check-version.mjs fails if the two drift.
  */
 export declare const SESSION_GOGC = "50";
-export interface ReadyLine {
-    endpoint: string;
-    accessKeyId: string;
-    secretAccessKey: string;
-    mode: StowMode;
-}
-export declare function parseReadyLine(line: string): ReadyLine | null;
 export declare function buildChildEnv(options: StartOptions): NodeJS.ProcessEnv;
 export declare function startStow(options?: StartOptions): Promise<StowInstance>;
 export interface StowStartup {

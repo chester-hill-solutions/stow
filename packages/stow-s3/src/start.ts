@@ -1,13 +1,16 @@
 import { spawn, type ChildProcess } from "node:child_process";
-import type { Readable } from "node:stream";
 import { StowBinaryNotFoundError, resolveStowBinary, stowBinaryAvailable } from "./bin.js";
 import { resetOwnedData } from "./ownership.js";
-import { parseReadyMessage, READY_PROTOCOL_VERSION, type StowReady } from "./ready.js";
-import { createStowInstance, DEFAULT_REGION } from "./instance.js";
-import type { StartOptions, StowInstance, StowMode } from "./types.js";
+import { waitForReady, READY_FD } from "./ready-reader.js";
+import { StowProtocolError, type StowReady } from "./ready.js";
+import { createStowInstance } from "./instance.js";
+import type { StartOptions, StowInstance } from "./types.js";
 
-const READY_RE =
-  /^STOW_READY endpoint=(\S+) access_key=(\S+) secret_key=(\S+) mode=(\S+)/;
+// The legacy readiness line lives with the rest of the protocol reader. It is
+// re-exported here because it was part of this module's public surface before
+// the reader was split out, and moving a symbol is not a reason to break an
+// import path.
+export { parseReadyLine, type ReadyLine } from "./ready-reader.js";
 
 /**
  * The Go collector target a session's own server runs with.
@@ -18,200 +21,7 @@ const READY_RE =
  */
 export const SESSION_GOGC = "50";
 
-export interface ReadyLine {
-  endpoint: string;
-  accessKeyId: string;
-  secretAccessKey: string;
-  mode: StowMode;
-}
-
-export function parseReadyLine(line: string): ReadyLine | null {
-  const match = line.trim().match(READY_RE);
-  if (!match) {
-    return null;
-  }
-  const [, endpoint, accessKeyId, secretAccessKey, mode] = match;
-  if (!endpoint || !accessKeyId || !secretAccessKey || !mode) {
-    return null;
-  }
-  return {
-    endpoint,
-    accessKeyId,
-    secretAccessKey,
-    mode: mode === "run-through" ? "run-through" : "local",
-  };
-}
-
-const MAX_DIAGNOSTIC_BYTES = 64 * 1024;
 const STARTUP_TIMEOUT_MS = 10_000;
-
-// Descriptor the server writes the versioned readiness object to. Index 3 is the
-// first entry after stdin, stdout, and stderr.
-const READY_FD = 3;
-
-function toReadyLine(message: StowReady): ReadyLine {
-  return {
-    endpoint: message.endpoint,
-    accessKeyId: message.accessKeyId,
-    secretAccessKey: message.secretAccessKey,
-    mode: message.mode as StowMode,
-  };
-}
-
-/**
- * A best-effort message for a server that only printed the legacy line. Limits
- * are reported as 0, the protocol's "no limit reported" value, so a caller can
- * tell the difference between "unlimited" and "we do not know".
- */
-function legacyMessage(line: ReadyLine): StowReady {
-  return {
-    protocolVersion: READY_PROTOCOL_VERSION,
-    binaryVersion: "unknown",
-    endpoint: line.endpoint,
-    region: DEFAULT_REGION,
-    accessKeyId: line.accessKeyId,
-    secretAccessKey: line.secretAccessKey,
-    mode: line.mode,
-    backend: "unknown",
-    capabilities: {
-      persistent: false,
-      multipart: false,
-      upstream: false,
-      conditionalWrites: false,
-      presignedUrls: false,
-      maxBytes: 0,
-      maxObjects: 0,
-      maxRequestBytes: 0,
-    },
-  };
-}
-
-interface ReadyResult {
-  /** The fields the older instance type needs. */
-  line: ReadyLine;
-  /** The full protocol message, when it came from the versioned channel. */
-  message: StowReady;
-}
-
-async function waitForReady(
-  child: ChildProcess,
-  timeoutMs = 10_000,
-): Promise<ReadyResult> {
-  const descriptor = child.stdio[READY_FD];
-  const readyStream = descriptor && typeof (descriptor as Readable).on === "function"
-    ? (descriptor as Readable)
-    : undefined;
-  return new Promise((resolve, reject) => {
-    let stdoutBuffer = "";
-    let stderrBuffer = "";
-    let readyBuffer = "";
-    let settled = false;
-
-    const timer = setTimeout(() => {
-      if (settled) {
-        return;
-      }
-      settled = true;
-      cleanup();
-      reject(
-        new Error(
-          `Timed out waiting for STOW_READY line.\nstdout:\n${stdoutBuffer}\nstderr:\n${stderrBuffer}`,
-        ),
-      );
-    }, timeoutMs);
-
-    const onError = (error: Error) => {
-      if (settled) {
-        cleanup();
-        return;
-      }
-      settled = true;
-      cleanup();
-      reject(error);
-    };
-
-    const onExit = (code: number | null, signal: NodeJS.Signals | null) => {
-      if (settled) {
-        cleanup();
-        return;
-      }
-      settled = true;
-      cleanup();
-      reject(
-        new Error(
-          `stow exited before STOW_READY (code=${code ?? "null"}, signal=${signal ?? "null"}).\nstdout:\n${stdoutBuffer}\nstderr:\n${stderrBuffer}`,
-        ),
-      );
-    };
-
-    const onReadyData = (chunk: Buffer) => {
-      if (settled) {
-        return;
-      }
-      readyBuffer = (readyBuffer + chunk.toString("utf8")).slice(-MAX_DIAGNOSTIC_BYTES);
-      for (const line of readyBuffer.split(/\r?\n/)) {
-        if (line.trim().length === 0) {
-          continue;
-        }
-        if (settled) {
-          return;
-        }
-        settled = true;
-        cleanup(false);
-        const message = parseReadyMessage(line);
-        resolve({ line: toReadyLine(message), message });
-        return;
-      }
-    };
-
-    const onStdout = (chunk: Buffer) => {
-      if (settled) {
-        return;
-      }
-      stdoutBuffer = (stdoutBuffer + chunk.toString("utf8")).slice(-MAX_DIAGNOSTIC_BYTES);
-      // Fallback for a server that ignores --ready-fd and writes the legacy
-      // line instead. Capabilities are unknown in that case and reported as
-      // such rather than invented.
-      for (const line of stdoutBuffer.split(/\r?\n/)) {
-        const legacy = parseReadyLine(line);
-        if (!legacy) {
-          continue;
-        }
-        if (settled) {
-          return;
-        }
-        settled = true;
-        cleanup(false);
-        resolve({ line: legacy, message: legacyMessage(legacy) });
-        return;
-      }
-    };
-
-    const onStderr = (chunk: Buffer) => {
-      if (settled) {
-        return;
-      }
-      stderrBuffer = (stderrBuffer + chunk.toString("utf8")).slice(-MAX_DIAGNOSTIC_BYTES);
-    };
-
-    const cleanup = (removeOutput = true) => {
-      clearTimeout(timer);
-      if (removeOutput) {
-        child.stdout?.off("data", onStdout);
-        child.stderr?.off("data", onStderr);
-        readyStream?.off("data", onReadyData);
-      }
-      child.off("error", onError);
-      child.off("exit", onExit);
-    };
-
-    child.stdout?.on("data", onStdout);
-    child.stderr?.on("data", onStderr);
-    readyStream?.on("data", onReadyData);
-    child.on("error", onError);
-    child.on("exit", onExit);
-  });
-}
 
 const STOP_GRACE_PERIOD_MS = 5_000;
 const STOP_WAIT_PERIOD_MS = 10_000;
@@ -334,6 +144,9 @@ function buildServeArgs(
   if (options.mode) {
     args.push("--mode", options.mode);
   }
+  if (options.region) {
+    args.push("--region", options.region);
+  }
   if (options.cacheDir) {
     args.push("--cache-dir", options.cacheDir);
   }
@@ -438,8 +251,7 @@ async function resetDataDirIfRequested(options: StartOptions, dataDir: string): 
   }
 }
 
-export async function startStowWithReady(options: StartOptions = {}): Promise<StowStartup> {
-  const dataDir = options.dataDir ?? ".stow";
+function assertUsableStartupLimits(options: StartOptions): void {
   if (
     (options.cacheMaxBytes ?? 0) < 0 ||
     (options.cacheMaxObjects ?? 0) < 0 ||
@@ -447,32 +259,56 @@ export async function startStowWithReady(options: StartOptions = {}): Promise<St
   ) {
     throw new Error("cache limits must not be negative");
   }
+}
+
+// Resolving the binary is separated from spawning it so a missing binary fails
+// with an actionable message instead of a bare ENOENT for the literal "stow".
+function resolveStartableBinary(): string {
+  const binary = resolveStowBinary();
+  if (!stowBinaryAvailable()) {
+    throw new StowBinaryNotFoundError(binary);
+  }
+  return binary;
+}
+
+export async function startStowWithReady(options: StartOptions = {}): Promise<StowStartup> {
+  assertUsableStartupLimits(options);
+  const dataDir = options.dataDir ?? ".stow";
   const port = options.port ?? 0;
   const host = options.host ?? "127.0.0.1";
 
   await resetDataDirIfRequested(options, dataDir);
 
-  const startupDeadline = Date.now() + STARTUP_TIMEOUT_MS;
-  const remainingStartupMs = (): number => Math.max(1, startupDeadline - Date.now());
-  // Fail with an actionable error before spawn turns a missing binary into a
-  // bare ENOENT for the literal string "stow".
-  const binary = resolveStowBinary();
-  if (!stowBinaryAvailable()) {
-    throw new StowBinaryNotFoundError(binary);
+  if (options.signal?.aborted) {
+    throw new StowProtocolError("cancelled", "cancelled before the server was started");
   }
+  const startupDeadline = Date.now() + (options.timeoutMs ?? STARTUP_TIMEOUT_MS);
+  const remainingStartupMs = (): number => Math.max(1, startupDeadline - Date.now());
+  const binary = resolveStartableBinary();
   const child = spawn(binary, buildServeArgs(options, dataDir, port, host), {
     // The fourth entry is the readiness descriptor the server writes to.
     stdio: ["ignore", "pipe", "pipe", "pipe"],
     env: buildChildEnv(options),
   });
 
+  // An abort during startup must not leave a child running. waitForReady owns
+  // the descriptor, but killing the process is the caller's cancellation to
+  // enforce and has to happen whichever stage is in flight.
+  const onAbort = () => {
+    void stopChild(child);
+  };
+  options.signal?.addEventListener("abort", onAbort, { once: true });
+
   try {
-    const ready = await waitForReady(child, remainingStartupMs());
+    const ready = await waitForReady(child, remainingStartupMs(), options.signal);
     const instance = createStowInstance({
       endpoint: ready.line.endpoint,
       accessKeyId: ready.line.accessKeyId,
       secretAccessKey: ready.line.secretAccessKey,
-      region: DEFAULT_REGION,
+      // The server reports its own region. Forcing a constant here discarded
+      // the field the readiness protocol went to the trouble of sending, and
+      // produced signatures for the wrong region against a non-default server.
+      region: ready.message.region,
       mode: ready.line.mode,
       dataDir,
       stopProcess: createStopProcess(child),
@@ -482,5 +318,7 @@ export async function startStowWithReady(options: StartOptions = {}): Promise<St
   } catch (error) {
     await stopChild(child);
     throw error;
+  } finally {
+    options.signal?.removeEventListener("abort", onAbort);
   }
 }

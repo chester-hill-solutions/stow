@@ -32,6 +32,9 @@ type readyDetails struct {
 	limits   nativeStorageLimits
 	creds    auth.Credentials
 	banner   string
+	// region is the region the server actually verifies signatures against, so
+	// a client that honors the reported region signs correctly.
+	region string
 }
 
 // announceStartup prints the human-readable startup output and then publishes
@@ -57,7 +60,7 @@ func announceStartup(readyFd int, details readyDetails) {
 func writeReadyMessage(fd int, details readyDetails) {
 	message := ready.New(ready.Input{
 		Endpoint:      details.endpoint,
-		Region:        auth.DefaultRegion,
+		Region:        details.region,
 		AccessKeyID:   details.creds.AccessKeyID,
 		SecretKey:     details.creds.SecretAccessKey,
 		Mode:          details.mode,
@@ -214,6 +217,7 @@ func serve(args []string) {
 	var corsOrigins corsOriginList
 	flags.Var(&corsOrigins, "cors-origin", "Browser origin permitted to read responses; repeatable. Default permits loopback origins only")
 	modeFlag := flags.String("mode", "auto", "Operational mode: local, run-through, or auto (default)")
+	regionFlag := flags.String("region", auth.DefaultRegion, "Region the server verifies signatures against and reports in the readiness message")
 	allowLiveWrites := flags.Bool("allow-live-writes", false, "Propagate writes to upstream S3")
 	cacheDir := flags.String("cache-dir", "", "Run-through cache directory (default: <data-dir>/cache)")
 	cacheMaxBytes := flags.Int64("cache-max-bytes", -1, "Maximum separate cache bytes (0 disables the limit; -1 uses environment)")
@@ -296,7 +300,11 @@ func serve(args []string) {
 		creds = generated
 	}
 
-	verifier := auth.NewVerifier(auth.DefaultRegion)
+	region := strings.TrimSpace(*regionFlag)
+	if region == "" {
+		region = auth.DefaultRegion
+	}
+	verifier := auth.NewVerifier(region)
 	writePolicy := runthrough.EffectiveWritePolicy(rtCfg)
 	cachePolicy := "none"
 	upstreamHost := ""
@@ -311,7 +319,7 @@ func serve(args []string) {
 		BaseHost:         strings.TrimSpace(*baseHost),
 		Port:             *port,
 		DataDir:          localDataDir,
-		Region:           auth.DefaultRegion,
+		Region:           region,
 		Mode:             string(mode),
 		CachePolicy:      cachePolicy,
 		WritePolicy:      writePolicy,
@@ -350,6 +358,7 @@ func serve(args []string) {
 		limits:   storeLimits,
 		creds:    creds,
 		banner:   runthrough.StartupBanner(rtCfg, mode),
+		region:   region,
 	})
 
 	sigCh := make(chan os.Signal, 1)

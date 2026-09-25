@@ -105,12 +105,33 @@ Still open, in descending order of harm:
    `hex.EncodeToString` filenames and `NAME_MAX` is 255, so a 128-byte key fails
    `ENAMETOOLONG` on every supported filesystem. The Phase 2 exit criterion names
    128-byte keys, and no test anywhere covers a long key.
-7. **The TypeScript client ignores two of its own options.** `timeoutMs` and
-   `signal` are declared on `EphemeralStowOptions` and never forwarded; startup
-   is bounded by a hardcoded 10 s. The ready-descriptor parser also treats a
-   partial record as complete, and a parse failure inside a stream handler
-   rejects nothing, so a truncated record hangs until the timeout. The server's
-   reported region is parsed and then overwritten with `us-east-1`.
+7. **The TypeScript client ignored two of its own options.** `timeoutMs` and
+   `signal` were declared on `EphemeralStowOptions` and never forwarded, so a
+   caller's timeout was replaced by a hardcoded 10 s and an abort did nothing.
+   The ready-descriptor parser treated a partial record as complete, and a parse
+   failure inside a stream handler rejected nothing, so a truncated record hung
+   until the timeout. The server's reported region was parsed and then discarded
+   in favour of a hardcoded `us-east-1` — and because the server had no way to
+   report any other region, the field could not even be observed to be wrong.
+   Cancellation was reported with the error code `internal`, which tells a caller
+   nothing about whether retrying could ever help.
+
+   Closed. Both options are forwarded and honored, an already-aborted signal
+   fails before a process is spawned, a mid-startup abort stops the child, only
+   a newline-terminated record is parsed and a parse error rejects rather than
+   escaping as an uncaught exception, the descriptor's `end` and `error` events
+   are handled, and `cancelled` is a real error code. The server gained
+   `--region`, because honoring a reported region is untestable while the
+   reported region cannot vary.
+
+8. **The `check-generated` gate could not pass off its build machine.**
+   `build-wasm` omitted `-trimpath` while the native build had always used it, so
+   the committed WASM artifact embedded its own source path and never matched a
+   build from a fresh clone. The gate compared a committed file against the same
+   source built at a different path and reported a difference that was not one.
+
+   Closed in 6480755, after confirming that two directories produced two hashes
+   for the same commit and that `-trimpath` made them byte-identical.
 
 Item 6 is the one that invalidates a stated exit criterion rather than merely
 adding work, and it is also the prerequisite for the storage format v3 in the

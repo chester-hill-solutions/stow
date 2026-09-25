@@ -39,7 +39,7 @@ function assertUsableLimits(options) {
 export async function openStow(options = {}) {
     assertUsableLimits(options);
     if (options.signal?.aborted) {
-        throw new StowProtocolError("internal", "cancelled before the session started");
+        throw new StowProtocolError("cancelled", "cancelled before the session started");
     }
     const ownsDataDir = options.dataDir === undefined;
     const dataDir = options.dataDir ?? (await mkdtemp(join(tmpdir(), "stow-session-")));
@@ -58,6 +58,11 @@ export async function openStow(options = {}) {
             // outlive it.
             parentPid: process.pid,
             buckets: [bucket],
+            // These two were declared on EphemeralStowOptions and never forwarded,
+            // so a caller's timeout was silently ignored in favour of a hardcoded ten
+            // seconds and an abort signal did nothing at all.
+            timeoutMs: options.timeoutMs,
+            signal: options.signal,
         });
         client = new S3Client(startup.instance.awsSdkV3Config());
         // startStow creates the bucket before the caller sees the session. Confirm it

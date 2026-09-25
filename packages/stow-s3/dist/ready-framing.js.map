@@ -1,0 +1,1 @@
+{"version":3,"file":"ready-framing.js","sourceRoot":"","sources":["../src/ready-framing.ts"],"names":[],"mappings":"AAAA;;;;;;;;;;;;GAYG;AASH;;;;;;;GAOG;AACH,MAAM,UAAU,mBAAmB,CAAC,MAAc;IAChD,MAAM,KAAK,GAAG,MAAM,CAAC,KAAK,CAAC,OAAO,CAAC,CAAC;IACpC,MAAM,IAAI,GAAG,KAAK,CAAC,GAAG,EAAE,IAAI,EAAE,CAAC;IAC/B,OAAO,EAAE,OAAO,EAAE,KAAK,EAAE,IAAI,EAAE,CAAC;AAClC,CAAC"}

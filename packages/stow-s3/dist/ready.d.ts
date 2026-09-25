@@ -20,9 +20,15 @@ export interface StowReady {
     backend: string;
     capabilities: StowReadyCapabilities;
 }
+/**
+ * Session lifecycle failure codes. These cover acquiring and releasing a
+ * session only; S3 operation errors arrive from the AWS SDK unchanged so a
+ * caller can keep matching on NoSuchKey, AccessDenied and the rest.
+ */
+export type StowErrorCode = "protocol_mismatch" | "cancelled" | "internal";
 export declare class StowProtocolError extends Error {
-    readonly code: "protocol_mismatch" | "internal";
-    constructor(code: "protocol_mismatch" | "internal", message: string);
+    readonly code: StowErrorCode;
+    constructor(code: StowErrorCode, message: string);
 }
 /**
  * Parse the single readiness object. Throws StowProtocolError on an unknown
