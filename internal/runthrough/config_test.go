@@ -151,6 +151,15 @@ func TestConfigFromEnv_Revalidate(t *testing.T) {
 	}
 }
 
+func TestConfigFromEnvPreservesInvalidPolicy(t *testing.T) {
+	os.Clearenv()
+	t.Setenv("STOW_POLICY", "proxy")
+	cfg := runthrough.ConfigFromEnv()
+	if cfg.Policy != runthrough.Policy("proxy") {
+		t.Fatalf("policy = %q, want invalid value preserved", cfg.Policy)
+	}
+}
+
 func TestConfigFromEnvCheckedRejectsUnknownPolicy(t *testing.T) {
 	os.Clearenv()
 	t.Setenv("STOW_POLICY", "proxy")

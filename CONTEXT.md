@@ -22,7 +22,7 @@ When no explicit operational mode is configured, stow inspects environment varia
 
 ### Read-Through Cache
 
-Isolated local copy of upstream-derived objects populated on cache miss. On cache hit, it can be revalidated against upstream via ETag/Last-Modified before serving. Transient upstream failures may serve stale cached data; local-only writes are never evicted merely because upstream lacks the key.
+Isolated local copy of upstream-derived objects populated on cache miss. On cache hit, it can be revalidated against upstream via ETag/Last-Modified before serving. Transient upstream failures may serve stale cached data; local-only writes are never evicted merely because upstream lacks the key. Separate caches may enforce byte and object-count limits with oldest-access eviction.
 
 ### Mirror-Writes Policy
 

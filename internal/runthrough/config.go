@@ -33,6 +33,13 @@ type UpstreamConfig struct {
 	Bucket string
 }
 
+// CachePolicy bounds the separate upstream-derived cache. Zero values disable
+// the corresponding limit.
+type CachePolicy struct {
+	MaxBytes   int64
+	MaxObjects int64
+}
+
 // Config is the full run-through adapter configuration.
 type Config struct {
 	Policy                 Policy
@@ -41,6 +48,7 @@ type Config struct {
 	CacheDir               string
 	Upstream               UpstreamConfig
 	EvictOnUpstreamMissing bool
+	Cache                  CachePolicy
 }
 
 // FromEnv resolves upstream credentials from environment variables with
@@ -104,6 +112,10 @@ func ConfigFromEnv() Config {
 	if p := os.Getenv("STOW_POLICY"); p != "" {
 		if policy, ok := ParsePolicy(p); ok {
 			cfg.Policy = policy
+		} else {
+			// Preserve an invalid value so checked startup rejects it and
+			// direct callers cannot silently fall back to a live-write policy.
+			cfg.Policy = Policy(strings.TrimSpace(p))
 		}
 	}
 

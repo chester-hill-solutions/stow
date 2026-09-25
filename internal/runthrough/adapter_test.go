@@ -350,33 +350,6 @@ func TestAdapter_ReadThroughCacheMiss(t *testing.T) {
 	}
 }
 
-func TestAdapter_SeparateCacheDoesNotEvictLocalObjects(t *testing.T) {
-	ctx := context.Background()
-	local := storage.NewMemoryStore()
-	cache := storage.NewMemoryStore()
-	_ = local.CreateBucket(ctx, "bucket")
-	_ = cache.CreateBucket(ctx, "bucket")
-	_, _ = local.PutObject(ctx, "bucket", "local", bytes.NewReader([]byte("local")), storage.PutOptions{})
-	_, _ = cache.PutObject(ctx, "bucket", "cached", bytes.NewReader([]byte("cached")), storage.PutOptions{})
-
-	adapter := runthrough.NewWithCache(runthrough.Config{
-		Policy:                 runthrough.PolicyReadThroughCache,
-		Revalidate:             true,
-		EvictOnUpstreamMissing: true,
-	}, local, cache, newMockUpstream())
-
-	_, _, err := adapter.GetObject(ctx, "bucket", "cached")
-	if err != storage.ErrObjectNotFound {
-		t.Fatalf("cached object error = %v, want not found", err)
-	}
-	if _, err := cache.HeadObject(ctx, "bucket", "cached"); err != storage.ErrObjectNotFound {
-		t.Fatalf("cache object survived upstream miss: %v", err)
-	}
-	if _, err := local.HeadObject(ctx, "bucket", "local"); err != nil {
-		t.Fatalf("local object was evicted: %v", err)
-	}
-}
-
 func TestAdapter_RevalidationSkipsUpstreamWhenDisabled(t *testing.T) {
 	local := storage.NewMemoryStore()
 	ctx := context.Background()

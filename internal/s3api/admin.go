@@ -17,6 +17,10 @@ type cacheStatsProvider interface {
 	CacheStats() (hits, misses uint64)
 }
 
+type cacheEvictionsProvider interface {
+	CacheEvictions() uint64
+}
+
 type outboxStatsProvider interface {
 	OutboxStats() (pending, terminal int)
 }
@@ -156,6 +160,10 @@ func (s *Server) writeInspect(w http.ResponseWriter, r *http.Request) {
 	if provider, ok := s.store.(cacheStatsProvider); ok {
 		cacheHits, cacheMisses = provider.CacheStats()
 	}
+	var cacheEvictions uint64
+	if provider, ok := s.store.(cacheEvictionsProvider); ok {
+		cacheEvictions = provider.CacheEvictions()
+	}
 	outboxPending, outboxTerminal := 0, 0
 	if provider, ok := s.store.(outboxStatsProvider); ok {
 		outboxPending, outboxTerminal = provider.OutboxStats()
@@ -166,6 +174,7 @@ func (s *Server) writeInspect(w http.ResponseWriter, r *http.Request) {
 		"multipart_uploads": multipartUploads,
 		"cache_hits":        cacheHits,
 		"cache_misses":      cacheMisses,
+		"cache_evictions":   cacheEvictions,
 		"outbox_pending":    outboxPending,
 		"outbox_terminal":   outboxTerminal,
 	})
@@ -209,6 +218,10 @@ func (s *Server) writeMetrics(w http.ResponseWriter, r *http.Request) {
 	if provider, ok := s.store.(cacheStatsProvider); ok {
 		hits, misses = provider.CacheStats()
 	}
+	var evictions uint64
+	if provider, ok := s.store.(cacheEvictionsProvider); ok {
+		evictions = provider.CacheEvictions()
+	}
 	pending, terminal := 0, 0
 	if provider, ok := s.store.(outboxStatsProvider); ok {
 		pending, terminal = provider.OutboxStats()
@@ -225,6 +238,7 @@ func (s *Server) writeMetrics(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "text/plain; version=0.0.4; charset=utf-8")
 	_, _ = fmt.Fprintf(w, "# HELP stow_cache_hits_total Cache hits observed by the runtime.\n# TYPE stow_cache_hits_total counter\nstow_cache_hits_total %d\n", hits)
 	_, _ = fmt.Fprintf(w, "# HELP stow_cache_misses_total Cache misses observed by the runtime.\n# TYPE stow_cache_misses_total counter\nstow_cache_misses_total %d\n", misses)
+	_, _ = fmt.Fprintf(w, "# HELP stow_cache_evictions_total Cache entries evicted by policy.\n# TYPE stow_cache_evictions_total counter\nstow_cache_evictions_total %d\n", evictions)
 	_, _ = fmt.Fprintf(w, "# HELP stow_multipart_uploads Active multipart uploads.\n# TYPE stow_multipart_uploads gauge\nstow_multipart_uploads %d\n", multipartUploads)
 	_, _ = fmt.Fprintf(w, "# HELP stow_outbox_pending_entries Pending outbox entries.\n# TYPE stow_outbox_pending_entries gauge\nstow_outbox_pending_entries %d\n", pending)
 	_, _ = fmt.Fprintf(w, "# HELP stow_outbox_terminal_entries Terminal outbox entries.\n# TYPE stow_outbox_terminal_entries gauge\nstow_outbox_terminal_entries %d\n", terminal)

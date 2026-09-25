@@ -6,6 +6,7 @@ import (
 	"errors"
 	"io"
 	"sort"
+	"sync"
 	"sync/atomic"
 
 	"github.com/chester-hill-solutions/stow/internal/storage"
@@ -23,15 +24,18 @@ const (
 // Adapter wraps a local storage.Store with optional upstream read-through caching
 // and controlled live writes. It implements storage.Store for s3api routing.
 type Adapter struct {
-	local         storage.Store
-	cache         storage.Store
-	upstream      Client
-	outbox        Outbox
-	cfg           Config
-	separateCache bool
-	durableOutbox bool
-	cacheHits     atomic.Uint64
-	cacheMisses   atomic.Uint64
+	local          storage.Store
+	cache          storage.Store
+	upstream       Client
+	outbox         Outbox
+	cfg            Config
+	separateCache  bool
+	durableOutbox  bool
+	cacheHits      atomic.Uint64
+	cacheMisses    atomic.Uint64
+	cacheEvictions atomic.Uint64
+	cacheMu        sync.Mutex
+	cacheEntries   map[string]cacheEntry
 }
 
 // New creates a run-through adapter. upstream may be nil for local-only behavior.
@@ -59,7 +63,16 @@ func NewWithOutbox(cfg Config, local, cache storage.Store, upstream Client, outb
 	if provider, ok := outbox.(DurableOutbox); ok {
 		durable = provider.Durable()
 	}
-	return &Adapter{cfg: cfg, local: local, cache: cache, upstream: upstream, outbox: outbox, separateCache: cache != local, durableOutbox: durable}
+	return &Adapter{
+		cfg:           cfg,
+		local:         local,
+		cache:         cache,
+		upstream:      upstream,
+		outbox:        outbox,
+		separateCache: cache != local,
+		durableOutbox: durable,
+		cacheEntries:  make(map[string]cacheEntry),
+	}
 }
 
 // Config returns the adapter configuration.
@@ -267,6 +280,7 @@ func (a *Adapter) openLocal(ctx context.Context, bucket, key string, meta *stora
 
 func (a *Adapter) openCached(ctx context.Context, bucket, key string, meta *storage.ObjectMeta, needBody bool) (io.ReadCloser, *storage.ObjectMeta, error) {
 	a.cacheHits.Add(1)
+	a.touchCache(bucket, key)
 	if !needBody {
 		return nil, meta, nil
 	}
@@ -302,6 +316,9 @@ func (a *Adapter) refreshFromUpstream(ctx context.Context, bucket, key string, n
 		ChecksumValue:     meta.ChecksumValue,
 	})
 	if err != nil {
+		return nil, nil, err
+	}
+	if err := a.trackCacheObject(ctx, bucket, key); err != nil {
 		return nil, nil, err
 	}
 	if !needBody {
