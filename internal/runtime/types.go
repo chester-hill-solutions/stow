@@ -8,17 +8,20 @@ import (
 type Backend string
 
 const (
-	BackendMemory Backend = "memory"
+	BackendMemory     Backend = "memory"
+	BackendFilesystem Backend = "filesystem"
 
 	DefaultMaxBytes   int64 = 64 << 20
 	DefaultMaxObjects int64 = 10_000
 )
 
 var (
-	ErrClosed             = errors.New("runtime is closed")
-	ErrQuotaExceeded      = errors.New("runtime quota exceeded")
-	ErrUnsupportedBackend = errors.New("unsupported runtime backend")
-	ErrInvalidListLimit   = errors.New("runtime list limit must not be negative")
+	ErrClosed                   = errors.New("runtime is closed")
+	ErrQuotaExceeded            = errors.New("runtime quota exceeded")
+	ErrUnsupportedBackend       = errors.New("unsupported runtime backend")
+	ErrInvalidListLimit         = errors.New("runtime list limit must not be negative")
+	ErrExternalResetUnsupported = errors.New("runtime reset is unsupported for an externally managed store")
+	ErrMultipartUnsupported     = errors.New("runtime multipart operations are unsupported")
 )
 
 type Options struct {
@@ -47,29 +50,41 @@ type Bucket struct {
 }
 
 type Object struct {
-	Bucket       string
-	Key          string
-	Data         []byte
-	Size         int64
-	ETag         string
-	ContentType  string
-	Metadata     map[string]string
-	LastModified time.Time
+	Bucket            string
+	Key               string
+	Data              []byte
+	Size              int64
+	ETag              string
+	VersionID         string
+	ContentType       string
+	Metadata          map[string]string
+	LastModified      time.Time
+	ChecksumAlgorithm string
+	ChecksumValue     string
 }
 
 type PutOptions struct {
-	ContentType string
-	Metadata    map[string]string
+	ContentType       string
+	Metadata          map[string]string
+	ChecksumAlgorithm string
+	ChecksumValue     string
+	IfMatch           string
+	IfNoneMatch       string
 }
 
 type ObjectPage struct {
-	Objects    []Object
-	Truncated  bool
-	NextCursor string
+	Objects        []Object
+	CommonPrefixes []string
+	Truncated      bool
+	Cursor         string
+	NextCursor     string
+	KeyCount       int
 }
 
 type ListOptions struct {
-	Prefix string
-	Cursor string
-	Limit  int
+	Prefix     string
+	Cursor     string
+	Limit      int
+	Delimiter  string
+	StartAfter string
 }

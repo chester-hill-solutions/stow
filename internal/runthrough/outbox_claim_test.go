@@ -119,6 +119,11 @@ func TestFileOutboxClaimIsExclusiveAndExpires(t *testing.T) {
 	if err != nil {
 		t.Fatalf("enqueue: %v", err)
 	}
+	assertClaimLease(t, path, first, second, entry)
+}
+
+func assertClaimLease(t *testing.T, path string, first, second *runthrough.FileOutbox, entry runthrough.OutboxEntry) {
+	t.Helper()
 	claimed, ok, err := first.Claim(entry.ID, "owner-a", time.Minute)
 	if err != nil || !ok || claimed.ClaimOwner != "owner-a" {
 		t.Fatalf("first claim = %+v, ok=%v, err=%v", claimed, ok, err)

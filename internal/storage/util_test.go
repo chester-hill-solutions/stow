@@ -55,7 +55,7 @@ func TestPaginateObjects_DelimiterAndTruncation(t *testing.T) {
 	if result.KeyCount != 1 {
 		t.Fatalf("key count = %d, want 1", result.KeyCount)
 	}
-	if !result.IsTruncated || result.NextContinuationToken != "b.txt" {
+	if !result.IsTruncated || result.NextContinuationToken != "a/" {
 		t.Fatalf("truncation = truncated=%v token=%q", result.IsTruncated, result.NextContinuationToken)
 	}
 }

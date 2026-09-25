@@ -12,31 +12,56 @@ import (
 )
 
 type Instance struct {
-	mu        sync.Mutex
-	store     storage.Store
-	options   Options
-	usage     Usage
-	closed    bool
-	closeOnce sync.Once
-	closeErr  error
+	mu               sync.Mutex
+	store            storage.Store
+	resetStore       func() (storage.Store, error)
+	options          Options
+	usage            Usage
+	multipart        map[string]multipartUsage
+	multipartTargets map[string]int
+	reservedTargets  map[string]struct{}
+	reservedObjects  int64
+	reservedBytes    int64
+	persistent       bool
+	multipartEnabled bool
+	closed           bool
+	closeOnce        sync.Once
+	closeErr         error
+}
+
+type multipartUsage struct {
+	upload storage.MultipartUpload
+	parts  map[int]int64
 }
 
 func Open(options Options) (*Instance, error) {
-	normalized, err := normalizeOptions(options)
+	normalized, err := normalizeOptions(options, false)
 	if err != nil {
 		return nil, err
 	}
-	return &Instance{
-		store:   storage.NewMemoryStore(),
-		options: normalized,
-	}, nil
+	return newInstance(normalized, storage.NewMemoryStore(), func() (storage.Store, error) {
+		return storage.NewMemoryStore(), nil
+	}, false, false), nil
 }
 
-func normalizeOptions(options Options) (Options, error) {
+func newInstance(options Options, store storage.Store, resetStore func() (storage.Store, error), persistent, multipartEnabled bool) *Instance {
+	return &Instance{
+		store:            store,
+		resetStore:       resetStore,
+		options:          options,
+		multipart:        make(map[string]multipartUsage),
+		multipartTargets: make(map[string]int),
+		reservedTargets:  make(map[string]struct{}),
+		persistent:       persistent,
+		multipartEnabled: multipartEnabled,
+	}
+}
+
+func normalizeOptions(options Options, boundStore bool) (Options, error) {
 	if options.Backend == "" {
 		options.Backend = BackendMemory
 	}
-	if options.Backend != BackendMemory {
+	if options.Backend != BackendMemory && (!boundStore || options.Backend != BackendFilesystem) {
 		return Options{}, ErrUnsupportedBackend
 	}
 	if options.MaxBytes < 0 || options.MaxObjects < 0 {
@@ -65,11 +90,20 @@ func (i *Instance) checkOpen() error {
 	return nil
 }
 
+func (i *Instance) checkContextAndOpen(ctx context.Context) error {
+	if err := i.checkContext(ctx); err != nil {
+		return err
+	}
+	return i.checkOpen()
+}
+
 func (i *Instance) capabilitiesLocked() Capabilities {
 	return Capabilities{
 		Backend:    i.options.Backend,
 		MaxBytes:   i.options.MaxBytes,
 		MaxObjects: i.options.MaxObjects,
+		Persistent: i.persistent,
+		Multipart:  i.multipartEnabled,
 	}
 }
 
@@ -83,6 +117,22 @@ func (i *Instance) Usage() Usage {
 	i.mu.Lock()
 	defer i.mu.Unlock()
 	return i.usage
+}
+
+func (i *Instance) HeadBucket(ctx context.Context, name string) (Bucket, error) {
+	if err := i.checkContext(ctx); err != nil {
+		return Bucket{}, err
+	}
+	i.mu.Lock()
+	defer i.mu.Unlock()
+	if err := i.checkOpen(); err != nil {
+		return Bucket{}, err
+	}
+	info, err := i.store.HeadBucket(ctx, name)
+	if err != nil {
+		return Bucket{}, err
+	}
+	return Bucket{Name: info.Name, CreationDate: info.CreationDate}, nil
 }
 
 func (i *Instance) CreateBucket(ctx context.Context, name string) error {
@@ -144,16 +194,22 @@ func (i *Instance) PutObject(ctx context.Context, bucket, key string, data []byt
 		return Object{}, err
 	}
 	requestedSize := int64(len(data))
-	if !exists && i.usage.Objects+1 > i.options.MaxObjects {
+	if !exists && !i.objectQuotaFits(objectTarget(bucket, key), 1) {
 		return Object{}, ErrQuotaExceeded
 	}
-	if i.usage.Bytes-oldSize+requestedSize > i.options.MaxBytes {
+	if !i.bytesQuotaFits(oldSize, requestedSize) {
 		return Object{}, ErrQuotaExceeded
 	}
+	target := objectTarget(bucket, key)
+	_, targetReserved := i.reservedTargets[target]
 	copyData := append([]byte(nil), data...)
 	meta, err := i.store.PutObject(ctx, bucket, key, bytes.NewReader(copyData), storage.PutOptions{
-		ContentType: options.ContentType,
-		Metadata:    storage.CloneMetadata(options.Metadata),
+		ContentType:       options.ContentType,
+		Metadata:          storage.CloneMetadata(options.Metadata),
+		ChecksumAlgorithm: options.ChecksumAlgorithm,
+		ChecksumValue:     options.ChecksumValue,
+		IfMatch:           options.IfMatch,
+		IfNoneMatch:       options.IfNoneMatch,
 	})
 	if err != nil {
 		return Object{}, err
@@ -164,6 +220,10 @@ func (i *Instance) PutObject(ctx context.Context, bucket, key string, data []byt
 		i.usage.Objects++
 	}
 	i.usage.Bytes += int64(len(copyData))
+	if targetReserved {
+		i.consumeTargetReservation(target)
+	}
+	i.reconcileTargetReservation(target, true)
 	return objectFromMeta(meta, nil), nil
 }
 
@@ -222,8 +282,10 @@ func (i *Instance) ListObjects(ctx context.Context, bucket string, options ListO
 	}
 	result, err := i.store.ListObjectsV2(ctx, bucket, storage.ListOptions{
 		Prefix:            options.Prefix,
+		Delimiter:         options.Delimiter,
 		ContinuationToken: options.Cursor,
 		MaxKeys:           limit,
+		StartAfter:        options.StartAfter,
 	})
 	if err != nil {
 		return ObjectPage{}, err
@@ -233,10 +295,72 @@ func (i *Instance) ListObjects(ctx context.Context, bucket string, options ListO
 		objects = append(objects, objectFromMeta(&meta, nil))
 	}
 	return ObjectPage{
-		Objects:    objects,
-		Truncated:  result.IsTruncated,
-		NextCursor: result.NextContinuationToken,
+		Objects:        objects,
+		CommonPrefixes: append([]string(nil), result.CommonPrefixes...),
+		Truncated:      result.IsTruncated,
+		Cursor:         result.ContinuationToken,
+		NextCursor:     result.NextContinuationToken,
+		KeyCount:       result.KeyCount,
 	}, nil
+}
+
+func (i *Instance) DeleteObjects(ctx context.Context, bucket string, keys []string) ([]string, error) {
+	if err := i.checkContext(ctx); err != nil {
+		return nil, err
+	}
+	i.mu.Lock()
+	defer i.mu.Unlock()
+	if err := i.checkOpen(); err != nil {
+		return nil, err
+	}
+	if err := storage.ValidateBucketName(bucket); err != nil {
+		return nil, err
+	}
+	for _, key := range keys {
+		if err := storage.ValidateKey(key); err != nil {
+			return nil, err
+		}
+	}
+
+	sizes := make(map[string]int64, len(keys))
+	for _, key := range keys {
+		if err := i.checkContext(ctx); err != nil {
+			return nil, err
+		}
+		meta, err := i.store.HeadObject(ctx, bucket, key)
+		if err == nil {
+			sizes[key] = meta.Size
+		} else if !errors.Is(err, storage.ErrObjectNotFound) {
+			return nil, err
+		}
+	}
+	deleted, err := i.store.DeleteObjects(ctx, bucket, keys)
+	for _, key := range deleted {
+		if size, ok := sizes[key]; ok {
+			i.usage.Bytes -= size
+		}
+		i.usage.Objects--
+		target := objectTarget(bucket, key)
+		i.consumeTargetReservation(target)
+		i.reconcileTargetReservation(target, false)
+	}
+	return deleted, err
+}
+
+func (i *Instance) deleteObjectLocked(ctx context.Context, bucket, key string) error {
+	meta, err := i.store.HeadObject(ctx, bucket, key)
+	if err != nil {
+		return err
+	}
+	if err := i.store.DeleteObject(ctx, bucket, key); err != nil {
+		return err
+	}
+	i.usage.Bytes -= meta.Size
+	i.usage.Objects--
+	target := objectTarget(bucket, key)
+	i.consumeTargetReservation(target)
+	i.reconcileTargetReservation(target, false)
+	return nil
 }
 
 func (i *Instance) DeleteObject(ctx context.Context, bucket, key string) error {
@@ -248,16 +372,7 @@ func (i *Instance) DeleteObject(ctx context.Context, bucket, key string) error {
 	if err := i.checkOpen(); err != nil {
 		return err
 	}
-	meta, err := i.store.HeadObject(ctx, bucket, key)
-	if err != nil {
-		return err
-	}
-	if err := i.store.DeleteObject(ctx, bucket, key); err != nil {
-		return err
-	}
-	i.usage.Bytes -= meta.Size
-	i.usage.Objects--
-	return nil
+	return i.deleteObjectLocked(ctx, bucket, key)
 }
 
 func (i *Instance) CopyObject(ctx context.Context, sourceBucket, sourceKey, destinationBucket, destinationKey string) (Object, error) {
@@ -277,12 +392,14 @@ func (i *Instance) CopyObject(ctx context.Context, sourceBucket, sourceKey, dest
 	if err != nil {
 		return Object{}, err
 	}
-	if !exists && i.usage.Objects+1 > i.options.MaxObjects {
+	if !exists && !i.objectQuotaFits(objectTarget(destinationBucket, destinationKey), 1) {
 		return Object{}, ErrQuotaExceeded
 	}
-	if i.usage.Bytes-oldSize+sourceMeta.Size > i.options.MaxBytes {
+	if !i.bytesQuotaFits(oldSize, sourceMeta.Size) {
 		return Object{}, ErrQuotaExceeded
 	}
+	target := objectTarget(destinationBucket, destinationKey)
+	_, targetReserved := i.reservedTargets[target]
 	meta, err := i.store.CopyObject(ctx, sourceBucket, sourceKey, destinationBucket, destinationKey)
 	if err != nil {
 		return Object{}, err
@@ -293,7 +410,15 @@ func (i *Instance) CopyObject(ctx context.Context, sourceBucket, sourceKey, dest
 		i.usage.Objects++
 	}
 	i.usage.Bytes += sourceMeta.Size
+	if targetReserved {
+		i.consumeTargetReservation(target)
+	}
+	i.reconcileTargetReservation(target, true)
 	return objectFromMeta(meta, nil), nil
+}
+
+func objectTarget(bucket, key string) string {
+	return bucket + "\x00" + key
 }
 
 func (i *Instance) objectSize(ctx context.Context, bucket, key string) (int64, bool, error) {
@@ -312,14 +437,17 @@ func objectFromMeta(meta *storage.ObjectMeta, data []byte) Object {
 		return Object{Data: append([]byte(nil), data...)}
 	}
 	return Object{
-		Bucket:       meta.Bucket,
-		Key:          meta.Key,
-		Data:         append([]byte(nil), data...),
-		Size:         meta.Size,
-		ETag:         meta.ETag,
-		ContentType:  meta.ContentType,
-		Metadata:     storage.CloneMetadata(meta.Metadata),
-		LastModified: meta.LastModified,
+		Bucket:            meta.Bucket,
+		Key:               meta.Key,
+		Data:              append([]byte(nil), data...),
+		Size:              meta.Size,
+		ETag:              meta.ETag,
+		VersionID:         meta.VersionID,
+		ContentType:       meta.ContentType,
+		Metadata:          storage.CloneMetadata(meta.Metadata),
+		LastModified:      meta.LastModified,
+		ChecksumAlgorithm: meta.ChecksumAlgorithm,
+		ChecksumValue:     meta.ChecksumValue,
 	}
 }
 
@@ -332,11 +460,29 @@ func (i *Instance) Reset(ctx context.Context) error {
 	if err := i.checkOpen(); err != nil {
 		return err
 	}
+	var next storage.Store
+	if i.resetStore != nil {
+		var err error
+		next, err = i.resetStore()
+		if err != nil {
+			return err
+		}
+	} else {
+		return ErrExternalResetUnsupported
+	}
 	if err := i.store.Close(); err != nil {
+		if i.resetStore != nil {
+			_ = next.Close()
+		}
 		return err
 	}
-	i.store = storage.NewMemoryStore()
+	i.store = next
 	i.usage = Usage{}
+	i.multipart = make(map[string]multipartUsage)
+	i.multipartTargets = make(map[string]int)
+	i.reservedTargets = make(map[string]struct{})
+	i.reservedObjects = 0
+	i.reservedBytes = 0
 	return nil
 }
 

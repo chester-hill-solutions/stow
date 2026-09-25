@@ -153,22 +153,25 @@ func TestRuntimeListObjectsReturnsCursorPage(t *testing.T) {
 			t.Fatalf("put %s: %v", key, err)
 		}
 	}
-	first, err := runtime.ListObjects(ctx, "assets", stow.ListOptions{Limit: 1})
-	if err != nil {
-		t.Fatalf("list first page: %v", err)
-	}
-	if len(first.Objects) != 1 || !first.Truncated || first.NextCursor == "" {
-		t.Fatalf("first page = %+v", first)
-	}
-	second, err := runtime.ListObjects(ctx, "assets", stow.ListOptions{Limit: 1, Cursor: first.NextCursor})
-	if err != nil {
-		t.Fatalf("list second page: %v", err)
-	}
-	if len(second.Objects) != 1 || second.Truncated || second.NextCursor != "" {
-		t.Fatalf("second page = %+v", second)
-	}
+	assertRuntimeCursorPages(t, runtime, ctx)
 	if _, err := runtime.ListObjects(ctx, "assets", stow.ListOptions{Limit: -1}); !errors.Is(err, stow.ErrInvalidListLimit) {
 		t.Fatalf("negative limit error = %v, want ErrInvalidListLimit", err)
+	}
+}
+
+func assertRuntimeCursorPages(t *testing.T, runtime *stow.Runtime, ctx context.Context) {
+	t.Helper()
+	first, err := runtime.ListObjects(ctx, "assets", stow.ListOptions{Limit: 1})
+	if err != nil || len(first.Objects) != 1 || !first.Truncated || first.NextCursor == "" {
+		t.Fatalf("first page = %+v, err = %v", first, err)
+	}
+	second, err := runtime.ListObjects(ctx, "assets", stow.ListOptions{Limit: 1, Cursor: first.NextCursor})
+	if err != nil || len(second.Objects) != 1 || second.Objects[0].Key != "b" || !second.Truncated || second.NextCursor == "" {
+		t.Fatalf("second page = %+v, err = %v", second, err)
+	}
+	third, err := runtime.ListObjects(ctx, "assets", stow.ListOptions{Limit: 1, Cursor: second.NextCursor})
+	if err != nil || len(third.Objects) != 1 || third.Objects[0].Key != "c" || third.Truncated || third.NextCursor != "" {
+		t.Fatalf("third page = %+v, err = %v", third, err)
 	}
 }
 

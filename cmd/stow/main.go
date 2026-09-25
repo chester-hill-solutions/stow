@@ -196,6 +196,10 @@ func serve(args []string) {
 		}
 		store = adapter
 	}
+	store, err = bindNativeRuntimeStore(store, *backend, adapter)
+	if err != nil {
+		log.Fatal(err)
+	}
 
 	retryCancel, retryDone := startOutboxRetryWorker(adapter)
 	defer retryCancel()

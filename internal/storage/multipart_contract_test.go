@@ -43,8 +43,8 @@ func TestPaginateMultipartUploadsMarkers(t *testing.T) {
 	if len(result.Uploads) != 1 || result.Uploads[0].UploadID != "a" {
 		t.Fatalf("uploads = %+v", result.Uploads)
 	}
-	if result.NextKeyMarker != "b.bin" || result.NextUploadIDMarker != "b" {
-		t.Fatalf("next markers = %q/%q, want b.bin/b", result.NextKeyMarker, result.NextUploadIDMarker)
+	if result.NextKeyMarker != "a.bin" || result.NextUploadIDMarker != "a" {
+		t.Fatalf("next markers = %q/%q, want a.bin/a", result.NextKeyMarker, result.NextUploadIDMarker)
 	}
 }
 

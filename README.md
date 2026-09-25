@@ -46,7 +46,7 @@ connection.disconnect();
 
 ## Embedded Go runtime
 
-The direct runtime is an in-process, memory-only profile for Go callers. It does not start an HTTP server or use AWS credentials:
+The native `stow serve` path binds its selected local/run-through store to the internal runtime facade before exposing the S3 HTTP adapter. This keeps the public embedded runtime small while making native lifecycle, quota, and reset behavior pass through the same instance boundary. The direct runtime remains an in-process, memory-only profile for Go callers; it does not start an HTTP server or use AWS credentials:
 
 ```go
 package main

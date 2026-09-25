@@ -221,6 +221,8 @@ func PaginateMultipartUploads(items []MultipartUpload, opts MultipartListOptions
 		UploadIDMarker: opts.UploadIDMarker,
 		MaxUploads:     maxUploads,
 	}
+	lastKey := ""
+	lastUploadID := ""
 	for _, upload := range items {
 		if opts.Prefix != "" && !strings.HasPrefix(upload.Key, opts.Prefix) {
 			continue
@@ -235,11 +237,18 @@ func PaginateMultipartUploads(items []MultipartUpload, opts MultipartListOptions
 		}
 		if len(result.Uploads) >= maxUploads {
 			result.IsTruncated = true
-			result.NextKeyMarker = upload.Key
-			result.NextUploadIDMarker = upload.UploadID
+			if lastKey != "" {
+				result.NextKeyMarker = lastKey
+				result.NextUploadIDMarker = lastUploadID
+			} else {
+				result.NextKeyMarker = upload.Key
+				result.NextUploadIDMarker = upload.UploadID
+			}
 			break
 		}
 		result.Uploads = append(result.Uploads, upload)
+		lastKey = upload.Key
+		lastUploadID = upload.UploadID
 	}
 	return result
 }
@@ -277,13 +286,18 @@ func PaginateObjects(items []ObjectMeta, opts ListOptions) *ListResult {
 	if opts.ContinuationToken != "" {
 		result.ContinuationToken = opts.ContinuationToken
 	}
+	lastValue := ""
 	for _, entry := range entries {
 		if startAfter != "" && entry.value <= startAfter {
 			continue
 		}
 		if len(result.Objects)+len(result.CommonPrefixes) >= maxKeys {
 			result.IsTruncated = true
-			result.NextContinuationToken = entry.value
+			if lastValue != "" {
+				result.NextContinuationToken = lastValue
+			} else {
+				result.NextContinuationToken = entry.value
+			}
 			break
 		}
 		if entry.prefix {
@@ -291,6 +305,7 @@ func PaginateObjects(items []ObjectMeta, opts ListOptions) *ListResult {
 		} else {
 			result.Objects = append(result.Objects, *entry.object)
 		}
+		lastValue = entry.value
 	}
 	result.KeyCount = len(result.Objects) + len(result.CommonPrefixes)
 	return result

@@ -20,7 +20,7 @@ The first profile is memory-only. It has no filesystem, network, signal, environ
 
 ### 2. S3 HTTP remains an adapter
 
-The native S3 server remains a compatibility adapter over the storage and run-through behavior. It is not the source of truth for the embedded interface, and the embedded profile does not create an HTTP listener. Existing SigV4, XML, CORS, admin routes, CLI flags, and SDK behavior remain governed by the S3 compatibility contract.
+The native S3 server enters through an internal runtime-owned store adapter bound to the same `Instance` lifecycle and quota state. The adapter translates the richer S3 compatibility contract without making `internal/storage` the public embedded interface. It is not the source of truth for the embedded interface, and the embedded profile does not create an HTTP listener. Existing SigV4, XML, CORS, admin routes, CLI flags, and SDK behavior remain governed by the S3 compatibility contract.
 
 ### 3. Capabilities are explicit
 
@@ -41,7 +41,7 @@ Direct-runtime tests exercise lifecycle, isolation, quotas, reset, and close. Th
 - The public Go package is intentionally small and backend-neutral; internal storage details may evolve without becoming API.
 - The first WASM host protocol is explicit about serialization and must be versioned when its public shape changes.
 - A later filesystem or upstream profile must satisfy the same lifecycle, quota, error, and isolation contract before it is advertised.
-- The native server and the embedded runtime are tested as separate seams. A future HTTP-over-runtime refactor must preserve both S3 conformance and direct-runtime tests.
+- The native server and the embedded runtime are tested as separate seams. The native conformance runner now includes the runtime-backed adapter so an HTTP translation change cannot silently bypass runtime lifecycle or quota checks.
 
 ## Out of scope
 

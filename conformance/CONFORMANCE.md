@@ -26,7 +26,7 @@ go test ./conformance/... -count=1 -v
 | Presigned GET/PUT | `TestPresignedGetPut` |
 | DeleteObjects batch | `TestDeleteObjects` |
 | SigV4 enforced | `TestSigV4RejectsUnsigned` |
-| Shared corpus + response status | `TestSharedCorpusRoundTrip` (memory/filesystem) |
+| Shared corpus + response status | `TestSharedCorpusRoundTrip` (memory/filesystem/runtime adapter) |
 
 ## Gaps / not yet covered
 

@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"time"
 
+	"github.com/chester-hill-solutions/stow/internal/runtime"
 	"github.com/chester-hill-solutions/stow/internal/storage"
 )
 
@@ -75,6 +76,14 @@ func mapStorageError(err error, resource string) s3Error {
 		return s3Error{Code: "NoSuchUpload", Message: "The specified multipart upload does not exist", Resource: resource, StatusCode: http.StatusNotFound}
 	case errors.Is(err, storage.ErrPreconditionFailed):
 		return s3Error{Code: "PreconditionFailed", Message: "At least one of the pre-conditions you specified did not hold", Resource: resource, StatusCode: http.StatusPreconditionFailed}
+	case errors.Is(err, runtime.ErrQuotaExceeded):
+		return s3Error{Code: "InsufficientStorage", Message: "The runtime storage quota was exceeded", Resource: resource, StatusCode: http.StatusInsufficientStorage}
+	case errors.Is(err, runtime.ErrClosed):
+		return s3Error{Code: "ServiceUnavailable", Message: "The runtime is closed", Resource: resource, StatusCode: http.StatusServiceUnavailable}
+	case errors.Is(err, runtime.ErrInvalidListLimit):
+		return s3Error{Code: "InvalidArgument", Message: "The list limit is invalid", Resource: resource, StatusCode: http.StatusBadRequest}
+	case errors.Is(err, runtime.ErrMultipartUnsupported):
+		return s3Error{Code: "NotImplemented", Message: "Multipart operations are not supported by this runtime profile", Resource: resource, StatusCode: http.StatusNotImplemented}
 	default:
 		return s3Error{Code: "InternalError", Message: "internal storage error", Resource: resource, StatusCode: http.StatusInternalServerError}
 	}

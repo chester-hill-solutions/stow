@@ -18,6 +18,8 @@ test-race:
 test-conformance:
 	STOW_CONFORMANCE_BACKEND=memory go test ./conformance/... -count=1 -v
 	STOW_CONFORMANCE_BACKEND=filesystem go test ./conformance/... -count=1 -v
+	STOW_CONFORMANCE_BACKEND=runtime STOW_CONFORMANCE_RUNTIME_BACKEND=memory go test ./conformance/... -count=1 -v
+	STOW_CONFORMANCE_BACKEND=runtime STOW_CONFORMANCE_RUNTIME_BACKEND=filesystem go test ./conformance/... -count=1 -v
 
 test-node: build build-wasm
 	cd packages/stow && npm ci && npm test

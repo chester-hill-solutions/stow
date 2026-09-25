@@ -16,6 +16,7 @@ import (
 	"github.com/aws/smithy-go/middleware"
 	smithyhttp "github.com/aws/smithy-go/transport/http"
 	"github.com/chester-hill-solutions/stow/internal/auth"
+	"github.com/chester-hill-solutions/stow/internal/runtime"
 	"github.com/chester-hill-solutions/stow/internal/s3api"
 	"github.com/chester-hill-solutions/stow/internal/storage"
 	"github.com/chester-hill-solutions/stow/internal/storage/fs"
@@ -59,6 +60,52 @@ func (c *responseStatusCapture) StatusCode() int {
 	return c.status
 }
 
+func newConformanceStore(t *testing.T) storage.Store {
+	t.Helper()
+	switch os.Getenv("STOW_CONFORMANCE_BACKEND") {
+	case "", "memory":
+		return storage.NewMemoryStore()
+	case "filesystem":
+		store, err := fs.NewFilesystemStore(t.TempDir())
+		if err != nil {
+			t.Fatalf("filesystem store: %v", err)
+		}
+		return store
+	case "runtime":
+		return newRuntimeConformanceStore(t)
+	default:
+		t.Fatalf("unknown STOW_CONFORMANCE_BACKEND %q", os.Getenv("STOW_CONFORMANCE_BACKEND"))
+		return nil
+	}
+}
+
+func newRuntimeConformanceStore(t *testing.T) storage.Store {
+	t.Helper()
+	backing := storage.Store(storage.NewMemoryStore())
+	runtimeBackend := runtime.BackendMemory
+	if os.Getenv("STOW_CONFORMANCE_RUNTIME_BACKEND") == "filesystem" {
+		store, err := fs.NewFilesystemStore(t.TempDir())
+		if err != nil {
+			t.Fatalf("runtime filesystem store: %v", err)
+		}
+		backing = store
+		runtimeBackend = runtime.BackendFilesystem
+	}
+	instance, err := runtime.OpenWithStore(runtime.Options{
+		Backend:    runtimeBackend,
+		MaxBytes:   int64(^uint64(0) >> 1),
+		MaxObjects: int64(^uint64(0) >> 1),
+	}, backing, nil)
+	if err != nil {
+		t.Fatalf("runtime instance: %v", err)
+	}
+	store, err := runtime.NewStoreAdapter(instance)
+	if err != nil {
+		t.Fatalf("runtime adapter: %v", err)
+	}
+	return store
+}
+
 func newTestEnv(t *testing.T) *testEnv {
 	t.Helper()
 
@@ -67,19 +114,7 @@ func newTestEnv(t *testing.T) *testEnv {
 		SecretAccessKey: "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY",
 	}
 
-	var store storage.Store
-	switch os.Getenv("STOW_CONFORMANCE_BACKEND") {
-	case "", "memory":
-		store = storage.NewMemoryStore()
-	case "filesystem":
-		var err error
-		store, err = fs.NewFilesystemStore(t.TempDir())
-		if err != nil {
-			t.Fatalf("filesystem store: %v", err)
-		}
-	default:
-		t.Fatalf("unknown STOW_CONFORMANCE_BACKEND %q", os.Getenv("STOW_CONFORMANCE_BACKEND"))
-	}
+	store := newConformanceStore(t)
 	verifier := auth.NewVerifier(testRegion)
 	srv, err := s3api.New(s3api.Config{
 		Store:  store,
