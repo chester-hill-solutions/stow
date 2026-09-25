@@ -1,4 +1,4 @@
-.PHONY: build build-wasm test test-race test-conformance test-node test-wasm test-all lint format-check check-go-quality check-ts-quality check-type-escapes check-dry check-file-size check-coverage check-version standards check-generated
+.PHONY: build build-wasm test test-race test-conformance test-node test-wasm test-all lint format-check check-go-quality check-ts-quality check-type-escapes check-dry check-file-size check-coverage check-version standards check-generated benchmark
 
 BINARY := bin/stow
 
@@ -58,6 +58,12 @@ check-file-size:
 
 check-coverage:
 	node scripts/check-coverage.mjs
+
+# Measurement, not a gate. A wall-clock threshold on shared CI would be flaky,
+# so this is deliberately kept out of `standards`.
+benchmark: build build-wasm
+	node packages/stow/scripts/benchmark-session.mjs --sessions 30 --payload-bytes 1048576
+	node packages/stow/scripts/benchmark-session.mjs --sweep
 
 check-version:
 	node scripts/check-version.mjs

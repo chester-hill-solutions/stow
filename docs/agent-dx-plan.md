@@ -1040,17 +1040,35 @@ target below. The targets are decisions made against that baseline, not
 assumptions made before it. If a measurement contradicts a target, change the
 target or change the design, and record which.
 
-Initial targets, to be ratified against that baseline:
+A baseline now exists: `docs/benchmarks/session-baseline.md`, measured on a
+4-core Intel i5-7600K with 15 GB RAM, Node 24, memory backend, over 30
+sequential sessions. It measured 15.4 ms p50 time to ready, 41 ms p50 to first
+operation, 35.5 ms p50 shutdown, 11.6 MB fixed process RSS, and 4.59 MB of peak
+RSS per MiB of object data.
+
+Two findings changed this plan:
+
+- The proposed "peak memory overshoot < 20%" target is unreachable as written.
+  The measured multiplier is 4.59x, so a byte quota is not a memory bound while
+  the write path buffers the body. Phase 2 must reduce that multiplier, and the
+  target is restated as a reduction in multiplier rather than a percentage of
+  the limit.
+- The 64 MiB default in section 5.2 implies roughly 300 MB of peak RSS per
+  session at the measured multiplier, so 100 parallel sessions would need about
+  30 GB. The recommended default is 16 MiB and 1,000 objects, keeping the 8 MiB
+  per-request cap, which implies about 85 MB peak RSS per session.
+
+Initial targets, ratified against that baseline where noted:
 
 | Metric | Target |
 |---|---:|
-| Time to ready, local developer machine, p50 | < 50 ms |
-| Time to first S3 operation, p95 | < 500 ms |
-| Session shutdown, p95 | < 1 s under normal load |
+| Time to ready, local developer machine, p50 | < 50 ms (measured 15.4 ms) |
+| Time to first S3 operation, p95 | < 500 ms (measured 89 ms) |
+| Session shutdown, p95 | < 1 s under normal load (measured 49 ms) |
 | Orphan processes after 1,000 cancellations | 0 |
 | Leaked session directories after 1,000 cancellations | 0 |
-| 100 parallel default sessions | All acquire and release successfully |
-| Peak memory overshoot over configured limit | < 20% |
+| 100 parallel default sessions | All acquire and release successfully, **on a host with at least 16 GB free**. At 16 MiB per session the measured profile needs roughly 8.5 GB. Not yet measured. |
+| Peak RSS per MiB of stored object data | Reduce the measured 4.59x toward 1.5x once the write path is single-copy. A percentage of the quota is not a meaningful target while the body is buffered. |
 | Required conformance scenarios skipped | 0 |
 
 Targets are measured on a documented benchmark environment. They are not claims about every host.
@@ -1259,7 +1277,9 @@ The project becomes a strong agent and DX library when a new user can write one 
   The release pipeline already builds all four candidate platforms.
 - [ ] How is the binary distributed with each package? (A0.5 answer: platform
   optional packages. Measured in `docs/distribution-spike.md`.)
-- [ ] What are the default quotas, once the benchmark baseline exists?
+- [x] What are the default quotas? — **16 MiB / 1,000 objects / 8 MiB per
+  request**, derived from the measured 4.59 MB peak-RSS-per-MiB profile in
+  `docs/benchmarks/session-baseline.md`. About 85 MB peak RSS per session.
 - [ ] Which capabilities must be present for an agent adapter?
 - [ ] How are child-agent credentials handed off?
 - [ ] How are cleanup errors reported without hiding the primary error?
