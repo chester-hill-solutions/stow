@@ -33,6 +33,15 @@ const stow = await Stow.start({
 
 const client = new S3Client(stow.awsSdkV3Config());
 await stow.stop();
+
+// For an endpoint owned by another process:
+const connection = Stow.connect({
+  endpoint: "http://127.0.0.1:9000",
+  accessKeyId: "access",
+  secretAccessKey: "secret",
+});
+connection.client.send(command); // connection owns and destroys this client
+connection.disconnect();
 ```
 
 ## Embedded Go runtime
@@ -54,6 +63,19 @@ func main() {
   ctx := context.Background()
   if err := runtime.CreateBucket(ctx, "assets"); err != nil { panic(err) }
   if _, err := runtime.PutObject(ctx, "assets", "hello.txt", []byte("hello"), stow.PutOptions{}); err != nil { panic(err) }
+}
+```
+
+Object listings return an explicit page. Follow `NextCursor` when `Truncated` is true instead of assuming the default page is complete:
+
+```go
+page, err := runtime.ListObjects(ctx, "assets", stow.ListOptions{Limit: 100})
+for {
+  // use page.Objects
+  if !page.Truncated {
+    break
+  }
+  page, err = runtime.ListObjects(ctx, "assets", stow.ListOptions{Limit: 100, Cursor: page.NextCursor})
 }
 ```
 
@@ -88,9 +110,11 @@ The native S3 endpoint and the TypeScript `Stow.start()` / `Stow.connect()` cont
 | `readThroughCache` | Read upstream on local cache misses; local writes remain local unless live writes are explicitly enabled |
 | `mirrorWrites` | Read-through plus durable upstream propagation; emits a loud startup warning |
 
-Live writes to upstream require `--allow-live-writes` / `STOW_ALLOW_LIVE_WRITES=true` and a durable outbox.
+Live writes to upstream require `--allow-live-writes` / `STOW_ALLOW_LIVE_WRITES=true` and a durable coordinated outbox. A prepared local-mutation intent is persisted before the local record changes; startup/retry reconciliation commits or discards it using the immutable object version. `MemoryOutbox` and other uncoordinated outboxes are rejected before a live mutation touches local storage.
 
-See [docs/adr/0001-auto-detect-run-through.md](docs/adr/0001-auto-detect-run-through.md) and [docs/compat-contract.md](docs/compat-contract.md).
+Run-through cache limits can be set with `--cache-max-bytes`, `--cache-max-objects`, and `--cache-ttl`, or with `STOW_CACHE_MAX_BYTES`, `STOW_CACHE_MAX_OBJECTS`, and `STOW_CACHE_TTL`. Cache entries are bounded by LRU and optionally expire after the configured TTL.
+
+See [docs/adr/0001-auto-detect-run-through.md](docs/adr/0001-auto-detect-run-through.md), [docs/adr/0003-embedded-runtime.md](docs/adr/0003-embedded-runtime.md), and [docs/compat-contract.md](docs/compat-contract.md).
 
 ## Layout
 
@@ -110,11 +134,10 @@ packages/stow/      @chs/stow TypeScript wrapper
 ## Develop
 
 ```bash
-make build
-make test
-make test-conformance
-make test-wasm
-cd packages/stow && npm test
+make test-all
+make standards
 ```
+
+`make test-node` and `make test-wasm` also rebuild the tested package/WASM artifacts. The release workflow publishes the exact npm tarball produced after these gates.
 
 License: Apache 2.0

@@ -36,14 +36,19 @@ func (a *Adapter) DeleteObject(ctx context.Context, bucket, key string) error {
 	}
 	localErr := a.local.DeleteObject(ctx, bucket, key)
 	if localErr != nil {
+		ready := false
+		if prepared.ID != "" {
+			var recoveryErr error
+			ready, recoveryErr = a.reconcilePreparedEntryLocked(ctx, prepared)
+			if recoveryErr != nil {
+				return errors.Join(localErr, recoveryErr)
+			}
+		}
 		if errors.Is(localErr, storage.ErrObjectNotFound) {
-			if prepared.ID != "" {
-				return a.discardPreparedIntent(prepared.ID)
+			if ready {
+				return a.completeIntentLocked(ctx, prepared)
 			}
 			return nil
-		}
-		if prepared.ID != "" {
-			return errors.Join(localErr, a.discardPreparedIntent(prepared.ID))
 		}
 		return localErr
 	}
@@ -100,7 +105,7 @@ func (a *Adapter) DeleteObjects(ctx context.Context, bucket string, keys []strin
 		return deleted, localErr
 	}
 	if localErr != nil {
-		return deleted, localErr
+		return deleted, a.reconcilePreparedEntriesAfterError(ctx, prepared, localErr)
 	}
 
 	entries, err := a.commitDeleteIntents(prepared, deleted)
@@ -139,7 +144,7 @@ func (a *Adapter) commitDeleteIntents(prepared []OutboxEntry, deleted []string) 
 	committed := make([]OutboxEntry, 0, len(deleted))
 	for _, entry := range prepared {
 		if _, ok := deletedSet[entry.Key]; !ok {
-			if err := a.outbox.Discard(entry.ID); err != nil {
+			if err := a.discardPreparedIntent(entry.ID); err != nil {
 				return nil, err
 			}
 			continue
@@ -151,6 +156,15 @@ func (a *Adapter) commitDeleteIntents(prepared []OutboxEntry, deleted []string) 
 		committed = append(committed, committedEntry)
 	}
 	return committed, nil
+}
+
+func (a *Adapter) reconcilePreparedEntriesAfterError(ctx context.Context, entries []OutboxEntry, cause error) error {
+	result := cause
+	for _, entry := range entries {
+		_, recoveryErr := a.reconcilePreparedEntryLocked(ctx, entry)
+		result = errors.Join(result, recoveryErr)
+	}
+	return result
 }
 
 func (a *Adapter) propagateIntents(ctx context.Context, entries []OutboxEntry) error {
@@ -190,7 +204,7 @@ func (a *Adapter) CopyObject(ctx context.Context, srcBucket, srcKey, dstBucket, 
 	meta, err := a.local.CopyObject(ctx, srcBucket, srcKey, dstBucket, dstKey)
 	if err != nil {
 		if prepared.ID != "" {
-			return nil, errors.Join(err, a.discardPreparedIntent(prepared.ID))
+			return nil, a.reconcilePreparedAfterError(ctx, prepared, err)
 		}
 		return nil, err
 	}
@@ -251,7 +265,7 @@ func (a *Adapter) CompleteMultipartUpload(ctx context.Context, uploadID string, 
 	meta, err := a.local.CompleteMultipartUpload(ctx, uploadID, parts)
 	if err != nil {
 		if prepared.ID != "" {
-			return nil, errors.Join(err, a.discardPreparedIntent(prepared.ID))
+			return nil, a.reconcilePreparedAfterError(ctx, prepared, err)
 		}
 		return nil, err
 	}

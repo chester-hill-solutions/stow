@@ -3,6 +3,8 @@ package runthrough_test
 import (
 	"bytes"
 	"context"
+	"errors"
+	"io"
 	"path/filepath"
 	"testing"
 	"time"
@@ -39,6 +41,64 @@ func TestFileOutboxPersistsPreparedCommit(t *testing.T) {
 	pending := reopened.Pending()
 	if len(pending) != 1 || pending[0].Prepared || pending[0].Version != "version-1" {
 		t.Fatalf("reopened pending = %+v", pending)
+	}
+}
+
+type commitThenErrorStore struct {
+	*storage.MemoryStore
+}
+
+func (s *commitThenErrorStore) PutObject(ctx context.Context, bucket, key string, body io.Reader, options storage.PutOptions) (*storage.ObjectMeta, error) {
+	meta, err := s.MemoryStore.PutObject(ctx, bucket, key, body, options)
+	if err != nil {
+		return nil, err
+	}
+	return meta, errors.New("post-commit cleanup failed")
+}
+
+func TestDeleteObjectsDiscardsPreparedIntentForMissingKey(t *testing.T) {
+	ctx := context.Background()
+	local := storage.NewMemoryStore()
+	if err := local.CreateBucket(ctx, "bucket"); err != nil {
+		t.Fatalf("create bucket: %v", err)
+	}
+	outbox, err := runthrough.NewFileOutbox(filepath.Join(t.TempDir(), "outbox.json"))
+	if err != nil {
+		t.Fatalf("new outbox: %v", err)
+	}
+	adapter := runthrough.NewWithOutbox(runthrough.Config{Policy: runthrough.PolicyMirrorWrites, AllowLiveWrites: true}, local, local, newMockUpstream(), outbox)
+	deleted, err := adapter.DeleteObjects(ctx, "bucket", []string{"missing"})
+	if err != nil {
+		t.Fatalf("delete missing: %v", err)
+	}
+	if len(deleted) != 0 || len(outbox.Prepared()) != 0 || len(outbox.Pending()) != 0 {
+		t.Fatalf("state = deleted %d prepared %d active %d", len(deleted), len(outbox.Prepared()), len(outbox.Pending()))
+	}
+}
+
+func TestLocalCommitErrorLeavesRecoverableIntent(t *testing.T) {
+	ctx := context.Background()
+	local := &commitThenErrorStore{MemoryStore: storage.NewMemoryStore()}
+	if err := local.CreateBucket(ctx, "bucket"); err != nil {
+		t.Fatalf("create bucket: %v", err)
+	}
+	outbox, err := runthrough.NewFileOutbox(filepath.Join(t.TempDir(), "outbox.json"))
+	if err != nil {
+		t.Fatalf("new outbox: %v", err)
+	}
+	up := newMockUpstream()
+	adapter := runthrough.NewWithOutbox(runthrough.Config{Policy: runthrough.PolicyMirrorWrites, AllowLiveWrites: true}, local, local, up, outbox)
+	if _, err := adapter.PutObject(ctx, "bucket", "key", bytes.NewReader([]byte("value")), storage.PutOptions{}); err == nil {
+		t.Fatal("expected post-commit error")
+	}
+	if len(outbox.Prepared()) != 0 || len(outbox.Pending()) != 1 {
+		t.Fatalf("outbox state = prepared %d active %d", len(outbox.Prepared()), len(outbox.Pending()))
+	}
+	if err := adapter.RetryPending(ctx); err != nil {
+		t.Fatalf("retry recovered intent: %v", err)
+	}
+	if up.putCalls != 1 || len(outbox.Pending()) != 0 {
+		t.Fatalf("recovery calls/state = %d/%d", up.putCalls, len(outbox.Pending()))
 	}
 }
 

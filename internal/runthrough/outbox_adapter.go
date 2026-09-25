@@ -252,6 +252,11 @@ func (a *Adapter) retryEntry(ctx context.Context, entry OutboxEntry, now time.Ti
 	return stillPending && (!outboxEntryDue(remaining, time.Now()) || !isFirstPendingForKey(remainingState, remaining)), nil
 }
 
+func (a *Adapter) reconcilePreparedAfterError(ctx context.Context, entry OutboxEntry, cause error) error {
+	_, recoveryErr := a.reconcilePreparedEntryLocked(ctx, entry)
+	return errors.Join(cause, recoveryErr)
+}
+
 func (a *Adapter) reconcilePreparedEntryLocked(ctx context.Context, entry OutboxEntry) (bool, error) {
 	switch entry.Operation {
 	case OutboxPut:

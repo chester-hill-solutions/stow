@@ -230,7 +230,7 @@ func (a *Adapter) PutObject(ctx context.Context, bucket, key string, body io.Rea
 	meta, err := a.local.PutObject(ctx, bucket, key, body, opts)
 	if err != nil {
 		if prepared.ID != "" {
-			return nil, errors.Join(err, a.discardPreparedIntent(prepared.ID))
+			return nil, a.reconcilePreparedAfterError(ctx, prepared, err)
 		}
 		return nil, err
 	}
