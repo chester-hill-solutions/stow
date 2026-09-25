@@ -152,7 +152,7 @@ jobs:
           PY
 
       - name: Upload wheel
-        uses: actions/upload-artifact@ea165f92d681f56a4d9b0341a75a1b56af45245e # v4.6.2
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: wheel-${{ matrix.os }}-${{ matrix.arch }}
           path: ${{ runner.temp }}/wheel/*.whl
