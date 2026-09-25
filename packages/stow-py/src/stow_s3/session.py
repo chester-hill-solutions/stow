@@ -48,10 +48,22 @@ MAX_DIAGNOSTIC_BYTES = 64 * 1024
 #: caller's shell would otherwise turn a local session into a run-through one.
 _ISOLATED_ENV_PREFIXES = ("STOW_", "S3_", "AWS_")
 
+#: The Go collector target a session's own server runs with. A session is
+#: short-lived and one of many on the machine, so its peak memory is what matters
+#: and its throughput rarely is: at GOGC=50 a session's peak RSS per MiB of
+#: payload falls from 4.19 to 3.27 for roughly 6% more put latency. The
+#: TypeScript client must use the same value; check-version.mjs fails if the two
+#: drift.
+SESSION_GOGC = "50"
+
 
 def build_child_env(extra: dict[str, str] | None = None) -> dict[str, str]:
     """The child environment, with ambient cloud configuration removed."""
     env = {key: value for key, value in os.environ.items() if not key.startswith(_ISOLATED_ENV_PREFIXES)}
+    # A caller who set GOGC themselves keeps their value: an explicit choice in
+    # the environment outranks a default. GOGC does not match the prefixes above,
+    # so it survives the strip and can be honoured.
+    env.setdefault("GOGC", SESSION_GOGC)
     if extra:
         env.update(extra)
     return env

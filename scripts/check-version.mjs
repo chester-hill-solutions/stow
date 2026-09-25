@@ -123,6 +123,22 @@ if (!doctorList) {
   }
 }
 
+// Both clients spawn a session's server as a child process and both decide what
+// Go collector target that child runs with. A session's peak memory depends on
+// it, so a silent drift between the two clients would mean the Python and
+// TypeScript sessions behave differently for a reason nobody chose.
+const tsSession = readFileSync(resolve(root, "packages/stow/src/start.ts"), "utf8");
+const tsGogc = tsSession.match(/^export const SESSION_GOGC = "(\d+)";/m)?.[1];
+const pySession = readFileSync(resolve(root, "packages/stow-py/src/stow_s3/session.py"), "utf8");
+const pyGogc = pySession.match(/^SESSION_GOGC = "(\d+)"/m)?.[1];
+if (!tsGogc) {
+  problems.push("packages/stow/src/start.ts no longer declares SESSION_GOGC");
+} else if (!pyGogc) {
+  problems.push("packages/stow-py/src/stow_s3/session.py no longer declares SESSION_GOGC");
+} else if (tsGogc !== pyGogc) {
+  problems.push(`session GOGC differs between clients: TypeScript ${tsGogc}, Python ${pyGogc}`);
+}
+
 if (problems.length > 0) {
   for (const problem of problems) console.error(problem);
   process.exit(1);

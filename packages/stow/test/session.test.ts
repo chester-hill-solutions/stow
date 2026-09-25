@@ -6,8 +6,65 @@ import { describe, it } from "node:test";
 import { GetObjectCommand, ListBucketsCommand, PutObjectCommand } from "@aws-sdk/client-s3";
 import { openStow, withStow, DEFAULT_SESSION_MAX_BYTES } from "../dist/session.js";
 import { stowBinaryAvailable } from "../dist/bin.js";
+import { buildChildEnv, SESSION_GOGC } from "../dist/start.js";
 
 const session = { skip: !stowBinaryAvailable() };
+
+// These do not spawn anything, so they run even where no binary is available.
+describe("the child environment of a session's server", () => {
+  const withGogc = (value: string | undefined, run: () => void): void => {
+    const original = process.env.GOGC;
+    if (value === undefined) {
+      delete process.env.GOGC;
+    } else {
+      process.env.GOGC = value;
+    }
+    try {
+      run();
+    } finally {
+      if (original === undefined) {
+        delete process.env.GOGC;
+      } else {
+        process.env.GOGC = original;
+      }
+    }
+  };
+
+  it("runs a session's server with a tighter collector target than the Go default", () => {
+    withGogc(undefined, () => {
+      const env = buildChildEnv({ isolatedEnvironment: true });
+      assert.equal(env.GOGC, SESSION_GOGC);
+      assert.notEqual(SESSION_GOGC, "100", "a session that matches the Go default is not tuning anything");
+    });
+  });
+
+  it("keeps a collector target the caller set themselves", () => {
+    withGogc("400", () => {
+      assert.equal(buildChildEnv({ isolatedEnvironment: true }).GOGC, "400");
+    });
+  });
+
+  it("leaves a long-lived server's collector alone", () => {
+    withGogc(undefined, () => {
+      const env = buildChildEnv({});
+      assert.equal(env.GOGC, undefined);
+    });
+    withGogc("400", () => {
+      assert.equal(buildChildEnv({}).GOGC, "400", "an unset default must not erase the inherited value");
+    });
+  });
+
+  it("still strips ambient cloud configuration from a session", () => {
+    process.env.S3_ENDPOINT_URL = "https://elsewhere.example";
+    try {
+      const env = buildChildEnv({ isolatedEnvironment: true });
+      assert.equal(env.S3_ENDPOINT_URL, undefined);
+      assert.equal(env.GOGC, SESSION_GOGC, "stripping must not take the collector target with it");
+    } finally {
+      delete process.env.S3_ENDPOINT_URL;
+    }
+  });
+});
 
 describe("stow session", session, () => {
   it("runs a round trip in one callback", async () => {

@@ -38,6 +38,7 @@ from .ready import (
 from .session import (
     DEFAULT_SESSION_MAX_BYTES,
     DEFAULT_SESSION_MAX_OBJECTS,
+    SESSION_GOGC,
     Session,
     build_child_env,
     open_session,
@@ -52,6 +53,7 @@ __all__ = [
     "DEFAULT_SESSION_MAX_OBJECTS",
     "READY_PROTOCOL_VERSION",
     "ResolvedBinary",
+    "SESSION_GOGC",
     "Session",
     "StowBinaryNotFoundError",
     "StowCapabilities",

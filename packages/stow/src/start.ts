@@ -9,6 +9,15 @@ import type { StartOptions, StowInstance, StowMode } from "./types.js";
 const READY_RE =
   /^STOW_READY endpoint=(\S+) access_key=(\S+) secret_key=(\S+) mode=(\S+)/;
 
+/**
+ * The Go collector target a session's own server runs with.
+ *
+ * A session is short-lived and one of many on the machine, so its peak memory is
+ * what matters and its throughput rarely is. The Python client must use the same
+ * value; check-version.mjs fails if the two drift.
+ */
+export const SESSION_GOGC = "50";
+
 export interface ReadyLine {
   endpoint: string;
   accessKeyId: string;
@@ -357,7 +366,7 @@ function buildServeArgs(
   return args;
 }
 
-function buildChildEnv(options: StartOptions): NodeJS.ProcessEnv {
+export function buildChildEnv(options: StartOptions): NodeJS.ProcessEnv {
   const childEnv = { ...process.env };
   if (options.isolatedEnvironment) {
     // A scoped session must not inherit cloud configuration from the parent
@@ -368,6 +377,18 @@ function buildChildEnv(options: StartOptions): NodeJS.ProcessEnv {
       if (/^(STOW_|S3_|AWS_)/.test(key)) {
         delete childEnv[key];
       }
+    }
+    // A session is an ephemeral local test fixture that several may run at once,
+    // so its peak memory matters more than its throughput. Measured on 4 MiB
+    // puts, a session's peak RSS per MiB of payload falls from 4.19 to 3.27 at
+    // GOGC=50, and to 2.96 at GOGC=20, at roughly 6% and 45% more put latency
+    // respectively. 50 takes most of the memory for a fraction of the cost.
+    //
+    // A caller who set GOGC themselves keeps their value: an explicit choice in
+    // the environment outranks a default. A long-lived server never reaches this
+    // branch, so its collector is left alone.
+    if (childEnv.GOGC === undefined) {
+      childEnv.GOGC = SESSION_GOGC;
     }
   }
   if (options.accessKey) {

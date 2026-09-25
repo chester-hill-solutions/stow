@@ -19,6 +19,7 @@ from stow_s3 import (
     DEFAULT_SESSION_MAX_BYTES,
     DEFAULT_SESSION_MAX_OBJECTS,
     READY_PROTOCOL_VERSION,
+    SESSION_GOGC,
     build_child_env,
     open_session,
     stow_binary_available,
@@ -28,6 +29,30 @@ from stow_s3 import (
 needs_binary = pytest.mark.skipif(
     not stow_binary_available(), reason="no stow binary is available"
 )
+
+
+def test_session_child_env_tightens_the_collector(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A session runs its own server with a tighter Go collector target."""
+    monkeypatch.delenv("GOGC", raising=False)
+    assert build_child_env()["GOGC"] == SESSION_GOGC
+    assert SESSION_GOGC != "100", "a session that matches the Go default is not tuning anything"
+
+
+def test_session_child_env_keeps_a_caller_chosen_collector(monkeypatch: pytest.MonkeyPatch) -> None:
+    """An explicit GOGC in the environment outranks the session default."""
+    monkeypatch.setenv("GOGC", "400")
+    assert build_child_env()["GOGC"] == "400"
+
+
+def test_session_child_env_still_strips_cloud_configuration(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Stripping ambient configuration must not take the collector target with it."""
+    monkeypatch.delenv("GOGC", raising=False)
+    monkeypatch.setenv("S3_ENDPOINT_URL", "https://elsewhere.example")
+    monkeypatch.setenv("AWS_PROFILE", "production")
+    env = build_child_env()
+    assert "S3_ENDPOINT_URL" not in env
+    assert "AWS_PROFILE" not in env
+    assert env["GOGC"] == SESSION_GOGC
 
 boto3 = pytest.importorskip("boto3")
 

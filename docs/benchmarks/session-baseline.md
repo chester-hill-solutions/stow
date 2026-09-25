@@ -160,8 +160,65 @@ a free win, and the two levers are independent rather than alternatives:
 |---|---:|---:|---:|
 | with the copy fix | 4.19 | 3.27 | 2.96 |
 
+**Sessions now set `GOGC=50` on their own server.** This is the one lever that
+works, and it is now applied rather than merely recommended. A session is an
+ephemeral local fixture and one of several on the machine, so its peak memory is
+what matters and its throughput rarely is; a long-lived `stow serve` is the
+opposite and is deliberately left alone. The setting goes on the session's child
+process only, so it cannot affect any other server, and a `GOGC` the caller set
+themselves wins over the default. Both clients use the same value and
+`check-version.mjs` fails if they drift.
+
+50 rather than 20 because it takes most of the benefit for a fraction of the
+cost: 4.19 to 3.27 against 4.19 to 2.96. The put-latency figures for these were
+taken on a busy machine and are not reliable enough to publish as a number; the
+multiplier is a memory measurement and was stable across every run.
+
 Streaming the write path would remove the live set itself rather than shaving
 headroom, and remains the only route to a multiplier near 1.
+
+### 1c. Letting the store adopt a caller's buffer made memory worse
+
+The 2x live floor in 1b can only be broken by letting the store take the
+caller's bytes as the stored object instead of copying them. That was built and
+measured: an unexported `putObjectOwned` on the engine, an optional capability a
+store satisfies structurally, and `MemoryStore.PutObjectOwned` retaining the
+caller's slice. Nothing new was exported, and a store without the capability
+still got a copy, so it was safe to try.
+
+It lost. Three sweep runs per build, the benchmark spawning the legacy server
+path so the collector target is the Go default in both builds:
+
+| GOGC | copying (`9316e4c`) | adopting | delta |
+|---|---:|---:|---:|
+| 100 | 4.48, 4.24, 4.18 | 4.66, 4.65, 4.64 | worse by 0.41 |
+| 50 | 3.26 | 3.37 | worse by 0.11 |
+| 20 | 2.90 | 3.04 | worse by 0.14 |
+
+The distributions do not overlap, and the sign is the same at every collector
+target. The change was reverted.
+
+**The copy was the thing keeping the collector honest.** At `GOGC=100` the heap
+is allowed to grow to roughly twice the live set before a collection, so what
+bounds peak RSS is how often the collector runs, not how much is live. The
+redundant full-size copy was allocation pressure that triggered extra
+collections, holding the heap below its ceiling. Remove the copy and the
+collector runs less often, so the heap grows further before each cycle and peak
+RSS rises. The shrinking penalty at lower `GOGC` fits: once the collector is
+already running frequently, there is less headroom for a removed copy to
+recover.
+
+This is the third measurement to contradict the plan's copy-count account, and
+the first from the opposite direction. Two earlier experiments found that
+removing copies did not help; this one found that removing one *hurt*.
+
+**The practical consequence is that the plan's phase-2 target cannot be reached by
+removing copies**, in either direction. Lowering the multiplier means either a
+lower collector target, which is a direct and measured trade, or not holding the
+body resident at all, which is the streaming question. Counting copies is not a
+lever. Jev put the value of the contract change at 1.38 of 4 before it was
+built, and it turned out to be negative; that is worth remembering next time a
+memory model has an obvious-looking fix attached to it.
 
 **2. The 64 MiB / 10,000 object default is wrong for an ephemeral agent
 session.** At the measured multiplier, a 64 MiB session budget implies roughly
