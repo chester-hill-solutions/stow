@@ -85,12 +85,40 @@ move it behind its own subpath package, which is a separate decision.
 - **Supported Python versions are 3.10 and newer**, which is what the plan's own
   API sketch requires: it uses `int | None` unions and builtin generic
   `Iterator[...]` annotations, both of which are 3.10 syntax.
-- The same binary distribution question applies. Platform wheels are viable
-  because the release pipeline already cross-compiles, but each platform wheel
-  becomes a separately versioned artifact that must track the Go binary.
-- `boto3` must stay an optional extra, as the plan already requires.
+- **The binary ships inside a platform wheel of the one distribution, decided
+  2026-09-25.** `pyproject.toml` force-includes the Go build output at
+  `stow_s3/_bin/stow`, and PyPI selects the matching wheel from its platform tag.
+  npm optional dependencies have no PyPI equivalent, and a wheel keeps the binary
+  in the same distribution and version as the Python code, so the existing
+  version skew gate extends to it without adding separately versioned artifacts
+  that must each track the Go binary. The alternatives rejected were
+  per-platform distributions with marker-conditional dependencies, an
+  install-time download, and a PEP 517 backend that builds Go during pip
+  install; each trades an offline, toolchain-free install for something worse.
+- `boto3` stays an optional extra. The session performs no S3 I/O and creates no
+  bucket, so nothing in the package needs boto3; it is only needed by
+  `Session.s3_client`, and a user with a different S3 library can build a client
+  from the endpoint and credentials directly.
+- **The clean-virtualenv experiment passes.** A wheel was built, installed into a
+  fresh virtualenv with no `STOW_BIN` and no `stow` on `PATH`, and a session was
+  opened and used for a real put/get/list round trip. The binary resolved from
+  `stow_s3/_bin/stow` with source `platform-wheel`, the reported limits were the
+  session defaults the server was actually enforcing, and the credentials
+  appeared on neither the readiness channel's sibling stream nor the logs.
 
-Not yet done: a clean-virtualenv install experiment.
+Two Python-specific findings from that work, both of which would have been
+expensive to rediscover:
+
+- **The readiness descriptor cannot be pinned to fd 3 the way Node pins it.**
+  `pass_fds` implies `close_fds`, and CPython closes inherited descriptors above
+  2 *after* `preexec_fn` runs, so a `dup2` onto fd 3 is undone before `exec` and
+  the child sees `EBADF`. Because the server already takes a descriptor number,
+  the fix is to pass whatever `os.pipe()` returned. That removes the need for
+  `preexec_fn` entirely, along with the thread-safety hazard it carries.
+- **A live child's output cannot be read from a pipe.** `read(n)` blocks until `n`
+  bytes arrive or the child exits, which for a running server is a deadlock, not
+  a slow read. Output goes to temporary files instead, so diagnostics are
+  readable while the server runs and survive it exiting.
 
 ## 6. What changed as a result of this spike
 
@@ -115,7 +143,18 @@ message: The stow server binary was not found (resolved to "stow"). It is
 
 ## 7. Next steps
 
-1. Add `@chs/stow-<platform>` optional packages and teach `resolveStowBinary` to
-   prefer a bundled platform binary over `PATH`.
-2. Run the clean-virtualenv Python experiment for the `stow-s3` distribution.
+1. ~~Add `@chs/stow-<platform>` optional packages and teach `resolveStowBinary` to
+   prefer a bundled platform binary over `PATH`.~~ Done.
+2. ~~Run the clean-virtualenv Python experiment for the `stow-s3`
+   distribution.~~ Done, and passing.
 3. Record the benchmark baseline, which remains the last open phase 0 item.
+
+Still open, and not part of what has landed:
+
+- The Python package is built and tested, but not published. Publishing needs a
+  PyPI account and a release pipeline that cross-compiles the binary per platform
+  before the wheel is built, because `pyproject.toml` force-includes the Go
+  build output.
+- No platform other than linux x64 has been measured, and the Python client's
+  own startup cost is unmeasured. The 15.4 ms ready p50 in the benchmark is the
+  server's, measured from the TypeScript client.
