@@ -50,6 +50,15 @@ export type {
 
 export { parseReadyLine } from "./start.js";
 export {
+  READY_PROTOCOL_VERSION,
+  StowProtocolError,
+  parseReadyMessage,
+} from "./ready.js";
+export type {
+  StowReady,
+  StowReadyCapabilities,
+} from "./ready.js";
+export {
   StowBinaryNotFoundError,
   resolveStowBinary,
   stowBinaryAvailable,

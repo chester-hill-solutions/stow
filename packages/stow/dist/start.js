@@ -1,6 +1,7 @@
 import { rm } from "node:fs/promises";
 import { spawn } from "node:child_process";
 import { StowBinaryNotFoundError, resolveStowBinary, stowBinaryAvailable } from "./bin.js";
+import { parseReadyMessage } from "./ready.js";
 import { createStowInstance, DEFAULT_REGION } from "./instance.js";
 const READY_RE = /^STOW_READY endpoint=(\S+) access_key=(\S+) secret_key=(\S+) mode=(\S+)/;
 export function parseReadyLine(line) {
@@ -21,10 +22,27 @@ export function parseReadyLine(line) {
 }
 const MAX_DIAGNOSTIC_BYTES = 64 * 1024;
 const STARTUP_TIMEOUT_MS = 10_000;
+// Descriptor the server writes the versioned readiness object to. Index 3 is the
+// first entry after stdin, stdout, and stderr.
+const READY_FD = 3;
+function toReadyLine(line) {
+    const message = parseReadyMessage(line);
+    return {
+        endpoint: message.endpoint,
+        accessKeyId: message.accessKeyId,
+        secretAccessKey: message.secretAccessKey,
+        mode: message.mode,
+    };
+}
 async function waitForReady(child, timeoutMs = 10_000) {
+    const descriptor = child.stdio[READY_FD];
+    const readyStream = descriptor && typeof descriptor.on === "function"
+        ? descriptor
+        : undefined;
     return new Promise((resolve, reject) => {
         let stdoutBuffer = "";
         let stderrBuffer = "";
+        let readyBuffer = "";
         let settled = false;
         const timer = setTimeout(() => {
             if (settled) {
@@ -52,11 +70,31 @@ async function waitForReady(child, timeoutMs = 10_000) {
             cleanup();
             reject(new Error(`stow exited before STOW_READY (code=${code ?? "null"}, signal=${signal ?? "null"}).\nstdout:\n${stdoutBuffer}\nstderr:\n${stderrBuffer}`));
         };
+        const onReadyData = (chunk) => {
+            if (settled) {
+                return;
+            }
+            readyBuffer = (readyBuffer + chunk.toString("utf8")).slice(-MAX_DIAGNOSTIC_BYTES);
+            for (const line of readyBuffer.split(/\r?\n/)) {
+                if (line.trim().length === 0) {
+                    continue;
+                }
+                if (settled) {
+                    return;
+                }
+                settled = true;
+                cleanup(false);
+                resolve(toReadyLine(line));
+                return;
+            }
+        };
         const onStdout = (chunk) => {
             if (settled) {
                 return;
             }
             stdoutBuffer = (stdoutBuffer + chunk.toString("utf8")).slice(-MAX_DIAGNOSTIC_BYTES);
+            // Fallback for a server that ignores --ready-fd and writes the legacy
+            // line instead.
             for (const line of stdoutBuffer.split(/\r?\n/)) {
                 const ready = parseReadyLine(line);
                 if (!ready) {
@@ -82,12 +120,14 @@ async function waitForReady(child, timeoutMs = 10_000) {
             if (removeOutput) {
                 child.stdout?.off("data", onStdout);
                 child.stderr?.off("data", onStderr);
+                readyStream?.off("data", onReadyData);
             }
             child.off("error", onError);
             child.off("exit", onExit);
         };
         child.stdout?.on("data", onStdout);
         child.stderr?.on("data", onStderr);
+        readyStream?.on("data", onReadyData);
         child.on("error", onError);
         child.on("exit", onExit);
     });
@@ -211,6 +251,15 @@ function buildServeArgs(options, dataDir, port, host) {
     if (options.allowLiveWrites) {
         args.push("--allow-live-writes");
     }
+    if (options.maxBytes !== undefined) {
+        args.push("--max-bytes", String(options.maxBytes));
+    }
+    if (options.maxObjects !== undefined) {
+        args.push("--max-objects", String(options.maxObjects));
+    }
+    // Ask for the versioned readiness channel. The server then keeps credentials
+    // off stdout and writes them to this descriptor instead.
+    args.push("--ready-fd", String(READY_FD));
     return args;
 }
 function buildChildEnv(options) {
@@ -249,7 +298,8 @@ export async function startStow(options = {}) {
         throw new StowBinaryNotFoundError(binary);
     }
     const child = spawn(binary, buildServeArgs(options, dataDir, port, host), {
-        stdio: ["ignore", "pipe", "pipe"],
+        // The fourth entry is the readiness descriptor the server writes to.
+        stdio: ["ignore", "pipe", "pipe", "pipe"],
         env: buildChildEnv(options),
     });
     try {

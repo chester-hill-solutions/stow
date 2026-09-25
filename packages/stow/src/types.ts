@@ -30,6 +30,10 @@ export interface StartOptions {
   cacheMaxObjects?: number;
   cacheTtlSeconds?: number;
   allowLiveWrites?: boolean;
+  /** Maximum stored bytes enforced on every request. Omit to leave the server unlimited. */
+  maxBytes?: number;
+  /** Maximum stored object count enforced on every request. Omit to leave the server unlimited. */
+  maxObjects?: number;
 }
 
 type AwsSdkV3ConfigBase = {

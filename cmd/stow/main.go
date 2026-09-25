@@ -14,11 +14,87 @@ import (
 	"time"
 
 	"github.com/chester-hill-solutions/stow/internal/auth"
+	"github.com/chester-hill-solutions/stow/internal/ready"
 	"github.com/chester-hill-solutions/stow/internal/runthrough"
 	"github.com/chester-hill-solutions/stow/internal/s3api"
 	"github.com/chester-hill-solutions/stow/internal/storage"
 	"github.com/chester-hill-solutions/stow/internal/storage/fs"
+	"github.com/chester-hill-solutions/stow/internal/version"
 )
+
+// readyDetails is what the readiness announcement needs to describe the server.
+type readyDetails struct {
+	endpoint string
+	mode     string
+	backend  string
+	limits   nativeStorageLimits
+	creds    auth.Credentials
+	banner   string
+}
+
+// announceStartup prints the human-readable startup output and then publishes
+// readiness. With a ready descriptor the versioned JSON object is written to it
+// and the legacy STOW_READY line is deliberately not printed, so credentials
+// stay off stdout for a client that asked for the versioned channel.
+func announceStartup(readyFd int, details readyDetails) {
+	fmt.Print(details.banner)
+	fmt.Printf("stow listening on %s (mode=%s)\n", details.endpoint, details.mode)
+	if readyFd >= 0 {
+		writeReadyMessage(readyFd, details)
+		return
+	}
+	fmt.Printf(
+		"STOW_READY endpoint=%s access_key=%s secret_key=%s mode=%s\n",
+		details.endpoint,
+		details.creds.AccessKeyID,
+		details.creds.SecretAccessKey,
+		details.mode,
+	)
+}
+
+func writeReadyMessage(fd int, details readyDetails) {
+	message := ready.New(ready.Input{
+		Endpoint:      details.endpoint,
+		Region:        auth.DefaultRegion,
+		AccessKeyID:   details.creds.AccessKeyID,
+		SecretKey:     details.creds.SecretAccessKey,
+		Mode:          details.mode,
+		Backend:       details.backend,
+		BinaryVersion: version.Version,
+		Capabilities: ready.Capabilities{
+			Persistent:        details.backend == "filesystem",
+			Multipart:         true,
+			Upstream:          details.mode == string(runthrough.ModeRunThrough),
+			ConditionalWrites: true,
+			PresignedURLs:     true,
+			MaxBytes:          ready.ReportedLimit(details.limits.bytes()),
+			MaxObjects:        ready.ReportedLimit(details.limits.objects()),
+			MaxRequestBytes:   s3api.DefaultMaxRequestBytes,
+		},
+	})
+	if err := ready.WriteToFd(fd, message); err != nil {
+		log.Fatalf("write ready message: %v", err)
+	}
+}
+
+// openLocalStore creates the authoritative local store for the selected
+// backend. Backend selection is a startup decision, so an unknown value or a
+// failed open is fatal rather than an error a caller can recover from.
+func openLocalStore(backend, dataDir string) storage.Store {
+	switch backend {
+	case "filesystem":
+		store, err := fs.NewFilesystemStore(dataDir)
+		if err != nil {
+			log.Fatalf("open store: %v", err)
+		}
+		return store
+	case "memory":
+		return storage.NewMemoryStore()
+	default:
+		log.Fatalf("invalid --backend %q (want filesystem or memory)", backend)
+		return nil
+	}
+}
 
 func main() {
 	if len(os.Args) < 2 {
@@ -115,6 +191,7 @@ func serve(args []string) {
 	cacheTTL := flags.Duration("cache-ttl", -1, "Separate cache entry lifetime (0 disables expiry; -1 uses environment)")
 	maxBytes := flags.Int64("max-bytes", 0, "Maximum stored object bytes enforced on every native S3 request (0 disables the limit)")
 	maxObjects := flags.Int64("max-objects", 0, "Maximum stored object count enforced on every native S3 request (0 disables the limit)")
+	readyFd := flags.Int("ready-fd", -1, "Write one machine-readable readiness object to this file descriptor instead of the STOW_READY line on stdout")
 	flags.Parse(args)
 	*accessKey, *secretKey = resolveLocalCredentials(*accessKey, *secretKey)
 	rtCfg, cfgErr := runthrough.ConfigFromEnvChecked()
@@ -158,32 +235,12 @@ func serve(args []string) {
 		}
 	}
 
-	var localStore storage.Store
-	var err error
-	switch *backend {
-	case "filesystem":
-		localStore, err = fs.NewFilesystemStore(localDataDir)
-	case "memory":
-		localStore = storage.NewMemoryStore()
-	default:
-		log.Fatalf("invalid --backend %q (want filesystem or memory)", *backend)
-	}
-	if err != nil {
-		log.Fatalf("open store: %v", err)
-	}
+	localStore := openLocalStore(*backend, localDataDir)
 
 	var store storage.Store = localStore
 	var adapter *runthrough.Adapter
 	if mode == runthrough.ModeRunThrough {
-		var cacheStore storage.Store
-		if *backend == "filesystem" {
-			cacheStore, err = fs.NewFilesystemStore(rtCfg.CacheDir)
-		} else {
-			cacheStore = storage.NewMemoryStore()
-		}
-		if err != nil {
-			log.Fatalf("open cache store: %v", err)
-		}
+		cacheStore := openLocalStore(*backend, rtCfg.CacheDir)
 		upstreamClient, err := runthrough.NewS3Client(rtCfg.Upstream)
 		if err != nil {
 			log.Fatalf("upstream client: %v", err)
@@ -198,13 +255,12 @@ func serve(args []string) {
 		}
 		store = adapter
 	}
-	store, err = bindNativeRuntimeStore(store, *backend, adapter, nativeStorageLimits{
-		maxBytes:   *maxBytes,
-		maxObjects: *maxObjects,
-	})
+	storeLimits := nativeStorageLimits{maxBytes: *maxBytes, maxObjects: *maxObjects}
+	boundStore, err := bindNativeRuntimeStore(store, *backend, adapter, storeLimits)
 	if err != nil {
 		log.Fatal(err)
 	}
+	store = boundStore
 
 	retryCancel, retryDone := startOutboxRetryWorker(adapter)
 	defer retryCancel()
@@ -267,10 +323,14 @@ func serve(args []string) {
 	}
 
 	endpoint := "http://" + addr
-	modeStr := string(mode)
-	fmt.Print(runthrough.StartupBanner(rtCfg, mode))
-	fmt.Printf("stow listening on %s (mode=%s)\n", endpoint, modeStr)
-	fmt.Printf("STOW_READY endpoint=%s access_key=%s secret_key=%s mode=%s\n", endpoint, creds.AccessKeyID, creds.SecretAccessKey, modeStr)
+	announceStartup(*readyFd, readyDetails{
+		endpoint: endpoint,
+		mode:     string(mode),
+		backend:  *backend,
+		limits:   storeLimits,
+		creds:    creds,
+		banner:   runthrough.StartupBanner(rtCfg, mode),
+	})
 
 	sigCh := make(chan os.Signal, 1)
 	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)

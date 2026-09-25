@@ -5,6 +5,8 @@ export { loadNodeWasmHost, type NodeWasmHost, } from "./node-wasm-host.js";
 export type { EmbeddedBucket, EmbeddedCapabilities, EmbeddedHost, EmbeddedListOptions, EmbeddedObject, EmbeddedObjectPage, EmbeddedPutOptions, EmbeddedStowOptions, EmbeddedUsage, } from "./embedded.js";
 export type { AwsSdkV3ConfigOptions, ConnectOptions, ObjectSnapshot, PutFixtureOptions, StartOptions, StowConnection, StowInstance, StowMode, UpstreamConfig, } from "./types.js";
 export { parseReadyLine } from "./start.js";
+export { READY_PROTOCOL_VERSION, StowProtocolError, parseReadyMessage, } from "./ready.js";
+export type { StowReady, StowReadyCapabilities, } from "./ready.js";
 export { StowBinaryNotFoundError, resolveStowBinary, stowBinaryAvailable, } from "./bin.js";
 export { upstreamFromEnv } from "./upstream.js";
 export declare const Stow: {

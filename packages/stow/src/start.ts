@@ -1,6 +1,8 @@
 import { rm } from "node:fs/promises";
 import { spawn, type ChildProcess } from "node:child_process";
+import type { Readable } from "node:stream";
 import { StowBinaryNotFoundError, resolveStowBinary, stowBinaryAvailable } from "./bin.js";
+import { parseReadyMessage } from "./ready.js";
 import { createStowInstance, DEFAULT_REGION } from "./instance.js";
 import type { StartOptions, StowInstance, StowMode } from "./types.js";
 
@@ -34,13 +36,32 @@ export function parseReadyLine(line: string): ReadyLine | null {
 const MAX_DIAGNOSTIC_BYTES = 64 * 1024;
 const STARTUP_TIMEOUT_MS = 10_000;
 
+// Descriptor the server writes the versioned readiness object to. Index 3 is the
+// first entry after stdin, stdout, and stderr.
+const READY_FD = 3;
+
+function toReadyLine(line: string): ReadyLine {
+  const message = parseReadyMessage(line);
+  return {
+    endpoint: message.endpoint,
+    accessKeyId: message.accessKeyId,
+    secretAccessKey: message.secretAccessKey,
+    mode: message.mode as StowMode,
+  };
+}
+
 async function waitForReady(
   child: ChildProcess,
   timeoutMs = 10_000,
 ): Promise<ReadyLine> {
+  const descriptor = child.stdio[READY_FD];
+  const readyStream = descriptor && typeof (descriptor as Readable).on === "function"
+    ? (descriptor as Readable)
+    : undefined;
   return new Promise((resolve, reject) => {
     let stdoutBuffer = "";
     let stderrBuffer = "";
+    let readyBuffer = "";
     let settled = false;
 
     const timer = setTimeout(() => {
@@ -80,11 +101,32 @@ async function waitForReady(
       );
     };
 
+    const onReadyData = (chunk: Buffer) => {
+      if (settled) {
+        return;
+      }
+      readyBuffer = (readyBuffer + chunk.toString("utf8")).slice(-MAX_DIAGNOSTIC_BYTES);
+      for (const line of readyBuffer.split(/\r?\n/)) {
+        if (line.trim().length === 0) {
+          continue;
+        }
+        if (settled) {
+          return;
+        }
+        settled = true;
+        cleanup(false);
+        resolve(toReadyLine(line));
+        return;
+      }
+    };
+
     const onStdout = (chunk: Buffer) => {
       if (settled) {
         return;
       }
       stdoutBuffer = (stdoutBuffer + chunk.toString("utf8")).slice(-MAX_DIAGNOSTIC_BYTES);
+      // Fallback for a server that ignores --ready-fd and writes the legacy
+      // line instead.
       for (const line of stdoutBuffer.split(/\r?\n/)) {
         const ready = parseReadyLine(line);
         if (!ready) {
@@ -112,6 +154,7 @@ async function waitForReady(
       if (removeOutput) {
         child.stdout?.off("data", onStdout);
         child.stderr?.off("data", onStderr);
+        readyStream?.off("data", onReadyData);
       }
       child.off("error", onError);
       child.off("exit", onExit);
@@ -119,6 +162,7 @@ async function waitForReady(
 
     child.stdout?.on("data", onStdout);
     child.stderr?.on("data", onStderr);
+    readyStream?.on("data", onReadyData);
     child.on("error", onError);
     child.on("exit", onExit);
   });
@@ -260,6 +304,15 @@ function buildServeArgs(
   if (options.allowLiveWrites) {
     args.push("--allow-live-writes");
   }
+  if (options.maxBytes !== undefined) {
+    args.push("--max-bytes", String(options.maxBytes));
+  }
+  if (options.maxObjects !== undefined) {
+    args.push("--max-objects", String(options.maxObjects));
+  }
+  // Ask for the versioned readiness channel. The server then keeps credentials
+  // off stdout and writes them to this descriptor instead.
+  args.push("--ready-fd", String(READY_FD));
   return args;
 }
 
@@ -313,7 +366,8 @@ export async function startStow(options: StartOptions = {}): Promise<StowInstanc
     throw new StowBinaryNotFoundError(binary);
   }
   const child = spawn(binary, buildServeArgs(options, dataDir, port, host), {
-    stdio: ["ignore", "pipe", "pipe"],
+    // The fourth entry is the readiness descriptor the server writes to.
+    stdio: ["ignore", "pipe", "pipe", "pipe"],
     env: buildChildEnv(options),
   });
 
