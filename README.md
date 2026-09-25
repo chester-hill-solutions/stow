@@ -428,6 +428,14 @@ backend, the TypeScript client, the Python client, and the WebAssembly bridge.
 `make standards` runs the quality ratchets; these are floors, so an improvement is
 reported rather than failed and a regression fails the build.
 
+The Go version is pinned exactly, in `.go-version` and in the `toolchain` line of
+`go.mod`. The WebAssembly artifact in `packages/stow-s3/dist` is committed and
+`check-generated` rebuilds and diffs it, and a build from a different patch
+release does not reproduce it byte for byte. Nothing has to be installed by hand:
+the `toolchain` directive makes the Go command fetch the pinned version on
+demand. To move to a new patch, change both files, then rebuild and commit the
+artifact.
+
 The repository contains the Go server, storage backends, runtime packages, WebAssembly bridge, TypeScript package, Python package, and shared conformance tests.
 
 Measure session memory with the benchmark. It is deliberately not part of
