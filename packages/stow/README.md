@@ -37,6 +37,22 @@ await bucket.stop();
 
 Both connection helpers also accept an optional `sessionToken` or credential `provider` for temporary AWS credentials.
 
+### Embedded host profile
+
+`EmbeddedStow` is a host-neutral typed wrapper for the memory-only WASM bridge. The host loads the `js/wasm` artifact and provides a synchronous `call(request)` method; the wrapper handles object bytes, metadata, capabilities, quotas, reset, and close:
+
+```ts
+import { EmbeddedStow } from "@chs/stow/embedded";
+
+const embedded = EmbeddedStow.open(wasmHost, { maxBytes: 10_000_000 });
+embedded.createBucket("assets");
+embedded.putObject("assets", "hello.txt", new TextEncoder().encode("hello"));
+const object = embedded.getObject("assets", "hello.txt");
+embedded.close();
+```
+
+The repository test uses the same bridge from Node via `make test-wasm`.
+
 CLI equivalent:
 
 ```sh

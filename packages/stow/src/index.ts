@@ -11,6 +11,21 @@ import type {
 } from "./types.js";
 import { upstreamFromEnv } from "./upstream.js";
 
+export {
+  EmbeddedStow,
+  EmbeddedStowError,
+} from "./embedded.js";
+export type {
+  EmbeddedBucket,
+  EmbeddedCapabilities,
+  EmbeddedHost,
+  EmbeddedListOptions,
+  EmbeddedObject,
+  EmbeddedPutOptions,
+  EmbeddedStowOptions,
+  EmbeddedUsage,
+} from "./embedded.js";
+
 export type {
   AwsSdkV3ConfigOptions,
   ConnectOptions,
