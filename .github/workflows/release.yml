@@ -242,7 +242,7 @@ jobs:
           set -euo pipefail
           shopt -s nullglob
           expected_version="${GITHUB_REF_NAME#v}"
-          for archive in dist/stow-s3-*.tar.gz; do
+          for archive in dist/stow-*.tar.gz; do
             node scripts/pack-platform-package.mjs "$archive" dist/npm-platform
           done
           mapfile -t platform_tarballs < <(ls dist/npm-platform/*.tgz)
@@ -259,7 +259,12 @@ jobs:
                 throw new Error(`Platform package version skew: ${metadata.name}@${metadata.version}`);
               }
             ' "$metadata" "$expected_version"
-            tar -tzf "$tarball" | grep -Fxq package/bin/stow-s3
+            # The listing is captured rather than piped into grep -q. These
+            # tarballs carry an 11 MB binary, so tar is still skipping it when
+            # grep has already matched the first entry and exited; it takes a
+            # SIGPIPE, and `set -o pipefail` turns that into a failed release.
+            tar -tzf "$tarball" > "$RUNNER_TEMP/platform-tarball-files.txt"
+            grep -Fxq package/bin/stow-s3 "$RUNNER_TEMP/platform-tarball-files.txt"
           done
           ls -l dist/npm-platform
 
