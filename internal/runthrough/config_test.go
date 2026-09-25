@@ -162,6 +162,18 @@ func TestConfigFromEnv_CacheLimits(t *testing.T) {
 	}
 }
 
+func TestConfigFromEnv_ZeroTTLDisablesExpiry(t *testing.T) {
+	os.Clearenv()
+	t.Setenv("STOW_CACHE_TTL", "0")
+	cfg, err := runthrough.ConfigFromEnvChecked()
+	if err != nil {
+		t.Fatalf("checked config: %v", err)
+	}
+	if cfg.Cache.TTL != 0 {
+		t.Fatalf("cache TTL = %s, want disabled", cfg.Cache.TTL)
+	}
+}
+
 func TestConfigFromEnvCheckedRejectsInvalidCacheLimit(t *testing.T) {
 	os.Clearenv()
 	t.Setenv("STOW_CACHE_MAX_BYTES", "-1")

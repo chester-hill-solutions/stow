@@ -176,8 +176,18 @@ func applyCacheEnv(cfg *Config) error {
 		*item.field = value
 	}
 	if raw, ok := os.LookupEnv("STOW_CACHE_TTL"); ok && strings.TrimSpace(raw) != "" {
-		ttl, err := time.ParseDuration(strings.TrimSpace(raw))
-		if err != nil || ttl < 0 {
+		value := strings.TrimSpace(raw)
+		var ttl time.Duration
+		if value == "0" {
+			ttl = 0
+		} else {
+			parsed, err := time.ParseDuration(value)
+			if err != nil {
+				return fmt.Errorf("invalid STOW_CACHE_TTL %q: expected a non-negative duration", raw)
+			}
+			ttl = parsed
+		}
+		if ttl < 0 {
 			return fmt.Errorf("invalid STOW_CACHE_TTL %q: expected a non-negative duration", raw)
 		}
 		cfg.Cache.TTL = ttl
