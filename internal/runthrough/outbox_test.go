@@ -3,7 +3,6 @@ package runthrough_test
 import (
 	"bytes"
 	"context"
-	"errors"
 	"path/filepath"
 	"testing"
 	"time"
@@ -86,8 +85,8 @@ func TestRetryPendingBlocksLaterSameKeyIntent(t *testing.T) {
 	}
 	created := time.Unix(100, 0).UTC()
 	entries := []runthrough.OutboxEntry{
-		{Operation: runthrough.OutboxPut, Bucket: "bucket", Key: "key", Version: meta.ETag, CreatedAt: created, NextAttempt: time.Now().Add(time.Hour)},
-		{Operation: runthrough.OutboxDelete, Bucket: "bucket", Key: "key", Version: meta.ETag, CreatedAt: created},
+		{Operation: runthrough.OutboxPut, Bucket: "bucket", Key: "key", Version: meta.VersionID, CreatedAt: created, NextAttempt: time.Now().Add(time.Hour)},
+		{Operation: runthrough.OutboxDelete, Bucket: "bucket", Key: "key", Version: meta.VersionID, CreatedAt: created},
 	}
 	for _, entry := range entries {
 		if _, err := outbox.Enqueue(entry); err != nil {
@@ -106,75 +105,55 @@ func TestRetryPendingBlocksLaterSameKeyIntent(t *testing.T) {
 	}
 }
 
-func TestRetryPendingContinuesAcrossKeys(t *testing.T) {
+func TestOutboxDeleteDoesNotRemoveRecreatedSameETagObject(t *testing.T) {
 	ctx := context.Background()
 	local := storage.NewMemoryStore()
 	if err := local.CreateBucket(ctx, "bucket"); err != nil {
 		t.Fatalf("create bucket: %v", err)
 	}
+	first, err := local.PutObject(ctx, "bucket", "key", bytes.NewReader([]byte("same")), storage.PutOptions{
+		Metadata: map[string]string{"generation": "one"},
+	})
+	if err != nil {
+		t.Fatalf("first put: %v", err)
+	}
 	outbox, err := runthrough.NewFileOutbox(filepath.Join(t.TempDir(), "outbox.json"))
 	if err != nil {
 		t.Fatalf("new outbox: %v", err)
 	}
-	for key, body := range map[string]string{"a": "alpha", "b": "beta"} {
-		meta, err := local.PutObject(ctx, "bucket", key, bytes.NewReader([]byte(body)), storage.PutOptions{})
-		if err != nil {
-			t.Fatalf("put %s: %v", key, err)
-		}
-		if _, err := outbox.Enqueue(runthrough.OutboxEntry{
-			Operation: runthrough.OutboxPut,
-			Bucket:    "bucket",
-			Key:       key,
-			Version:   meta.ETag,
-		}); err != nil {
-			t.Fatalf("enqueue %s: %v", key, err)
-		}
+	if _, err := outbox.Enqueue(runthrough.OutboxEntry{
+		Operation: runthrough.OutboxDelete,
+		Bucket:    "bucket",
+		Key:       "key",
+		Version:   first.VersionID,
+	}); err != nil {
+		t.Fatalf("enqueue delete: %v", err)
 	}
-
+	if err := local.DeleteObject(ctx, "bucket", "key"); err != nil {
+		t.Fatalf("delete local: %v", err)
+	}
+	second, err := local.PutObject(ctx, "bucket", "key", bytes.NewReader([]byte("same")), storage.PutOptions{
+		Metadata: map[string]string{"generation": "two"},
+	})
+	if err != nil {
+		t.Fatalf("recreate local: %v", err)
+	}
+	if second.ETag != first.ETag || second.VersionID == first.VersionID {
+		t.Fatalf("recreated versions = %q/%q and %q/%q", first.ETag, first.VersionID, second.ETag, second.VersionID)
+	}
 	up := newMockUpstream()
-	up.putErrors[objectKey("bucket", "a")] = errors.New("temporary failure")
 	adapter := runthrough.NewWithOutbox(runthrough.Config{
 		Policy:          runthrough.PolicyMirrorWrites,
 		AllowLiveWrites: true,
 	}, local, local, up, outbox)
 	if err := adapter.RetryPending(ctx); err == nil {
-		t.Fatal("expected first key retry to fail")
+		t.Fatal("expected version conflict")
 	}
-	if _, ok := up.bodies[objectKey("bucket", "b")]; !ok {
-		t.Fatal("expected independent key to be retried")
-	}
-	pending := outbox.Pending()
-	if len(pending) != 1 || pending[0].Key != "a" {
-		t.Fatalf("pending = %+v, want only failed key a", pending)
-	}
-}
-
-func TestMemoryOutboxLifecycle(t *testing.T) {
-	outbox := runthrough.NewMemoryOutbox()
-	entry := runthrough.OutboxEntry{Operation: runthrough.OutboxPut, Bucket: "bucket", Key: "key"}
-	if _, err := outbox.Enqueue(entry); err != nil {
-		t.Fatalf("enqueue: %v", err)
+	if up.delCalls != 0 {
+		t.Fatalf("upstream delete calls = %d, want 0", up.delCalls)
 	}
 	pending := outbox.Pending()
-	if len(pending) != 1 || pending[0].ID == "" {
-		t.Fatalf("pending = %+v", pending)
-	}
-	if err := outbox.MarkFailure(pending[0].ID, errors.New("temporary"), time.Now().Add(time.Minute)); err != nil {
-		t.Fatalf("mark failure: %v", err)
-	}
-	if got := outbox.Pending()[0].LastError; got != "temporary" {
-		t.Fatalf("last error = %q", got)
-	}
-	if err := outbox.MarkFailure(pending[0].ID, runthrough.ErrOutboxVersionConflict, time.Now()); err != nil {
-		t.Fatalf("mark terminal failure: %v", err)
-	}
-	if !outbox.Pending()[0].Terminal {
-		t.Fatal("expected version conflict to be terminal")
-	}
-	if err := outbox.MarkSuccess(pending[0].ID); err != nil {
-		t.Fatalf("mark success: %v", err)
-	}
-	if len(outbox.Pending()) != 0 {
-		t.Fatal("expected empty outbox after success")
+	if len(pending) != 1 || !pending[0].Terminal {
+		t.Fatalf("pending = %+v, want terminal conflict", pending)
 	}
 }

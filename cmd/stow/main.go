@@ -48,6 +48,15 @@ func resolveLocalCredentials(accessKey, secretKey string) (string, string) {
 	return accessKey, secretKey
 }
 
+func applyCacheLimits(config *runthrough.Config, maxBytes, maxObjects int64) error {
+	if maxBytes < 0 || maxObjects < 0 {
+		return fmt.Errorf("cache limits must not be negative")
+	}
+	config.Cache.MaxBytes = maxBytes
+	config.Cache.MaxObjects = maxObjects
+	return nil
+}
+
 func serve(args []string) {
 	fs := flag.NewFlagSet("serve", flag.ExitOnError)
 	port := fs.Int("port", 9000, "HTTP listen port (0 = ephemeral)")
@@ -65,16 +74,13 @@ func serve(args []string) {
 	cacheMaxObjects := fs.Int64("cache-max-objects", 0, "Maximum separate cache objects (0 disables the limit)")
 	fs.Parse(args)
 	*accessKey, *secretKey = resolveLocalCredentials(*accessKey, *secretKey)
-
 	rtCfg, cfgErr := runthrough.ConfigFromEnvChecked()
 	if cfgErr != nil {
 		log.Fatal(cfgErr)
 	}
-	if *cacheMaxBytes < 0 || *cacheMaxObjects < 0 {
-		log.Fatal("cache limits must not be negative")
+	if err := applyCacheLimits(&rtCfg, *cacheMaxBytes, *cacheMaxObjects); err != nil {
+		log.Fatal(err)
 	}
-	rtCfg.Cache.MaxBytes = *cacheMaxBytes
-	rtCfg.Cache.MaxObjects = *cacheMaxObjects
 	mode := runthrough.DetectMode()
 	switch strings.ToLower(strings.TrimSpace(*modeFlag)) {
 	case "auto", "":

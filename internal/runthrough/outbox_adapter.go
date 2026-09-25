@@ -14,10 +14,26 @@ func (a *Adapter) localVersion(ctx context.Context, bucket, key string) string {
 	if err != nil {
 		return ""
 	}
+	return objectVersion(meta)
+}
+
+func objectVersion(meta *storage.ObjectMeta) string {
+	if meta == nil {
+		return ""
+	}
+	if meta.VersionID != "" {
+		return meta.VersionID
+	}
 	return meta.ETag
 }
 
 func (a *Adapter) enqueueIntent(ctx context.Context, operation OutboxOperation, bucket, key string, versions ...string) (OutboxEntry, error) {
+	unlock := a.outboxLocks.lock(outboxIdentity(bucket, key))
+	defer unlock()
+	return a.enqueueIntentLocked(ctx, operation, bucket, key, versions...)
+}
+
+func (a *Adapter) enqueueIntentLocked(ctx context.Context, operation OutboxOperation, bucket, key string, versions ...string) (OutboxEntry, error) {
 	version := ""
 	if len(versions) > 0 {
 		version = versions[0]
@@ -27,7 +43,7 @@ func (a *Adapter) enqueueIntent(ctx context.Context, operation OutboxOperation, 
 		if err != nil {
 			return OutboxEntry{}, err
 		}
-		version = meta.ETag
+		version = objectVersion(meta)
 	}
 	entry := OutboxEntry{Operation: operation, Bucket: bucket, Key: key, Version: version, CreatedAt: time.Now().UTC()}
 	return a.outbox.Enqueue(entry)
@@ -40,7 +56,7 @@ func (a *Adapter) propagateEntry(ctx context.Context, entry OutboxEntry) error {
 		if err != nil {
 			return err
 		}
-		if entry.Version != "" && entry.Version != meta.ETag {
+		if entry.Version != "" && entry.Version != objectVersion(meta) {
 			_ = rc.Close()
 			return ErrOutboxVersionConflict
 		}
@@ -52,7 +68,7 @@ func (a *Adapter) propagateEntry(ctx context.Context, entry OutboxEntry) error {
 	case OutboxDelete:
 		if entry.Version != "" {
 			current, err := a.local.HeadObject(ctx, entry.Bucket, entry.Key)
-			if err == nil && current.ETag != entry.Version {
+			if err == nil && objectVersion(current) != entry.Version {
 				return ErrOutboxVersionConflict
 			}
 			if err != nil && !errors.Is(err, storage.ErrObjectNotFound) {
@@ -61,16 +77,38 @@ func (a *Adapter) propagateEntry(ctx context.Context, entry OutboxEntry) error {
 		}
 		return a.upstream.DeleteObject(ctx, entry.Bucket, entry.Key)
 	default:
-		return fmt.Errorf("unsupported outbox operation %q", entry.Operation)
+		return NewDeterministicUpstreamError(fmt.Errorf("unsupported outbox operation %q", entry.Operation))
 	}
 }
 
 func (a *Adapter) completeIntent(ctx context.Context, entry OutboxEntry) error {
-	if err := a.propagateEntry(ctx, entry); err != nil {
-		_ = a.outbox.MarkFailure(entry.ID, err, time.Now().Add(outboxRetryDelay(entry.Attempts)))
+	unlock := a.outboxLocks.lock(outboxIdentity(entry.Bucket, entry.Key))
+	defer unlock()
+	return a.completeIntentWithScheduleLocked(ctx, entry, true)
+}
+
+func (a *Adapter) completeIntentLocked(ctx context.Context, entry OutboxEntry) error {
+	return a.completeIntentWithScheduleLocked(ctx, entry, false)
+}
+
+func (a *Adapter) completeIntentWithScheduleLocked(ctx context.Context, entry OutboxEntry, respectSchedule bool) error {
+	pending := a.outbox.Pending()
+	current, ok := findPendingEntry(pending, entry.ID)
+	if !ok || current.Terminal || (respectSchedule && !current.NextAttempt.IsZero() && current.NextAttempt.After(time.Now())) || !isFirstPendingForKey(pending, current) {
+		return nil
+	}
+	if err := a.propagateEntry(ctx, current); err != nil {
+		retryAt := time.Time{}
+		if IsTransientRetry(err) {
+			retryAt = time.Now().Add(outboxRetryDelay(current.Attempts))
+		}
+		markErr := a.outbox.MarkFailure(current.ID, err, retryAt)
+		if markErr != nil {
+			return errors.Join(err, markErr)
+		}
 		return err
 	}
-	return a.outbox.MarkSuccess(entry.ID)
+	return a.outbox.MarkSuccess(current.ID)
 }
 
 func outboxRetryDelay(attempts int) time.Duration {
@@ -90,28 +128,78 @@ func (a *Adapter) RetryPending(ctx context.Context) error {
 	blocked := make(map[string]bool)
 	var firstErr error
 	for _, entry := range a.outbox.Pending() {
-		key := entry.Bucket + "\x00" + entry.Key
+		key := outboxIdentity(entry.Bucket, entry.Key)
 		if blocked[key] {
 			continue
 		}
-		if entry.Terminal {
+		block, err := a.retryEntry(ctx, entry, now)
+		if block {
 			blocked[key] = true
-			continue
 		}
-		if !entry.NextAttempt.IsZero() && entry.NextAttempt.After(now) {
-			blocked[key] = true
-			continue
-		}
-		if !a.upstreamEnabled(entry.Bucket) {
-			blocked[key] = true
-			continue
-		}
-		if err := a.completeIntent(ctx, entry); err != nil {
-			blocked[key] = true
-			if firstErr == nil {
-				firstErr = err
-			}
+		if err != nil && firstErr == nil {
+			firstErr = err
 		}
 	}
 	return firstErr
+}
+
+func (a *Adapter) retryEntry(ctx context.Context, entry OutboxEntry, now time.Time) (bool, error) {
+	if entry.Terminal || !outboxEntryDue(entry, now) || !a.upstreamEnabled(entry.Bucket) {
+		return true, nil
+	}
+	key := outboxIdentity(entry.Bucket, entry.Key)
+	unlock := a.outboxLocks.lock(key)
+	defer unlock()
+
+	pending := a.outbox.Pending()
+	current, ok := findPendingEntry(pending, entry.ID)
+	if !ok {
+		return false, nil
+	}
+	if current.Terminal || !outboxEntryDue(current, now) || !isFirstPendingForKey(pending, current) {
+		return true, nil
+	}
+	if err := a.completeIntentLocked(ctx, current); err != nil {
+		return true, err
+	}
+	remainingState := a.outbox.Pending()
+	remaining, stillPending := findPendingEntry(remainingState, current.ID)
+	return stillPending && (!outboxEntryDue(remaining, time.Now()) || !isFirstPendingForKey(remainingState, remaining)), nil
+}
+
+func outboxEntryDue(entry OutboxEntry, now time.Time) bool {
+	return entry.NextAttempt.IsZero() || !entry.NextAttempt.After(now)
+}
+
+func findPendingEntry(entries []OutboxEntry, id string) (OutboxEntry, bool) {
+	for _, entry := range entries {
+		if entry.ID == id {
+			return entry, true
+		}
+	}
+	return OutboxEntry{}, false
+}
+
+func isFirstPendingForKey(entries []OutboxEntry, target OutboxEntry) bool {
+	for _, entry := range entries {
+		if entry.Bucket != target.Bucket || entry.Key != target.Key || entry.ID == target.ID {
+			continue
+		}
+		if outboxEntryBefore(entry, target) {
+			return false
+		}
+	}
+	return true
+}
+
+func outboxEntryBefore(left, right OutboxEntry) bool {
+	leftSequence, leftOK := outboxSequenceOK(left.ID)
+	rightSequence, rightOK := outboxSequenceOK(right.ID)
+	if leftOK && rightOK && leftSequence != rightSequence {
+		return leftSequence < rightSequence
+	}
+	if left.CreatedAt.Equal(right.CreatedAt) {
+		return left.ID < right.ID
+	}
+	return left.CreatedAt.Before(right.CreatedAt)
 }

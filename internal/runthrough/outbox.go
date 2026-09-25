@@ -58,6 +58,14 @@ func newOutboxState() outboxState {
 	return outboxState{entries: make(map[string]OutboxEntry)}
 }
 
+func (s outboxState) clone() outboxState {
+	entries := make(map[string]OutboxEntry, len(s.entries))
+	for id, entry := range s.entries {
+		entries[id] = entry
+	}
+	return outboxState{entries: entries, seq: s.seq}
+}
+
 func (s *outboxState) enqueue(entry OutboxEntry) OutboxEntry {
 	if entry.ID == "" {
 		s.seq++
@@ -101,7 +109,7 @@ func (s *outboxState) markFailure(id string, cause error, retryAt time.Time) err
 	if cause != nil {
 		entry.LastError = cause.Error()
 	}
-	if errors.Is(cause, ErrOutboxVersionConflict) {
+	if classifyRetry(cause) == RetryClassDeterministic {
 		entry.Terminal = true
 		entry.NextAttempt = time.Time{}
 	}
@@ -202,10 +210,12 @@ func NewFileOutbox(path string) (*FileOutbox, error) {
 func (o *FileOutbox) Enqueue(entry OutboxEntry) (OutboxEntry, error) {
 	o.mu.Lock()
 	defer o.mu.Unlock()
-	enqueued := o.state.enqueue(entry)
-	if err := o.persistLocked(); err != nil {
+	next := o.state.clone()
+	enqueued := next.enqueue(entry)
+	if err := o.persistState(next); err != nil {
 		return OutboxEntry{}, err
 	}
+	o.state = next
 	return enqueued, nil
 }
 
@@ -218,28 +228,43 @@ func (o *FileOutbox) Pending() []OutboxEntry {
 func (o *FileOutbox) MarkSuccess(id string) error {
 	o.mu.Lock()
 	defer o.mu.Unlock()
-	if err := o.state.markSuccess(id); err != nil {
+	next := o.state.clone()
+	if err := next.markSuccess(id); err != nil {
 		return err
 	}
-	return o.persistLocked()
+	if err := o.persistState(next); err != nil {
+		return err
+	}
+	o.state = next
+	return nil
 }
 
 func (o *FileOutbox) MarkFailure(id string, cause error, retryAt time.Time) error {
 	o.mu.Lock()
 	defer o.mu.Unlock()
-	if err := o.state.markFailure(id, cause, retryAt); err != nil {
+	next := o.state.clone()
+	if err := next.markFailure(id, cause, retryAt); err != nil {
 		return err
 	}
-	return o.persistLocked()
+	if err := o.persistState(next); err != nil {
+		return err
+	}
+	o.state = next
+	return nil
 }
 
 func (o *FileOutbox) Discard(id string) error {
 	o.mu.Lock()
 	defer o.mu.Unlock()
-	if err := o.state.discard(id); err != nil {
+	next := o.state.clone()
+	if err := next.discard(id); err != nil {
 		return err
 	}
-	return o.persistLocked()
+	if err := o.persistState(next); err != nil {
+		return err
+	}
+	o.state = next
+	return nil
 }
 
 func (o *FileOutbox) Durable() bool { return true }
@@ -251,7 +276,11 @@ func (o *FileOutbox) Close() error {
 }
 
 func (o *FileOutbox) persistLocked() error {
-	data, err := json.MarshalIndent(persistedOutbox{Entries: o.state.entries, Seq: o.state.seq}, "", "  ")
+	return o.persistState(o.state)
+}
+
+func (o *FileOutbox) persistState(state outboxState) error {
+	data, err := json.MarshalIndent(persistedOutbox{Entries: state.entries, Seq: state.seq}, "", "  ")
 	if err != nil {
 		return err
 	}
@@ -296,9 +325,17 @@ func pendingEntries(entries map[string]OutboxEntry) []OutboxEntry {
 	return out
 }
 
-func outboxSequence(id string) uint64 {
+func outboxSequenceOK(id string) (uint64, bool) {
+	if !strings.HasPrefix(id, "outbox-") {
+		return 0, false
+	}
 	sequence, err := strconv.ParseUint(strings.TrimPrefix(id, "outbox-"), 10, 64)
-	if err != nil {
+	return sequence, err == nil
+}
+
+func outboxSequence(id string) uint64 {
+	sequence, ok := outboxSequenceOK(id)
+	if !ok {
 		return ^uint64(0)
 	}
 	return sequence

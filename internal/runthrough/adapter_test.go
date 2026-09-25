@@ -25,6 +25,8 @@ type mockUpstream struct {
 	putCalls  int
 	delCalls  int
 	putErr    error
+	delErr    error
+	listErr   error
 	putErrors map[string]error
 
 	objects map[string]storage.ObjectMeta
@@ -104,6 +106,9 @@ func (m *mockUpstream) DeleteObject(_ context.Context, bucket, key string) error
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.delCalls++
+	if m.delErr != nil {
+		return m.delErr
+	}
 	delete(m.objects, objectKey(bucket, key))
 	delete(m.bodies, objectKey(bucket, key))
 	return nil
@@ -112,6 +117,9 @@ func (m *mockUpstream) DeleteObject(_ context.Context, bucket, key string) error
 func (m *mockUpstream) ListObjectsV2(_ context.Context, bucket string, opts storage.ListOptions) (*storage.ListResult, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	if m.listErr != nil {
+		return nil, m.listErr
+	}
 	var objects []storage.ObjectMeta
 	for k, meta := range m.objects {
 		if meta.Bucket != bucket {

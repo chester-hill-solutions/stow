@@ -36,6 +36,7 @@ type Adapter struct {
 	cacheEvictions atomic.Uint64
 	cacheMu        sync.Mutex
 	cacheEntries   map[string]cacheEntry
+	outboxLocks    outboxKeyLocks
 }
 
 // New creates a run-through adapter. upstream may be nil for local-only behavior.
@@ -113,6 +114,14 @@ func (a *Adapter) OutboxStats() (pending, terminal int) {
 
 // DiscardOutboxEntry removes one pending or terminal propagation intent.
 func (a *Adapter) DiscardOutboxEntry(id string) error {
+	for _, entry := range a.outbox.Pending() {
+		if entry.ID != id {
+			continue
+		}
+		unlock := a.outboxLocks.lock(outboxIdentity(entry.Bucket, entry.Key))
+		defer unlock()
+		break
+	}
 	return a.outbox.Discard(id)
 }
 
@@ -187,6 +196,10 @@ func (a *Adapter) PutObject(ctx context.Context, bucket, key string, body io.Rea
 	if err := a.requireDurableOutbox(action); err != nil {
 		return nil, err
 	}
+	if action == writePropagate {
+		unlock := a.outboxLocks.lock(outboxIdentity(bucket, key))
+		defer unlock()
+	}
 
 	meta, err := a.local.PutObject(ctx, bucket, key, body, opts)
 	if err != nil {
@@ -194,11 +207,11 @@ func (a *Adapter) PutObject(ctx context.Context, bucket, key string, body io.Rea
 	}
 	a.invalidateCache(ctx, bucket, key)
 	if action == writePropagate {
-		entry, err := a.enqueueIntent(ctx, OutboxPut, bucket, key)
+		entry, err := a.enqueueIntentLocked(ctx, OutboxPut, bucket, key)
 		if err != nil {
 			return meta, err
 		}
-		if err := a.completeIntent(ctx, entry); err != nil {
+		if err := a.completeIntentLocked(ctx, entry); err != nil {
 			return meta, err
 		}
 	}
@@ -332,27 +345,33 @@ func (a *Adapter) ListObjectsV2(ctx context.Context, bucket string, opts storage
 	if err != nil {
 		return nil, err
 	}
-	cacheItems := localItems
-	if a.separateCache {
-		cacheItems, err = listAllObjects(ctx, a.cache, bucket, opts.Prefix)
-		if errors.Is(err, storage.ErrBucketNotFound) {
-			cacheItems = nil
-			err = nil
-		}
-		if err != nil {
-			return nil, err
-		}
-	}
-	merged := mergeObjectLists(localItems, cacheItems)
 	if !a.upstreamEnabled(bucket) {
-		return storage.PaginateObjects(merged, opts), nil
+		cacheItems, cacheErr := a.listCacheItems(ctx, bucket, opts.Prefix)
+		if cacheErr != nil {
+			return nil, cacheErr
+		}
+		return storage.PaginateObjects(mergeObjectLists(localItems, cacheItems), opts), nil
 	}
 	upItems, upErr := listAllObjects(ctx, a.upstream, bucket, opts.Prefix)
-	if upErr != nil {
-		// Upstream unavailable: fall back to local plus cached listing.
-		return storage.PaginateObjects(merged, opts), nil
+	if upErr == nil {
+		return storage.PaginateObjects(mergeObjectLists(localItems, upItems), opts), nil
 	}
-	return storage.PaginateObjects(mergeObjectLists(merged, upItems), opts), nil
+	cacheItems, cacheErr := a.listCacheItems(ctx, bucket, opts.Prefix)
+	if cacheErr != nil {
+		return nil, cacheErr
+	}
+	return storage.PaginateObjects(mergeObjectLists(localItems, cacheItems), opts), nil
+}
+
+func (a *Adapter) listCacheItems(ctx context.Context, bucket, prefix string) ([]storage.ObjectMeta, error) {
+	if !a.separateCache {
+		return nil, nil
+	}
+	items, err := listAllObjects(ctx, a.cache, bucket, prefix)
+	if errors.Is(err, storage.ErrBucketNotFound) {
+		return nil, nil
+	}
+	return items, err
 }
 
 // listAllObjects walks every page for a prefix so merged listings can re-paginate stably.

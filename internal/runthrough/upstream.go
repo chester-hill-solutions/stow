@@ -175,10 +175,6 @@ func mapUpstreamError(err error) error {
 	if err == nil {
 		return nil
 	}
-	var respErr *smithyhttp.ResponseError
-	if errors.As(err, &respErr) && respErr.HTTPStatusCode() == 404 {
-		return storage.ErrObjectNotFound
-	}
 	var noKey *types.NoSuchKey
 	if errors.As(err, &noKey) {
 		return storage.ErrObjectNotFound
@@ -187,7 +183,20 @@ func mapUpstreamError(err error) error {
 	if errors.As(err, &noBucket) {
 		return storage.ErrBucketNotFound
 	}
-	return err
+	var respErr *smithyhttp.ResponseError
+	if errors.As(err, &respErr) && respErr != nil && respErr.Response != nil && respErr.HTTPStatusCode() == 404 {
+		return storage.ErrObjectNotFound
+	}
+	class := classifyRetry(err)
+	if class == RetryClassUnknown {
+		return err
+	}
+	return &UpstreamError{
+		Err:        err,
+		StatusCode: upstreamHTTPStatus(err),
+		Code:       upstreamErrorCode(err),
+		Class:      class,
+	}
 }
 
 func headOutputToMeta(bucket, key string, out *s3.HeadObjectOutput) *storage.ObjectMeta {
