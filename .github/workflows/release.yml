@@ -39,7 +39,9 @@ jobs:
         run: make check-generated
       - name: Pack verified npm package
         working-directory: packages/stow
-        run: npm pack --ignore-scripts --pack-destination "$RUNNER_TEMP/npm-package"
+        run: |
+          mkdir -p "$RUNNER_TEMP/npm-package"
+          npm pack --ignore-scripts --pack-destination "$RUNNER_TEMP/npm-package"
       - name: Upload verified npm package
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
@@ -156,8 +158,9 @@ jobs:
               throw new Error(`Unexpected npm package metadata: ${metadata.name}@${metadata.version}`);
             }
           ' "$package_metadata" "${GITHUB_REF_NAME#v}"
-          tar -tzf "$package_file" | grep -Fxq package/dist/stow-runtime.wasm
-          tar -tzf "$package_file" | grep -Fxq package/dist/wasm_exec.js
+          tar -tzf "$package_file" > "$RUNNER_TEMP/npm-package-files.txt"
+          grep -Fxq package/dist/stow-runtime.wasm "$RUNNER_TEMP/npm-package-files.txt"
+          grep -Fxq package/dist/wasm_exec.js "$RUNNER_TEMP/npm-package-files.txt"
       - name: Publish npm package
         run: npm publish --ignore-scripts --access public --provenance ./dist/npm/*.tgz
       - name: Checksums
