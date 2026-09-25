@@ -188,6 +188,26 @@ func TestAdapter_RejectsLiveWritesWithoutDurableOutbox(t *testing.T) {
 	}
 }
 
+func TestAdapter_RejectsUncoordinatedDurableOutboxBeforeLocalMutation(t *testing.T) {
+	ctx := context.Background()
+	local := storage.NewMemoryStore()
+	if err := local.CreateBucket(ctx, "bucket"); err != nil {
+		t.Fatalf("create bucket: %v", err)
+	}
+	outbox := &legacyDurableOutbox{inner: runthrough.NewMemoryOutbox()}
+	adapter := runthrough.NewWithOutbox(runthrough.Config{
+		Policy:          runthrough.PolicyReadThroughCache,
+		AllowLiveWrites: true,
+	}, local, local, newMockUpstream(), outbox)
+	_, err := adapter.PutObject(ctx, "bucket", "key", bytes.NewReader([]byte("blocked")), storage.PutOptions{})
+	if err != runthrough.ErrDurableOutboxRequired {
+		t.Fatalf("PutObject() error = %v, want ErrDurableOutboxRequired", err)
+	}
+	if _, err := local.HeadObject(ctx, "bucket", "key"); !errors.Is(err, storage.ErrObjectNotFound) {
+		t.Fatalf("local object exists after rejection: %v", err)
+	}
+}
+
 func TestAdapter_RejectsMultipartLiveWriteWithoutDurableOutbox(t *testing.T) {
 	ctx := context.Background()
 	local := storage.NewMemoryStore()

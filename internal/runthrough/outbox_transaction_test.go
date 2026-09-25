@@ -17,17 +17,19 @@ func TestFileOutboxPersistsPreparedCommit(t *testing.T) {
 	if err != nil {
 		t.Fatalf("new outbox: %v", err)
 	}
-	entry, err := outbox.Enqueue(runthrough.OutboxEntry{
+	entry, err := outbox.Prepare(runthrough.OutboxEntry{
 		Operation: runthrough.OutboxPut,
 		Bucket:    "bucket",
 		Key:       "key",
-		Prepared:  true,
 		CreatedAt: time.Now().UTC(),
 	})
 	if err != nil {
-		t.Fatalf("enqueue: %v", err)
+		t.Fatalf("prepare: %v", err)
 	}
-	if err := outbox.Commit(entry.ID, "version-1"); err != nil {
+	if len(outbox.Pending()) != 0 || len(outbox.Prepared()) != 1 {
+		t.Fatalf("prepared state = pending %d prepared %d", len(outbox.Pending()), len(outbox.Prepared()))
+	}
+	if _, err := outbox.Commit(entry.ID, "version-1"); err != nil {
 		t.Fatalf("commit: %v", err)
 	}
 	reopened, err := runthrough.NewFileOutbox(path)
@@ -37,6 +39,60 @@ func TestFileOutboxPersistsPreparedCommit(t *testing.T) {
 	pending := reopened.Pending()
 	if len(pending) != 1 || pending[0].Prepared || pending[0].Version != "version-1" {
 		t.Fatalf("reopened pending = %+v", pending)
+	}
+}
+
+func TestOutboxInspectionSnapshotsActiveAndPreparedEntries(t *testing.T) {
+	ctx := context.Background()
+	local := storage.NewMemoryStore()
+	if err := local.CreateBucket(ctx, "bucket"); err != nil {
+		t.Fatalf("create bucket: %v", err)
+	}
+	outbox, err := runthrough.NewFileOutbox(filepath.Join(t.TempDir(), "outbox.json"))
+	if err != nil {
+		t.Fatalf("new outbox: %v", err)
+	}
+	if _, err := outbox.Enqueue(runthrough.OutboxEntry{Operation: runthrough.OutboxPut, Bucket: "bucket", Key: "active"}); err != nil {
+		t.Fatalf("enqueue active: %v", err)
+	}
+	if _, err := outbox.Prepare(runthrough.OutboxEntry{Operation: runthrough.OutboxPut, Bucket: "bucket", Key: "prepared"}); err != nil {
+		t.Fatalf("prepare entry: %v", err)
+	}
+	adapter := runthrough.NewWithOutbox(runthrough.Config{Policy: runthrough.PolicyMirrorWrites, AllowLiveWrites: true}, local, local, newMockUpstream(), outbox)
+	pending, terminal := adapter.OutboxStats()
+	if pending != 1 || terminal != 0 {
+		t.Fatalf("outbox stats = %d/%d, want 1/0", pending, terminal)
+	}
+	if prepared := adapter.OutboxPreparedStats(); prepared != 1 {
+		t.Fatalf("prepared stats = %d, want 1", prepared)
+	}
+	if len(adapter.OutboxEntries()) != 1 || len(adapter.OutboxPreparedEntries()) != 1 {
+		t.Fatalf("inspection entries = %d active/%d prepared", len(adapter.OutboxEntries()), len(adapter.OutboxPreparedEntries()))
+	}
+}
+
+func TestFileOutboxPersistsPreparedIntentAcrossRestart(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "outbox.json")
+	outbox, err := runthrough.NewFileOutbox(path)
+	if err != nil {
+		t.Fatalf("new outbox: %v", err)
+	}
+	entry, err := outbox.Prepare(runthrough.OutboxEntry{Operation: runthrough.OutboxPut, Bucket: "bucket", Key: "key"})
+	if err != nil {
+		t.Fatalf("prepare: %v", err)
+	}
+	if err := outbox.Close(); err != nil {
+		t.Fatalf("close outbox: %v", err)
+	}
+	reopened, err := runthrough.NewFileOutbox(path)
+	if err != nil {
+		t.Fatalf("reopen outbox: %v", err)
+	}
+	if len(reopened.Pending()) != 0 || len(reopened.Prepared()) != 1 {
+		t.Fatalf("reopened state = pending %d prepared %d", len(reopened.Pending()), len(reopened.Prepared()))
+	}
+	if err := reopened.DiscardPrepared(entry.ID); err != nil {
+		t.Fatalf("discard prepared: %v", err)
 	}
 }
 
@@ -50,7 +106,7 @@ func TestRetryPendingCommitsPreparedIntentAfterLocalMutation(t *testing.T) {
 	if err != nil {
 		t.Fatalf("new outbox: %v", err)
 	}
-	if _, err := outbox.Enqueue(runthrough.OutboxEntry{
+	if _, err := outbox.Prepare(runthrough.OutboxEntry{
 		Operation: runthrough.OutboxPut,
 		Bucket:    "bucket",
 		Key:       "key",
@@ -89,7 +145,7 @@ func TestRetryPendingDiscardsPreparedIntentWhenLocalMutationDidNotCommit(t *test
 	if err != nil {
 		t.Fatalf("new outbox: %v", err)
 	}
-	entry, err := outbox.Enqueue(runthrough.OutboxEntry{
+	entry, err := outbox.Prepare(runthrough.OutboxEntry{
 		Operation:       runthrough.OutboxPut,
 		Bucket:          "bucket",
 		Key:             "key",
@@ -130,7 +186,7 @@ func TestRetryPendingDiscardsPreparedDeleteWhenLocalObjectRemains(t *testing.T) 
 	if err != nil {
 		t.Fatalf("new outbox: %v", err)
 	}
-	if _, err := outbox.Enqueue(runthrough.OutboxEntry{
+	if _, err := outbox.Prepare(runthrough.OutboxEntry{
 		Operation: runthrough.OutboxDelete,
 		Bucket:    "bucket",
 		Key:       "key",

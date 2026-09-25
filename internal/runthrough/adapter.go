@@ -24,19 +24,20 @@ const (
 // Adapter wraps a local storage.Store with optional upstream read-through caching
 // and controlled live writes. It implements storage.Store for s3api routing.
 type Adapter struct {
-	local          storage.Store
-	cache          storage.Store
-	upstream       Client
-	outbox         Outbox
-	cfg            Config
-	separateCache  bool
-	durableOutbox  bool
-	cacheHits      atomic.Uint64
-	cacheMisses    atomic.Uint64
-	cacheEvictions atomic.Uint64
-	cacheMu        sync.Mutex
-	cacheEntries   map[string]cacheEntry
-	outboxLocks    outboxKeyLocks
+	local             storage.Store
+	cache             storage.Store
+	upstream          Client
+	outbox            Outbox
+	coordinatedOutbox CoordinatedOutbox
+	cfg               Config
+	separateCache     bool
+	durableOutbox     bool
+	cacheHits         atomic.Uint64
+	cacheMisses       atomic.Uint64
+	cacheEvictions    atomic.Uint64
+	cacheMu           sync.Mutex
+	cacheEntries      map[string]cacheEntry
+	outboxLocks       outboxKeyLocks
 }
 
 // New creates a run-through adapter. upstream may be nil for local-only behavior.
@@ -64,30 +65,29 @@ func NewWithOutbox(cfg Config, local, cache storage.Store, upstream Client, outb
 	if provider, ok := outbox.(DurableOutbox); ok {
 		durable = provider.Durable()
 	}
+	coordinated, _ := outbox.(CoordinatedOutbox)
 	return &Adapter{
-		cfg:           cfg,
-		local:         local,
-		cache:         cache,
-		upstream:      upstream,
-		outbox:        outbox,
-		separateCache: cache != local,
-		durableOutbox: durable,
-		cacheEntries:  make(map[string]cacheEntry),
+		cfg:               cfg,
+		local:             local,
+		cache:             cache,
+		upstream:          upstream,
+		outbox:            outbox,
+		coordinatedOutbox: coordinated,
+		separateCache:     cache != local,
+		durableOutbox:     durable,
+		cacheEntries:      make(map[string]cacheEntry),
 	}
 }
 
 // Config returns the adapter configuration.
 func (a *Adapter) Close() error {
+	outboxErr := a.outbox.Close()
 	localErr := a.local.Close()
+	var cacheErr error
 	if a.separateCache {
-		if cacheErr := a.cache.Close(); localErr == nil {
-			localErr = cacheErr
-		}
+		cacheErr = a.cache.Close()
 	}
-	if outboxErr := a.outbox.Close(); localErr == nil {
-		localErr = outboxErr
-	}
-	return localErr
+	return errors.Join(outboxErr, localErr, cacheErr)
 }
 
 func (a *Adapter) Config() Config {
@@ -112,9 +112,18 @@ func (a *Adapter) OutboxStats() (pending, terminal int) {
 	return pending, terminal
 }
 
+func (a *Adapter) OutboxPreparedStats() int {
+	return len(a.preparedEntries())
+}
+
 // OutboxEntries returns a point-in-time copy for administrative inspection.
 func (a *Adapter) OutboxEntries() []OutboxEntry {
 	return a.outbox.Pending()
+}
+
+// OutboxPreparedEntries returns unresolved write-ahead intents for inspection.
+func (a *Adapter) OutboxPreparedEntries() []OutboxEntry {
+	return a.preparedEntries()
 }
 
 // DiscardOutboxEntry removes one pending or terminal propagation intent.
@@ -142,7 +151,7 @@ func (a *Adapter) upstreamEnabled(bucket string) bool {
 
 // decideUpstreamWrite collapses Policy × AllowLiveWrites into one action.
 func (a *Adapter) requireDurableOutbox(action writeAction) error {
-	if action == writePropagate && !a.durableOutbox {
+	if action == writePropagate && (!a.durableOutbox || a.coordinatedOutbox == nil) {
 		return ErrDurableOutboxRequired
 	}
 	return nil
@@ -205,6 +214,9 @@ func (a *Adapter) PutObject(ctx context.Context, bucket, key string, body io.Rea
 	if action == writePropagate {
 		unlock := a.outboxLocks.lock(outboxIdentity(bucket, key))
 		defer unlock()
+		if err := a.rejectPreparedKey(bucket, key); err != nil {
+			return nil, err
+		}
 		previousVersion, err := a.localVersionStrict(ctx, bucket, key)
 		if err != nil {
 			return nil, err
@@ -218,13 +230,13 @@ func (a *Adapter) PutObject(ctx context.Context, bucket, key string, body io.Rea
 	meta, err := a.local.PutObject(ctx, bucket, key, body, opts)
 	if err != nil {
 		if prepared.ID != "" {
-			return nil, errors.Join(err, a.outbox.Discard(prepared.ID))
+			return nil, errors.Join(err, a.discardPreparedIntent(prepared.ID))
 		}
 		return nil, err
 	}
 	a.invalidateCache(ctx, bucket, key)
 	if action == writePropagate {
-		if err := a.outbox.Commit(prepared.ID, objectVersion(meta)); err != nil {
+		if _, err := a.commitPreparedIntent(prepared.ID, objectVersion(meta)); err != nil {
 			return meta, err
 		}
 		if err := a.completeIntentLocked(ctx, prepared); err != nil {
@@ -264,6 +276,13 @@ func (a *Adapter) resolveObject(ctx context.Context, bucket, key string, needBod
 	}
 
 	cacheMeta, cacheErr := a.cache.HeadObject(ctx, bucket, key)
+	if cacheErr == nil && a.cacheEntryExpired(bucket, key) {
+		if err := a.cache.DeleteObject(ctx, bucket, key); err != nil && !errors.Is(err, storage.ErrObjectNotFound) {
+			return nil, nil, err
+		}
+		a.cacheEvictions.Add(1)
+		cacheMeta, cacheErr = nil, storage.ErrObjectNotFound
+	}
 	if cacheErr == nil {
 		if !a.cfg.Revalidate {
 			return a.openCached(ctx, bucket, key, cacheMeta, needBody)

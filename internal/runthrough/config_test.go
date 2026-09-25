@@ -155,8 +155,9 @@ func TestConfigFromEnv_CacheLimits(t *testing.T) {
 	os.Clearenv()
 	t.Setenv("STOW_CACHE_MAX_BYTES", "4096")
 	t.Setenv("STOW_CACHE_MAX_OBJECTS", "8")
+	t.Setenv("STOW_CACHE_TTL", "30s")
 	cfg := runthrough.ConfigFromEnv()
-	if cfg.Cache.MaxBytes != 4096 || cfg.Cache.MaxObjects != 8 {
+	if cfg.Cache.MaxBytes != 4096 || cfg.Cache.MaxObjects != 8 || cfg.Cache.TTL.String() != "30s" {
 		t.Fatalf("cache limits = %+v", cfg.Cache)
 	}
 }

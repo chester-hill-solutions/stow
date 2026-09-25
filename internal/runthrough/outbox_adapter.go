@@ -57,7 +57,10 @@ func (a *Adapter) enqueueIntentLocked(ctx context.Context, operation OutboxOpera
 	return a.outbox.Enqueue(entry)
 }
 
-func (a *Adapter) enqueuePreparedIntentLocked(operation OutboxOperation, bucket, key, previousVersion string) (OutboxEntry, error) {
+func (a *Adapter) prepareIntent(operation OutboxOperation, bucket, key, previousVersion string) (OutboxEntry, error) {
+	if a.coordinatedOutbox == nil {
+		return OutboxEntry{}, ErrDurableOutboxRequired
+	}
 	entry := OutboxEntry{
 		Operation:       operation,
 		Bucket:          bucket,
@@ -66,7 +69,25 @@ func (a *Adapter) enqueuePreparedIntentLocked(operation OutboxOperation, bucket,
 		Prepared:        true,
 		CreatedAt:       time.Now().UTC(),
 	}
-	return a.outbox.Enqueue(entry)
+	return a.coordinatedOutbox.Prepare(entry)
+}
+
+func (a *Adapter) commitPreparedIntent(id, version string) (OutboxEntry, error) {
+	if a.coordinatedOutbox == nil {
+		return OutboxEntry{}, ErrDurableOutboxRequired
+	}
+	return a.coordinatedOutbox.Commit(id, version)
+}
+
+func (a *Adapter) discardPreparedIntent(id string) error {
+	if a.coordinatedOutbox == nil {
+		return ErrDurableOutboxRequired
+	}
+	return a.coordinatedOutbox.DiscardPrepared(id)
+}
+
+func (a *Adapter) enqueuePreparedIntentLocked(operation OutboxOperation, bucket, key, previousVersion string) (OutboxEntry, error) {
+	return a.prepareIntent(operation, bucket, key, previousVersion)
 }
 
 func (a *Adapter) propagateEntry(ctx context.Context, entry OutboxEntry) error {
@@ -112,8 +133,8 @@ func (a *Adapter) completeIntentLocked(ctx context.Context, entry OutboxEntry) e
 }
 
 func (a *Adapter) completeIntentWithScheduleLocked(ctx context.Context, entry OutboxEntry, respectSchedule bool) error {
-	pending := a.outbox.Pending()
-	current, ok := findPendingEntry(pending, entry.ID)
+	pending := a.orderingEntries()
+	current, ok := findPendingEntry(a.outbox.Pending(), entry.ID)
 	if !ok || current.Terminal || (respectSchedule && !current.NextAttempt.IsZero() && current.NextAttempt.After(time.Now())) || !isFirstPendingForKey(pending, current) {
 		return nil
 	}
@@ -144,9 +165,16 @@ func outboxRetryDelay(attempts int) time.Duration {
 // RetryPending retries due outbox entries. It is safe to call from a worker or
 // at startup; entries that are not due remain queued.
 func (a *Adapter) RetryPending(ctx context.Context) error {
+	recoveryErr := a.RecoverPrepared(ctx)
 	now := time.Now()
 	blocked := make(map[string]bool)
+	for _, entry := range a.preparedEntries() {
+		blocked[outboxIdentity(entry.Bucket, entry.Key)] = true
+	}
 	var firstErr error
+	if recoveryErr != nil {
+		firstErr = recoveryErr
+	}
 	for _, entry := range a.outbox.Pending() {
 		key := outboxIdentity(entry.Bucket, entry.Key)
 		if blocked[key] {
@@ -163,6 +191,43 @@ func (a *Adapter) RetryPending(ctx context.Context) error {
 	return firstErr
 }
 
+func (a *Adapter) RecoverPrepared(ctx context.Context) error {
+	if a.coordinatedOutbox == nil {
+		return nil
+	}
+	var firstErr error
+	for _, entry := range a.coordinatedOutbox.Prepared() {
+		unlock := a.outboxLocks.lock(outboxIdentity(entry.Bucket, entry.Key))
+		_, err := a.reconcilePreparedEntryLocked(ctx, entry)
+		unlock()
+		if err != nil && firstErr == nil {
+			firstErr = err
+		}
+	}
+	return firstErr
+}
+
+func (a *Adapter) rejectPreparedKey(bucket, key string) error {
+	for _, entry := range a.preparedEntries() {
+		if entry.Bucket == bucket && entry.Key == key {
+			return ErrOutboxPreparedUnresolved
+		}
+	}
+	return nil
+}
+
+func (a *Adapter) preparedEntries() []OutboxEntry {
+	if a.coordinatedOutbox == nil {
+		return nil
+	}
+	return a.coordinatedOutbox.Prepared()
+}
+
+func (a *Adapter) orderingEntries() []OutboxEntry {
+	entries := append([]OutboxEntry(nil), a.outbox.Pending()...)
+	return append(entries, a.preparedEntries()...)
+}
+
 func (a *Adapter) retryEntry(ctx context.Context, entry OutboxEntry, now time.Time) (bool, error) {
 	if entry.Terminal || !outboxEntryDue(entry, now) {
 		return true, nil
@@ -171,21 +236,10 @@ func (a *Adapter) retryEntry(ctx context.Context, entry OutboxEntry, now time.Ti
 	unlock := a.outboxLocks.lock(key)
 	defer unlock()
 
-	pending := a.outbox.Pending()
-	current, ok := findPendingEntry(pending, entry.ID)
+	pending := a.orderingEntries()
+	current, ok := findPendingEntry(a.outbox.Pending(), entry.ID)
 	if !ok {
 		return false, nil
-	}
-	if current.Prepared {
-		ready, err := a.reconcilePreparedEntry(ctx, current)
-		if err != nil || !ready {
-			return err != nil, err
-		}
-		pending = a.outbox.Pending()
-		current, ok = findPendingEntry(pending, current.ID)
-		if !ok {
-			return false, nil
-		}
 	}
 	if !a.upstreamEnabled(current.Bucket) || current.Terminal || !outboxEntryDue(current, now) || !isFirstPendingForKey(pending, current) {
 		return true, nil
@@ -193,49 +247,43 @@ func (a *Adapter) retryEntry(ctx context.Context, entry OutboxEntry, now time.Ti
 	if err := a.completeIntentLocked(ctx, current); err != nil {
 		return true, err
 	}
-	remainingState := a.outbox.Pending()
-	remaining, stillPending := findPendingEntry(remainingState, current.ID)
+	remainingState := a.orderingEntries()
+	remaining, stillPending := findPendingEntry(a.outbox.Pending(), current.ID)
 	return stillPending && (!outboxEntryDue(remaining, time.Now()) || !isFirstPendingForKey(remainingState, remaining)), nil
 }
 
-func (a *Adapter) reconcilePreparedEntry(ctx context.Context, entry OutboxEntry) (bool, error) {
+func (a *Adapter) reconcilePreparedEntryLocked(ctx context.Context, entry OutboxEntry) (bool, error) {
 	switch entry.Operation {
 	case OutboxPut:
 		meta, err := a.local.HeadObject(ctx, entry.Bucket, entry.Key)
 		if err != nil {
 			if errors.Is(err, storage.ErrObjectNotFound) {
-				return false, a.outbox.Discard(entry.ID)
+				return false, a.discardPreparedIntent(entry.ID)
 			}
 			return false, err
 		}
 		currentVersion := objectVersion(meta)
 		if entry.PreviousVersion != "" && currentVersion == entry.PreviousVersion {
-			return false, a.outbox.Discard(entry.ID)
+			return false, a.discardPreparedIntent(entry.ID)
 		}
-		return true, a.outbox.Commit(entry.ID, currentVersion)
+		_, err = a.commitPreparedIntent(entry.ID, currentVersion)
+		return true, err
 	case OutboxDelete:
 		meta, err := a.local.HeadObject(ctx, entry.Bucket, entry.Key)
 		if err == nil {
 			if entry.Version != "" && objectVersion(meta) == entry.Version {
-				return false, a.outbox.Discard(entry.ID)
+				return false, a.discardPreparedIntent(entry.ID)
 			}
-			return false, a.markPreparedConflict(entry)
+			return false, ErrOutboxPreparedUnresolved
 		}
 		if !errors.Is(err, storage.ErrObjectNotFound) {
 			return false, err
 		}
-		return true, a.outbox.Commit(entry.ID, entry.Version)
+		_, err = a.commitPreparedIntent(entry.ID, entry.Version)
+		return true, err
 	default:
-		return false, a.markPreparedConflict(entry)
+		return false, ErrOutboxPreparedUnresolved
 	}
-}
-
-func (a *Adapter) markPreparedConflict(entry OutboxEntry) error {
-	conflict := NewDeterministicUpstreamError(ErrOutboxVersionConflict)
-	if err := a.outbox.MarkFailure(entry.ID, conflict, time.Time{}); err != nil {
-		return errors.Join(conflict, err)
-	}
-	return conflict
 }
 
 func outboxEntryDue(entry OutboxEntry, now time.Time) bool {

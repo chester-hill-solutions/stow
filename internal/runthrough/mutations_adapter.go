@@ -21,6 +21,9 @@ func (a *Adapter) DeleteObject(ctx context.Context, bucket, key string) error {
 	if action == writePropagate {
 		unlock := a.outboxLocks.lock(outboxIdentity(bucket, key))
 		defer unlock()
+		if err := a.rejectPreparedKey(bucket, key); err != nil {
+			return err
+		}
 		var err error
 		version, err = a.localVersionStrict(ctx, bucket, key)
 		if err != nil {
@@ -35,18 +38,18 @@ func (a *Adapter) DeleteObject(ctx context.Context, bucket, key string) error {
 	if localErr != nil {
 		if errors.Is(localErr, storage.ErrObjectNotFound) {
 			if prepared.ID != "" {
-				return a.outbox.Discard(prepared.ID)
+				return a.discardPreparedIntent(prepared.ID)
 			}
 			return nil
 		}
 		if prepared.ID != "" {
-			return errors.Join(localErr, a.outbox.Discard(prepared.ID))
+			return errors.Join(localErr, a.discardPreparedIntent(prepared.ID))
 		}
 		return localErr
 	}
 	a.invalidateCache(ctx, bucket, key)
 	if action == writePropagate {
-		if err := a.outbox.Commit(prepared.ID, version); err != nil {
+		if _, err := a.commitPreparedIntent(prepared.ID, version); err != nil {
 			return err
 		}
 		return a.completeIntentLocked(ctx, prepared)
@@ -75,6 +78,11 @@ func (a *Adapter) DeleteObjects(ctx context.Context, bucket string, keys []strin
 		}
 		unlock := a.outboxLocks.lockMany(identities)
 		defer unlock()
+		for _, key := range keys {
+			if err := a.rejectPreparedKey(bucket, key); err != nil {
+				return nil, err
+			}
+		}
 		var err error
 		prepared, err = a.prepareDeleteIntents(ctx, bucket, keys)
 		if err != nil {
@@ -136,10 +144,11 @@ func (a *Adapter) commitDeleteIntents(prepared []OutboxEntry, deleted []string) 
 			}
 			continue
 		}
-		if err := a.outbox.Commit(entry.ID, entry.PreviousVersion); err != nil {
+		committedEntry, err := a.commitPreparedIntent(entry.ID, entry.PreviousVersion)
+		if err != nil {
 			return nil, err
 		}
-		committed = append(committed, entry)
+		committed = append(committed, committedEntry)
 	}
 	return committed, nil
 }
@@ -165,6 +174,9 @@ func (a *Adapter) CopyObject(ctx context.Context, srcBucket, srcKey, dstBucket, 
 	if action == writePropagate {
 		unlock := a.outboxLocks.lock(outboxIdentity(dstBucket, dstKey))
 		defer unlock()
+		if err := a.rejectPreparedKey(dstBucket, dstKey); err != nil {
+			return nil, err
+		}
 		previousVersion, err := a.localVersionStrict(ctx, dstBucket, dstKey)
 		if err != nil {
 			return nil, err
@@ -178,13 +190,13 @@ func (a *Adapter) CopyObject(ctx context.Context, srcBucket, srcKey, dstBucket, 
 	meta, err := a.local.CopyObject(ctx, srcBucket, srcKey, dstBucket, dstKey)
 	if err != nil {
 		if prepared.ID != "" {
-			return nil, errors.Join(err, a.outbox.Discard(prepared.ID))
+			return nil, errors.Join(err, a.discardPreparedIntent(prepared.ID))
 		}
 		return nil, err
 	}
 	a.invalidateCache(ctx, dstBucket, dstKey)
 	if action == writePropagate {
-		if err := a.outbox.Commit(prepared.ID, objectVersion(meta)); err != nil {
+		if _, err := a.commitPreparedIntent(prepared.ID, objectVersion(meta)); err != nil {
 			return meta, err
 		}
 		if err := a.completeIntentLocked(ctx, prepared); err != nil {
@@ -223,6 +235,9 @@ func (a *Adapter) CompleteMultipartUpload(ctx context.Context, uploadID string, 
 	if action == writePropagate {
 		unlock := a.outboxLocks.lock(outboxIdentity(bucket, key))
 		defer unlock()
+		if err := a.rejectPreparedKey(bucket, key); err != nil {
+			return nil, err
+		}
 		previousVersion, err := a.localVersionStrict(ctx, bucket, key)
 		if err != nil {
 			return nil, err
@@ -236,12 +251,12 @@ func (a *Adapter) CompleteMultipartUpload(ctx context.Context, uploadID string, 
 	meta, err := a.local.CompleteMultipartUpload(ctx, uploadID, parts)
 	if err != nil {
 		if prepared.ID != "" {
-			return nil, errors.Join(err, a.outbox.Discard(prepared.ID))
+			return nil, errors.Join(err, a.discardPreparedIntent(prepared.ID))
 		}
 		return nil, err
 	}
 	if action == writePropagate {
-		if err := a.outbox.Commit(prepared.ID, objectVersion(meta)); err != nil {
+		if _, err := a.commitPreparedIntent(prepared.ID, objectVersion(meta)); err != nil {
 			return meta, err
 		}
 		if err := a.completeIntentLocked(ctx, prepared); err != nil {

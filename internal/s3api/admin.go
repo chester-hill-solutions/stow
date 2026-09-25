@@ -26,8 +26,16 @@ type outboxStatsProvider interface {
 	OutboxStats() (pending, terminal int)
 }
 
+type outboxPreparedStatsProvider interface {
+	OutboxPreparedStats() int
+}
+
 type outboxEntriesProvider interface {
 	OutboxEntries() []runthrough.OutboxEntry
+}
+
+type outboxPreparedEntriesProvider interface {
+	OutboxPreparedEntries() []runthrough.OutboxEntry
 }
 
 type outboxAdminProvider interface {
@@ -83,6 +91,25 @@ func (s *Server) handleAdmin(w http.ResponseWriter, r *http.Request) {
 
 func writeAdminError(w http.ResponseWriter, status int, message string) {
 	http.Error(w, message, status)
+}
+
+func outboxInspectEntries(entries []runthrough.OutboxEntry) []map[string]interface{} {
+	out := make([]map[string]interface{}, 0, len(entries))
+	for _, entry := range entries {
+		out = append(out, map[string]interface{}{
+			"id":           entry.ID,
+			"operation":    entry.Operation,
+			"bucket":       entry.Bucket,
+			"key":          entry.Key,
+			"version":      entry.Version,
+			"attempts":     entry.Attempts,
+			"terminal":     entry.Terminal,
+			"prepared":     entry.Prepared,
+			"last_error":   outboxErrorClass(entry.LastError),
+			"next_attempt": entry.NextAttempt,
+		})
+	}
+	return out
 }
 
 func outboxErrorClass(message string) string {
@@ -155,6 +182,9 @@ func (s *Server) writeStatus(w http.ResponseWriter, r *http.Request) {
 		payload["outbox_pending"] = pending
 		payload["outbox_terminal"] = terminal
 	}
+	if provider, ok := s.store.(outboxPreparedStatsProvider); ok {
+		payload["outbox_prepared"] = provider.OutboxPreparedStats()
+	}
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(payload)
 }
@@ -211,20 +241,11 @@ func (s *Server) writeInspect(w http.ResponseWriter, r *http.Request) {
 	}
 	outboxEntries := make([]map[string]interface{}, 0)
 	if provider, ok := s.store.(outboxEntriesProvider); ok {
-		for _, entry := range provider.OutboxEntries() {
-			outboxEntries = append(outboxEntries, map[string]interface{}{
-				"id":           entry.ID,
-				"operation":    entry.Operation,
-				"bucket":       entry.Bucket,
-				"key":          entry.Key,
-				"version":      entry.Version,
-				"attempts":     entry.Attempts,
-				"terminal":     entry.Terminal,
-				"prepared":     entry.Prepared,
-				"last_error":   outboxErrorClass(entry.LastError),
-				"next_attempt": entry.NextAttempt,
-			})
-		}
+		outboxEntries = outboxInspectEntries(provider.OutboxEntries())
+	}
+	preparedEntries := make([]map[string]interface{}, 0)
+	if provider, ok := s.store.(outboxPreparedEntriesProvider); ok {
+		preparedEntries = outboxInspectEntries(provider.OutboxPreparedEntries())
 	}
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(map[string]any{
@@ -236,6 +257,7 @@ func (s *Server) writeInspect(w http.ResponseWriter, r *http.Request) {
 		"outbox_pending":    outboxPending,
 		"outbox_terminal":   outboxTerminal,
 		"outbox_entries":    outboxEntries,
+		"outbox_prepared":   preparedEntries,
 	})
 }
 
@@ -285,6 +307,10 @@ func (s *Server) writeMetrics(w http.ResponseWriter, r *http.Request) {
 	if provider, ok := s.store.(outboxStatsProvider); ok {
 		pending, terminal = provider.OutboxStats()
 	}
+	prepared := 0
+	if provider, ok := s.store.(outboxPreparedStatsProvider); ok {
+		prepared = provider.OutboxPreparedStats()
+	}
 	multipartUploads := 0
 	buckets, err := s.store.ListBuckets(r.Context())
 	if err != nil {
@@ -307,6 +333,7 @@ func (s *Server) writeMetrics(w http.ResponseWriter, r *http.Request) {
 	_, _ = fmt.Fprintf(w, "# HELP stow_multipart_uploads Active multipart uploads.\n# TYPE stow_multipart_uploads gauge\nstow_multipart_uploads %d\n", multipartUploads)
 	_, _ = fmt.Fprintf(w, "# HELP stow_outbox_pending_entries Pending outbox entries.\n# TYPE stow_outbox_pending_entries gauge\nstow_outbox_pending_entries %d\n", pending)
 	_, _ = fmt.Fprintf(w, "# HELP stow_outbox_terminal_entries Terminal outbox entries.\n# TYPE stow_outbox_terminal_entries gauge\nstow_outbox_terminal_entries %d\n", terminal)
+	_, _ = fmt.Fprintf(w, "# HELP stow_outbox_prepared_entries Prepared outbox entries awaiting reconciliation.\n# TYPE stow_outbox_prepared_entries gauge\nstow_outbox_prepared_entries %d\n", prepared)
 }
 
 func (s *Server) dispatch(ctx context.Context, w http.ResponseWriter, r *http.Request, route routeInfo) {

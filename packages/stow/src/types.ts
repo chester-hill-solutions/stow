@@ -28,6 +28,7 @@ export interface StartOptions {
   cacheDir?: string;
   cacheMaxBytes?: number;
   cacheMaxObjects?: number;
+  cacheTtlSeconds?: number;
   allowLiveWrites?: boolean;
 }
 

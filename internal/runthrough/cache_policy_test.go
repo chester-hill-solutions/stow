@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"testing"
+	"time"
 
 	"github.com/chester-hill-solutions/stow/internal/runthrough"
 	"github.com/chester-hill-solutions/stow/internal/storage"
@@ -63,6 +64,36 @@ func TestAdapter_SeparateCacheEvictsByByteLimit(t *testing.T) {
 	}
 	if evictions := adapter.CacheEvictions(); evictions != 1 {
 		t.Fatalf("cache evictions = %d, want 1", evictions)
+	}
+}
+
+func TestAdapter_SeparateCacheExpiresEntries(t *testing.T) {
+	ctx := context.Background()
+	local := storage.NewMemoryStore()
+	cache := storage.NewMemoryStore()
+	_ = local.CreateBucket(ctx, "bucket")
+	_ = cache.CreateBucket(ctx, "bucket")
+	up := newMockUpstream()
+	if err := up.PutObject(ctx, "bucket", "key", bytes.NewReader([]byte("value")), storage.PutOptions{}); err != nil {
+		t.Fatalf("seed upstream: %v", err)
+	}
+	adapter := runthrough.NewWithCache(runthrough.Config{
+		Policy:     runthrough.PolicyReadThroughCache,
+		Revalidate: false,
+		Cache:      runthrough.CachePolicy{TTL: 5 * time.Millisecond},
+	}, local, cache, up)
+	if _, _, err := adapter.GetObject(ctx, "bucket", "key"); err != nil {
+		t.Fatalf("initial cache fill: %v", err)
+	}
+	time.Sleep(20 * time.Millisecond)
+	if _, _, err := adapter.GetObject(ctx, "bucket", "key"); err != nil {
+		t.Fatalf("refresh after TTL: %v", err)
+	}
+	if up.getCalls != 2 {
+		t.Fatalf("upstream get calls = %d, want 2", up.getCalls)
+	}
+	if _, err := cache.HeadObject(ctx, "bucket", "key"); err != nil {
+		t.Fatalf("refreshed cache entry: %v", err)
 	}
 }
 

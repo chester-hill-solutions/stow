@@ -205,6 +205,9 @@ function buildServeArgs(options, dataDir, port, host) {
     if (options.cacheMaxObjects !== undefined) {
         args.push("--cache-max-objects", String(options.cacheMaxObjects));
     }
+    if (options.cacheTtlSeconds !== undefined) {
+        args.push("--cache-ttl", `${options.cacheTtlSeconds}s`);
+    }
     if (options.allowLiveWrites) {
         args.push("--allow-live-writes");
     }
@@ -227,7 +230,9 @@ async function createStartupBuckets(instance, buckets, remainingStartupMs) {
 }
 export async function startStow(options = {}) {
     const dataDir = options.dataDir ?? ".stow";
-    if ((options.cacheMaxBytes ?? 0) < 0 || (options.cacheMaxObjects ?? 0) < 0) {
+    if ((options.cacheMaxBytes ?? 0) < 0 ||
+        (options.cacheMaxObjects ?? 0) < 0 ||
+        (options.cacheTtlSeconds ?? 0) < 0) {
         throw new Error("cache limits must not be negative");
     }
     const port = options.port ?? 0;

@@ -1,11 +1,8 @@
 package runthrough
 
 import (
-	"encoding/json"
 	"errors"
 	"fmt"
-	"os"
-	"path/filepath"
 	"sort"
 	"strconv"
 	"strings"
@@ -15,7 +12,10 @@ import (
 
 type OutboxOperation string
 
-var ErrOutboxVersionConflict = errors.New("outbox object version no longer matches the committed record")
+var (
+	ErrOutboxVersionConflict    = errors.New("outbox object version no longer matches the committed record")
+	ErrOutboxPreparedUnresolved = errors.New("outbox prepared intent cannot be reconciled")
+)
 
 const (
 	OutboxPut    OutboxOperation = "put"
@@ -42,9 +42,17 @@ type Outbox interface {
 	Pending() []OutboxEntry
 	MarkSuccess(id string) error
 	MarkFailure(id string, cause error, retryAt time.Time) error
-	Commit(id, version string) error
 	Discard(id string) error
 	Close() error
+}
+
+// CoordinatedOutbox extends the active outbox with a durable prepare/commit phase.
+type CoordinatedOutbox interface {
+	Outbox
+	Prepare(entry OutboxEntry) (OutboxEntry, error)
+	Commit(id, version string) (OutboxEntry, error)
+	DiscardPrepared(id string) error
+	Prepared() []OutboxEntry
 }
 
 type DurableOutbox interface {
@@ -53,12 +61,13 @@ type DurableOutbox interface {
 }
 
 type outboxState struct {
-	entries map[string]OutboxEntry
-	seq     uint64
+	entries  map[string]OutboxEntry
+	prepared map[string]OutboxEntry
+	seq      uint64
 }
 
 func newOutboxState() outboxState {
-	return outboxState{entries: make(map[string]OutboxEntry)}
+	return outboxState{entries: make(map[string]OutboxEntry), prepared: make(map[string]OutboxEntry)}
 }
 
 func (s outboxState) clone() outboxState {
@@ -66,10 +75,14 @@ func (s outboxState) clone() outboxState {
 	for id, entry := range s.entries {
 		entries[id] = entry
 	}
-	return outboxState{entries: entries, seq: s.seq}
+	prepared := make(map[string]OutboxEntry, len(s.prepared))
+	for id, entry := range s.prepared {
+		prepared[id] = entry
+	}
+	return outboxState{entries: entries, prepared: prepared, seq: s.seq}
 }
 
-func (s *outboxState) enqueue(entry OutboxEntry) OutboxEntry {
+func (s *outboxState) assignID(entry OutboxEntry) OutboxEntry {
 	if entry.ID == "" {
 		s.seq++
 		entry.ID = fmt.Sprintf("outbox-%d", s.seq)
@@ -81,12 +94,29 @@ func (s *outboxState) enqueue(entry OutboxEntry) OutboxEntry {
 	if entry.CreatedAt.IsZero() {
 		entry.CreatedAt = time.Now().UTC()
 	}
+	return entry
+}
+
+func (s *outboxState) enqueue(entry OutboxEntry) OutboxEntry {
+	entry = s.assignID(entry)
+	entry.Prepared = false
 	s.entries[entry.ID] = entry
+	return entry
+}
+
+func (s *outboxState) prepare(entry OutboxEntry) OutboxEntry {
+	entry = s.assignID(entry)
+	entry.Prepared = true
+	s.prepared[entry.ID] = entry
 	return entry
 }
 
 func (s *outboxState) pending() []OutboxEntry {
 	return pendingEntries(s.entries)
+}
+
+func (s *outboxState) preparedEntries() []OutboxEntry {
+	return pendingEntries(s.prepared)
 }
 
 func (s *outboxState) markSuccess(id string) error {
@@ -120,14 +150,26 @@ func (s *outboxState) markFailure(id string, cause error, retryAt time.Time) err
 	return nil
 }
 
-func (s *outboxState) commit(id, version string) error {
-	entry, ok := s.entries[id]
+func (s *outboxState) commit(id, version string) (OutboxEntry, error) {
+	entry, ok := s.prepared[id]
 	if !ok {
-		return fmt.Errorf("outbox entry %q not found", id)
+		if active, activeOK := s.entries[id]; activeOK {
+			return active, nil
+		}
+		return OutboxEntry{}, fmt.Errorf("outbox prepared entry %q not found", id)
 	}
+	delete(s.prepared, id)
 	entry.Prepared = false
 	entry.Version = version
 	s.entries[id] = entry
+	return entry, nil
+}
+
+func (s *outboxState) discardPrepared(id string) error {
+	if _, ok := s.prepared[id]; !ok {
+		return fmt.Errorf("outbox prepared entry %q not found", id)
+	}
+	delete(s.prepared, id)
 	return nil
 }
 
@@ -144,6 +186,18 @@ func (o *MemoryOutbox) Enqueue(entry OutboxEntry) (OutboxEntry, error) {
 	o.mu.Lock()
 	defer o.mu.Unlock()
 	return o.state.enqueue(entry), nil
+}
+
+func (o *MemoryOutbox) Prepare(entry OutboxEntry) (OutboxEntry, error) {
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	return o.state.prepare(entry), nil
+}
+
+func (o *MemoryOutbox) Prepared() []OutboxEntry {
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	return o.state.preparedEntries()
 }
 
 func (o *MemoryOutbox) Pending() []OutboxEntry {
@@ -164,10 +218,16 @@ func (o *MemoryOutbox) MarkFailure(id string, cause error, retryAt time.Time) er
 	return o.state.markFailure(id, cause, retryAt)
 }
 
-func (o *MemoryOutbox) Commit(id, version string) error {
+func (o *MemoryOutbox) Commit(id, version string) (OutboxEntry, error) {
 	o.mu.Lock()
 	defer o.mu.Unlock()
 	return o.state.commit(id, version)
+}
+
+func (o *MemoryOutbox) DiscardPrepared(id string) error {
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	return o.state.discardPrepared(id)
 }
 
 func (o *MemoryOutbox) Discard(id string) error {
@@ -179,171 +239,6 @@ func (o *MemoryOutbox) Discard(id string) error {
 func (o *MemoryOutbox) Close() error { return nil }
 
 func (o *MemoryOutbox) Durable() bool { return false }
-
-type FileOutbox struct {
-	path  string
-	mu    sync.Mutex
-	state outboxState
-}
-
-type persistedOutbox struct {
-	Entries map[string]OutboxEntry `json:"entries"`
-	Seq     uint64                 `json:"seq"`
-}
-
-func NewFileOutbox(path string) (*FileOutbox, error) {
-	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
-		return nil, err
-	}
-	o := &FileOutbox{path: path, state: newOutboxState()}
-	data, err := os.ReadFile(path)
-	if err != nil {
-		if os.IsNotExist(err) {
-			return o, nil
-		}
-		return nil, err
-	}
-	if len(data) == 0 {
-		return o, nil
-	}
-	var persisted persistedOutbox
-	if err := json.Unmarshal(data, &persisted); err != nil || persisted.Entries == nil {
-		if err := json.Unmarshal(data, &o.state.entries); err != nil {
-			return nil, fmt.Errorf("decode outbox: %w", err)
-		}
-	} else {
-		o.state.entries = persisted.Entries
-		o.state.seq = persisted.Seq
-	}
-	for id := range o.state.entries {
-		if !strings.HasPrefix(id, "outbox-") {
-			continue
-		}
-		sequence, parseErr := strconv.ParseUint(strings.TrimPrefix(id, "outbox-"), 10, 64)
-		if parseErr == nil && sequence > o.state.seq {
-			o.state.seq = sequence
-		}
-	}
-	return o, nil
-}
-
-func (o *FileOutbox) Enqueue(entry OutboxEntry) (OutboxEntry, error) {
-	o.mu.Lock()
-	defer o.mu.Unlock()
-	next := o.state.clone()
-	enqueued := next.enqueue(entry)
-	if err := o.persistState(next); err != nil {
-		return OutboxEntry{}, err
-	}
-	o.state = next
-	return enqueued, nil
-}
-
-func (o *FileOutbox) Pending() []OutboxEntry {
-	o.mu.Lock()
-	defer o.mu.Unlock()
-	return o.state.pending()
-}
-
-func (o *FileOutbox) MarkSuccess(id string) error {
-	o.mu.Lock()
-	defer o.mu.Unlock()
-	next := o.state.clone()
-	if err := next.markSuccess(id); err != nil {
-		return err
-	}
-	if err := o.persistState(next); err != nil {
-		return err
-	}
-	o.state = next
-	return nil
-}
-
-func (o *FileOutbox) MarkFailure(id string, cause error, retryAt time.Time) error {
-	o.mu.Lock()
-	defer o.mu.Unlock()
-	next := o.state.clone()
-	if err := next.markFailure(id, cause, retryAt); err != nil {
-		return err
-	}
-	if err := o.persistState(next); err != nil {
-		return err
-	}
-	o.state = next
-	return nil
-}
-
-func (o *FileOutbox) Commit(id, version string) error {
-	o.mu.Lock()
-	defer o.mu.Unlock()
-	next := o.state.clone()
-	if err := next.commit(id, version); err != nil {
-		return err
-	}
-	if err := o.persistState(next); err != nil {
-		return err
-	}
-	o.state = next
-	return nil
-}
-
-func (o *FileOutbox) Discard(id string) error {
-	o.mu.Lock()
-	defer o.mu.Unlock()
-	next := o.state.clone()
-	if err := next.discard(id); err != nil {
-		return err
-	}
-	if err := o.persistState(next); err != nil {
-		return err
-	}
-	o.state = next
-	return nil
-}
-
-func (o *FileOutbox) Durable() bool { return true }
-
-func (o *FileOutbox) Close() error {
-	o.mu.Lock()
-	defer o.mu.Unlock()
-	return o.persistLocked()
-}
-
-func (o *FileOutbox) persistLocked() error {
-	return o.persistState(o.state)
-}
-
-func (o *FileOutbox) persistState(state outboxState) error {
-	data, err := json.MarshalIndent(persistedOutbox{Entries: state.entries, Seq: state.seq}, "", "  ")
-	if err != nil {
-		return err
-	}
-	tmp, err := os.CreateTemp(filepath.Dir(o.path), ".outbox-*")
-	if err != nil {
-		return err
-	}
-	tmpName := tmp.Name()
-	defer os.Remove(tmpName)
-	if _, err := tmp.Write(data); err != nil {
-		_ = tmp.Close()
-		return err
-	}
-	if err := tmp.Sync(); err != nil {
-		_ = tmp.Close()
-		return err
-	}
-	if err := tmp.Close(); err != nil {
-		return err
-	}
-	if err := os.Rename(tmpName, o.path); err != nil {
-		return err
-	}
-	if dirFile, err := os.Open(filepath.Dir(o.path)); err == nil {
-		_ = dirFile.Sync()
-		_ = dirFile.Close()
-	}
-	return nil
-}
 
 func pendingEntries(entries map[string]OutboxEntry) []OutboxEntry {
 	out := make([]OutboxEntry, 0, len(entries))

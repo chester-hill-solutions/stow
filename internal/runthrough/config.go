@@ -5,6 +5,7 @@ import (
 	"os"
 	"strconv"
 	"strings"
+	"time"
 )
 
 // Mode describes whether stow runs local-only or with an upstream adapter.
@@ -39,6 +40,7 @@ type UpstreamConfig struct {
 type CachePolicy struct {
 	MaxBytes   int64
 	MaxObjects int64
+	TTL        time.Duration
 }
 
 // Config is the full run-through adapter configuration.
@@ -172,6 +174,13 @@ func applyCacheEnv(cfg *Config) error {
 			return fmt.Errorf("invalid %s %q: expected a non-negative integer", item.name, raw)
 		}
 		*item.field = value
+	}
+	if raw, ok := os.LookupEnv("STOW_CACHE_TTL"); ok && strings.TrimSpace(raw) != "" {
+		ttl, err := time.ParseDuration(strings.TrimSpace(raw))
+		if err != nil || ttl < 0 {
+			return fmt.Errorf("invalid STOW_CACHE_TTL %q: expected a non-negative duration", raw)
+		}
+		cfg.Cache.TTL = ttl
 	}
 	return nil
 }

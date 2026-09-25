@@ -48,8 +48,8 @@ func resolveLocalCredentials(accessKey, secretKey string) (string, string) {
 	return accessKey, secretKey
 }
 
-func applyCacheLimits(config *runthrough.Config, maxBytes, maxObjects int64) error {
-	if maxBytes < -1 || maxObjects < -1 {
+func applyCacheLimits(config *runthrough.Config, maxBytes, maxObjects int64, ttl time.Duration) error {
+	if maxBytes < -1 || maxObjects < -1 || ttl < -1 {
 		return fmt.Errorf("cache limits must not be negative")
 	}
 	if maxBytes >= 0 {
@@ -58,7 +58,35 @@ func applyCacheLimits(config *runthrough.Config, maxBytes, maxObjects int64) err
 	if maxObjects >= 0 {
 		config.Cache.MaxObjects = maxObjects
 	}
+	if ttl >= 0 {
+		config.Cache.TTL = ttl
+	}
 	return nil
+}
+
+func startOutboxRetryWorker(adapter *runthrough.Adapter) (context.CancelFunc, <-chan struct{}) {
+	if adapter == nil {
+		done := make(chan struct{})
+		close(done)
+		return func() {}, done
+	}
+	retryCtx, retryCancel := context.WithCancel(context.Background())
+	retryDone := make(chan struct{})
+	go func() {
+		defer close(retryDone)
+		_ = adapter.RetryPending(retryCtx)
+		ticker := time.NewTicker(time.Second)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-retryCtx.Done():
+				return
+			case <-ticker.C:
+				_ = adapter.RetryPending(retryCtx)
+			}
+		}
+	}()
+	return retryCancel, retryDone
 }
 
 func serve(args []string) {
@@ -76,13 +104,14 @@ func serve(args []string) {
 	cacheDir := fs.String("cache-dir", "", "Run-through cache directory (default: <data-dir>/cache)")
 	cacheMaxBytes := fs.Int64("cache-max-bytes", -1, "Maximum separate cache bytes (0 disables the limit; -1 uses environment)")
 	cacheMaxObjects := fs.Int64("cache-max-objects", -1, "Maximum separate cache objects (0 disables the limit; -1 uses environment)")
+	cacheTTL := fs.Duration("cache-ttl", -1, "Separate cache entry lifetime (0 disables expiry; -1 uses environment)")
 	fs.Parse(args)
 	*accessKey, *secretKey = resolveLocalCredentials(*accessKey, *secretKey)
 	rtCfg, cfgErr := runthrough.ConfigFromEnvChecked()
 	if cfgErr != nil {
 		log.Fatal(cfgErr)
 	}
-	if err := applyCacheLimits(&rtCfg, *cacheMaxBytes, *cacheMaxObjects); err != nil {
+	if err := applyCacheLimits(&rtCfg, *cacheMaxBytes, *cacheMaxObjects, *cacheTTL); err != nil {
 		log.Fatal(err)
 	}
 	mode := runthrough.DetectMode()
@@ -151,29 +180,14 @@ func serve(args []string) {
 			log.Fatalf("open outbox: %v", err)
 		}
 		adapter = runthrough.NewWithOutbox(rtCfg, localStore, cacheStore, upstreamClient, outbox)
+		if err := adapter.RecoverPrepared(context.Background()); err != nil {
+			log.Fatalf("recover outbox: %v", err)
+		}
 		store = adapter
 	}
 
-	retryCtx, retryCancel := context.WithCancel(context.Background())
+	retryCancel, retryDone := startOutboxRetryWorker(adapter)
 	defer retryCancel()
-	retryDone := make(chan struct{})
-	if adapter != nil {
-		go func() {
-			defer close(retryDone)
-			ticker := time.NewTicker(time.Second)
-			defer ticker.Stop()
-			for {
-				select {
-				case <-retryCtx.Done():
-					return
-				case <-ticker.C:
-					_ = adapter.RetryPending(retryCtx)
-				}
-			}
-		}()
-	} else {
-		close(retryDone)
-	}
 
 	creds := auth.Credentials{}
 	if *accessKey != "" && *secretKey != "" {

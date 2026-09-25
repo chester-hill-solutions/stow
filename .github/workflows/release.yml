@@ -156,6 +156,8 @@ jobs:
               throw new Error(`Unexpected npm package metadata: ${metadata.name}@${metadata.version}`);
             }
           ' "$package_metadata" "${GITHUB_REF_NAME#v}"
+          tar -tzf "$package_file" | grep -Fxq package/dist/stow-runtime.wasm
+          tar -tzf "$package_file" | grep -Fxq package/dist/wasm_exec.js
       - name: Publish npm package
         run: npm publish --ignore-scripts --access public --provenance ./dist/npm/*.tgz
       - name: Checksums
