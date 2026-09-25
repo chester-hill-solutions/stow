@@ -32,6 +32,11 @@ type Config struct {
 	UpstreamHost string
 	// AllowPublicAdmin explicitly permits admin and metrics routes on non-loopback requests.
 	AllowPublicAdmin bool
+	// MaxRequestBytes caps the bytes read from a single request body. Zero uses
+	// DefaultMaxRequestBytes. The cap is applied at the HTTP boundary so every
+	// body read in the request path is bounded, including SigV4 payload
+	// verification, checksum validation, and multipart parts.
+	MaxRequestBytes int64
 }
 
 // Server is the S3-compatible HTTP server.
@@ -70,6 +75,9 @@ func New(cfg Config) (*Server, error) {
 	baseHost := cfg.BaseHost
 	if baseHost == "" {
 		baseHost = hostWithoutPort(cfg.Host)
+	}
+	if cfg.MaxRequestBytes <= 0 {
+		cfg.MaxRequestBytes = DefaultMaxRequestBytes
 	}
 	authFn := cfg.Auth
 	return &Server{
@@ -118,6 +126,8 @@ func (s *Server) ListenAndServe() error {
 	httpServer := &http.Server{
 		Handler:           s,
 		ReadHeaderTimeout: 10 * time.Second,
+		ReadTimeout:       ReadTimeout,
+		WriteTimeout:      WriteTimeout,
 		IdleTimeout:       2 * time.Minute,
 		MaxHeaderBytes:    1 << 20,
 	}
@@ -181,6 +191,14 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Bound the body once, here, so every later read in the request path is
+	// limited: SigV4 payload verification, Content-MD5 and checksum
+	// validation, PutObject, and multipart parts. Enforcing it at the
+	// boundary also rejects a body that understates its Content-Length.
+	if r.Body != nil {
+		r.Body = http.MaxBytesReader(rw, r.Body, s.config.MaxRequestBytes)
+	}
+
 	if isAdminPath(r.URL.Path) {
 		if !s.config.AllowPublicAdmin && !isLoopbackRequest(r) {
 			http.NotFound(rw, r)
@@ -194,7 +212,11 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 	if s.auth != nil {
 		if err := prepareRequestForAuth(r); err != nil {
-			writeError(rw, r, s3Error{Code: "AccessDenied", Message: "cannot read request body", StatusCode: http.StatusForbidden})
+			if isRequestTooLarge(err) {
+				writeError(rw, r, requestTooLargeError(r.URL.Path, s.config.MaxRequestBytes))
+			} else {
+				writeError(rw, r, s3Error{Code: "AccessDenied", Message: "cannot read request body", StatusCode: http.StatusForbidden})
+			}
 			s.logRequest(r, rw.status, time.Since(start))
 			return
 		}

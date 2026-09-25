@@ -9,11 +9,35 @@ import (
 	"github.com/chester-hill-solutions/stow/internal/storage"
 )
 
-func bindNativeRuntimeStore(store storage.Store, backend string, admin *runthrough.Adapter) (storage.Store, error) {
+// nativeStorageLimits bounds what one local Stow process will hold. The
+// runtime enforces these for every native S3 request, so the values only have
+// to be supplied here. A non-positive value means unlimited, which preserves
+// the existing unbounded behavior of a long-lived server; a scoped session
+// passes explicit limits.
+type nativeStorageLimits struct {
+	maxBytes   int64
+	maxObjects int64
+}
+
+func (l nativeStorageLimits) bytes() int64 {
+	if l.maxBytes <= 0 {
+		return runtime.UnlimitedBytes
+	}
+	return l.maxBytes
+}
+
+func (l nativeStorageLimits) objects() int64 {
+	if l.maxObjects <= 0 {
+		return runtime.UnlimitedObjects
+	}
+	return l.maxObjects
+}
+
+func bindNativeRuntimeStore(store storage.Store, backend string, admin *runthrough.Adapter, limits nativeStorageLimits) (storage.Store, error) {
 	options := runtime.Options{
 		Backend:    runtime.BackendMemory,
-		MaxBytes:   int64(^uint64(0) >> 1),
-		MaxObjects: int64(^uint64(0) >> 1),
+		MaxBytes:   limits.bytes(),
+		MaxObjects: limits.objects(),
 	}
 	if backend == "filesystem" {
 		options.Backend = runtime.BackendFilesystem

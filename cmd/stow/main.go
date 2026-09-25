@@ -113,6 +113,8 @@ func serve(args []string) {
 	cacheMaxBytes := flags.Int64("cache-max-bytes", -1, "Maximum separate cache bytes (0 disables the limit; -1 uses environment)")
 	cacheMaxObjects := flags.Int64("cache-max-objects", -1, "Maximum separate cache objects (0 disables the limit; -1 uses environment)")
 	cacheTTL := flags.Duration("cache-ttl", -1, "Separate cache entry lifetime (0 disables expiry; -1 uses environment)")
+	maxBytes := flags.Int64("max-bytes", 0, "Maximum stored object bytes enforced on every native S3 request (0 disables the limit)")
+	maxObjects := flags.Int64("max-objects", 0, "Maximum stored object count enforced on every native S3 request (0 disables the limit)")
 	flags.Parse(args)
 	*accessKey, *secretKey = resolveLocalCredentials(*accessKey, *secretKey)
 	rtCfg, cfgErr := runthrough.ConfigFromEnvChecked()
@@ -196,7 +198,10 @@ func serve(args []string) {
 		}
 		store = adapter
 	}
-	store, err = bindNativeRuntimeStore(store, *backend, adapter)
+	store, err = bindNativeRuntimeStore(store, *backend, adapter, nativeStorageLimits{
+		maxBytes:   *maxBytes,
+		maxObjects: *maxObjects,
+	})
 	if err != nil {
 		log.Fatal(err)
 	}

@@ -13,6 +13,13 @@ const (
 
 	DefaultMaxBytes   int64 = 64 << 20
 	DefaultMaxObjects int64 = 10_000
+
+	// UnlimitedBytes and UnlimitedObjects disable quota enforcement. The
+	// embedded profile applies DefaultMaxBytes/DefaultMaxObjects; a long-lived
+	// native server keeps its existing unbounded behavior unless an operator
+	// opts in, and a scoped agent session passes explicit limits.
+	UnlimitedBytes   int64 = 1<<63 - 1
+	UnlimitedObjects int64 = 1<<63 - 1
 )
 
 var (

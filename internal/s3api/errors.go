@@ -58,8 +58,40 @@ type errorResponse struct {
 	RequestID string   `xml:"RequestId"`
 }
 
+// DefaultMaxRequestBytes bounds a single request body when Config does not set
+// a limit. It matches the documented default agent-session request ceiling.
+const DefaultMaxRequestBytes int64 = 8 * 1024 * 1024
+
+// ReadTimeout bounds reading a whole request, and WriteTimeout bounds the
+// response. They are generous enough for a large upload on a slow link while
+// still preventing a stalled peer from holding a connection and goroutine
+// indefinitely.
+const (
+	ReadTimeout  = 5 * time.Minute
+	WriteTimeout = 5 * time.Minute
+)
+
+// isRequestTooLarge reports whether err came from the request body limit.
+func isRequestTooLarge(err error) bool {
+	var tooLarge *http.MaxBytesError
+	return errors.As(err, &tooLarge)
+}
+
+func requestTooLargeError(resource string, limit int64) s3Error {
+	return s3Error{
+		Code:       "EntityTooLarge",
+		Message:    fmt.Sprintf("Your proposed upload exceeds the maximum allowed object size of %d bytes", limit),
+		Resource:   resource,
+		StatusCode: http.StatusBadRequest,
+	}
+}
+
 func mapStorageError(err error, resource string) s3Error {
 	switch {
+	case isRequestTooLarge(err):
+		var tooLarge *http.MaxBytesError
+		_ = errors.As(err, &tooLarge)
+		return requestTooLargeError(resource, tooLarge.Limit)
 	case errors.Is(err, storage.ErrBucketNotFound):
 		return s3Error{Code: "NoSuchBucket", Message: "The specified bucket does not exist", Resource: resource, StatusCode: http.StatusNotFound}
 	case errors.Is(err, storage.ErrInvalidBucketName):
