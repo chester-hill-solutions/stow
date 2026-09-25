@@ -114,6 +114,10 @@ func (a *Adapter) CreateMultipartUpload(ctx context.Context, bucket, key string)
 	return a.local.CreateMultipartUpload(ctx, bucket, key)
 }
 
+func (a *Adapter) GetMultipartUpload(ctx context.Context, uploadID string) (*storage.MultipartUpload, error) {
+	return a.local.GetMultipartUpload(ctx, uploadID)
+}
+
 func (a *Adapter) UploadPart(ctx context.Context, uploadID string, partNumber int, body io.Reader) (*storage.PartInfo, error) {
 	return a.local.UploadPart(ctx, uploadID, partNumber, body)
 }
@@ -152,20 +156,9 @@ func (a *Adapter) CompleteMultipartUpload(ctx context.Context, uploadID string, 
 }
 
 func (a *Adapter) multipartTarget(ctx context.Context, uploadID string) (string, error) {
-	buckets, err := a.local.ListBuckets(ctx)
+	upload, err := a.local.GetMultipartUpload(ctx, uploadID)
 	if err != nil {
 		return "", err
 	}
-	for _, bucket := range buckets {
-		uploads, err := a.local.ListMultipartUploads(ctx, bucket.Name, storage.MultipartListOptions{MaxUploads: 10000})
-		if err != nil {
-			continue
-		}
-		for _, upload := range uploads.Uploads {
-			if upload.UploadID == uploadID {
-				return bucket.Name, nil
-			}
-		}
-	}
-	return "", storage.ErrUploadNotFound
+	return upload.Bucket, nil
 }

@@ -139,8 +139,10 @@ func serve(args []string) {
 
 	retryCtx, retryCancel := context.WithCancel(context.Background())
 	defer retryCancel()
+	retryDone := make(chan struct{})
 	if adapter != nil {
 		go func() {
+			defer close(retryDone)
 			ticker := time.NewTicker(time.Second)
 			defer ticker.Stop()
 			for {
@@ -152,6 +154,8 @@ func serve(args []string) {
 				}
 			}
 		}()
+	} else {
+		close(retryDone)
 	}
 
 	creds := auth.Credentials{}
@@ -168,7 +172,9 @@ func serve(args []string) {
 
 	verifier := auth.NewVerifier(auth.DefaultRegion)
 	writePolicy := "local-only"
-	if rtCfg.AllowLiveWrites {
+	if rtCfg.Policy == runthrough.PolicyMirrorWrites {
+		writePolicy = "mirrorWrites"
+	} else if rtCfg.AllowLiveWrites {
 		writePolicy = "allowLiveWrites"
 	}
 	cachePolicy := "none"
@@ -222,6 +228,11 @@ func serve(args []string) {
 	case sig := <-sigCh:
 		fmt.Printf("\nshutting down (%s)...\n", sig)
 		retryCancel()
+		select {
+		case <-retryDone:
+		case <-time.After(2 * time.Second):
+			log.Printf("retry worker did not stop before shutdown timeout")
+		}
 		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer cancel()
 		if err := srv.Shutdown(ctx); err != nil {

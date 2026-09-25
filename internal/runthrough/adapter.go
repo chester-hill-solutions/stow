@@ -89,10 +89,11 @@ func (a *Adapter) CacheStats() (hits, misses uint64) {
 // OutboxStats reports pending and terminal entries for admin inspection.
 func (a *Adapter) OutboxStats() (pending, terminal int) {
 	for _, entry := range a.outbox.Pending() {
-		pending++
 		if entry.Terminal {
 			terminal++
+			continue
 		}
+		pending++
 	}
 	return pending, terminal
 }

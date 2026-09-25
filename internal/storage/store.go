@@ -21,6 +21,7 @@ type Store interface {
 	ListObjectsV2(ctx context.Context, bucket string, opts ListOptions) (*ListResult, error)
 
 	CreateMultipartUpload(ctx context.Context, bucket, key string) (*MultipartUpload, error)
+	GetMultipartUpload(ctx context.Context, uploadID string) (*MultipartUpload, error)
 	UploadPart(ctx context.Context, uploadID string, partNumber int, body io.Reader) (*PartInfo, error)
 	CompleteMultipartUpload(ctx context.Context, uploadID string, parts []PartInfo) (*ObjectMeta, error)
 	AbortMultipartUpload(ctx context.Context, uploadID string) error

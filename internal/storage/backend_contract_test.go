@@ -65,6 +65,26 @@ func TestStoreBatchDeleteRequiresBucket(t *testing.T) {
 	})
 }
 
+func TestStoreMultipartLookup(t *testing.T) {
+	withStores(t, func(t *testing.T, store storage.Store) {
+		ctx := context.Background()
+		if err := store.CreateBucket(ctx, "uploads"); err != nil {
+			t.Fatalf("create bucket: %v", err)
+		}
+		upload, err := store.CreateMultipartUpload(ctx, "uploads", "object.bin")
+		if err != nil {
+			t.Fatalf("create upload: %v", err)
+		}
+		got, err := store.GetMultipartUpload(ctx, upload.UploadID)
+		if err != nil {
+			t.Fatalf("get upload: %v", err)
+		}
+		if got.Bucket != upload.Bucket || got.Key != upload.Key {
+			t.Fatalf("upload = %+v, want %+v", got, upload)
+		}
+	})
+}
+
 func TestStoreBucketDeletionRejectsActiveMultipartUpload(t *testing.T) {
 	withStores(t, func(t *testing.T, store storage.Store) {
 		ctx := context.Background()

@@ -90,17 +90,20 @@ func (a *Adapter) RetryPending(ctx context.Context) error {
 	blocked := make(map[string]bool)
 	var firstErr error
 	for _, entry := range a.outbox.Pending() {
+		key := entry.Bucket + "\x00" + entry.Key
+		if blocked[key] {
+			continue
+		}
 		if entry.Terminal {
+			blocked[key] = true
 			continue
 		}
 		if !entry.NextAttempt.IsZero() && entry.NextAttempt.After(now) {
+			blocked[key] = true
 			continue
 		}
 		if !a.upstreamEnabled(entry.Bucket) {
-			continue
-		}
-		key := entry.Bucket + "\x00" + entry.Key
-		if blocked[key] {
+			blocked[key] = true
 			continue
 		}
 		if err := a.completeIntent(ctx, entry); err != nil {

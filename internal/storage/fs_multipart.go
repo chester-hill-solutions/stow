@@ -59,6 +59,21 @@ func (s *FilesystemStore) CreateMultipartUpload(_ context.Context, bucket, key s
 	}, nil
 }
 
+func (s *FilesystemStore) GetMultipartUpload(_ context.Context, uploadID string) (*MultipartUpload, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	manifest, err := readMultipartManifest(s.multipartDir(uploadID))
+	if err != nil {
+		return nil, ErrUploadNotFound
+	}
+	return &MultipartUpload{
+		UploadID:  uploadID,
+		Bucket:    manifest.Bucket,
+		Key:       manifest.Key,
+		Initiated: manifest.Initiated,
+	}, nil
+}
+
 func (s *FilesystemStore) UploadPart(_ context.Context, uploadID string, partNumber int, body io.Reader) (*PartInfo, error) {
 	if partNumber < 1 || partNumber > 10000 {
 		return nil, ErrInvalidPart

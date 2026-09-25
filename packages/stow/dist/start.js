@@ -88,48 +88,62 @@ async function stopChild(child) {
         child.pid === undefined) {
         return;
     }
-    await new Promise((resolve) => {
+    await new Promise((resolve, reject) => {
         let settled = false;
-        function finish() {
+        function finish(error) {
             if (settled) {
                 return;
             }
             settled = true;
-            if (gracefulTimer) {
-                clearTimeout(gracefulTimer);
-            }
-            if (waitTimer) {
-                clearTimeout(waitTimer);
-            }
-            child.off("exit", finish);
-            child.off("close", finish);
+            clearTimeout(forceTimer);
+            clearTimeout(deadlineTimer);
+            child.off("exit", onExit);
+            child.off("close", onClose);
             child.off("error", onError);
+            if (error) {
+                reject(error);
+                return;
+            }
             resolve();
         }
-        function onError(_error) {
+        function onExit() {
             finish();
         }
-        const gracefulTimer = setTimeout(() => {
+        function onClose() {
+            finish();
+        }
+        function onError(error) {
+            finish(error);
+        }
+        const forceTimer = setTimeout(() => {
             try {
                 if (!child.kill("SIGKILL")) {
-                    finish();
+                    finish(new Error("stow child could not be force-stopped"));
                 }
             }
-            catch {
-                finish();
+            catch (error) {
+                finish(error instanceof Error ? error : new Error(String(error)));
             }
         }, STOP_GRACE_PERIOD_MS);
-        const waitTimer = setTimeout(finish, STOP_WAIT_PERIOD_MS);
-        child.once("exit", finish);
-        child.once("close", finish);
+        const deadlineTimer = setTimeout(() => {
+            try {
+                child.kill("SIGKILL");
+            }
+            catch {
+                // The timeout error below is the useful diagnostic for the caller.
+            }
+            finish(new Error("timed out waiting for stow child to exit"));
+        }, STOP_WAIT_PERIOD_MS);
+        child.once("exit", onExit);
+        child.once("close", onClose);
         child.once("error", onError);
         try {
             if (!child.kill("SIGTERM")) {
-                finish();
+                finish(new Error("stow child could not be stopped"));
             }
         }
-        catch {
-            finish();
+        catch (error) {
+            finish(error instanceof Error ? error : new Error(String(error)));
         }
     });
 }

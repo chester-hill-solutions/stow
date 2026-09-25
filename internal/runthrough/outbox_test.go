@@ -70,6 +70,42 @@ func TestMemoryOutboxPreservesPerKeyOrder(t *testing.T) {
 	}
 }
 
+func TestRetryPendingBlocksLaterSameKeyIntent(t *testing.T) {
+	ctx := context.Background()
+	local := storage.NewMemoryStore()
+	if err := local.CreateBucket(ctx, "bucket"); err != nil {
+		t.Fatalf("create bucket: %v", err)
+	}
+	meta, err := local.PutObject(ctx, "bucket", "key", bytes.NewReader([]byte("value")), storage.PutOptions{})
+	if err != nil {
+		t.Fatalf("put: %v", err)
+	}
+	outbox, err := runthrough.NewFileOutbox(filepath.Join(t.TempDir(), "outbox.json"))
+	if err != nil {
+		t.Fatalf("new outbox: %v", err)
+	}
+	created := time.Unix(100, 0).UTC()
+	entries := []runthrough.OutboxEntry{
+		{Operation: runthrough.OutboxPut, Bucket: "bucket", Key: "key", Version: meta.ETag, CreatedAt: created, NextAttempt: time.Now().Add(time.Hour)},
+		{Operation: runthrough.OutboxDelete, Bucket: "bucket", Key: "key", Version: meta.ETag, CreatedAt: created},
+	}
+	for _, entry := range entries {
+		if _, err := outbox.Enqueue(entry); err != nil {
+			t.Fatalf("enqueue: %v", err)
+		}
+	}
+	adapter := runthrough.NewWithOutbox(runthrough.Config{
+		Policy:          runthrough.PolicyMirrorWrites,
+		AllowLiveWrites: true,
+	}, local, local, newMockUpstream(), outbox)
+	if err := adapter.RetryPending(ctx); err != nil {
+		t.Fatalf("retry pending: %v", err)
+	}
+	if len(outbox.Pending()) != 2 {
+		t.Fatalf("pending = %+v, want both intents retained", outbox.Pending())
+	}
+}
+
 func TestRetryPendingContinuesAcrossKeys(t *testing.T) {
 	ctx := context.Background()
 	local := storage.NewMemoryStore()

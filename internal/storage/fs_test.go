@@ -87,6 +87,30 @@ func TestFilesystemStoreObjectLifecycle(t *testing.T) {
 	}
 }
 
+func TestFilesystemStoreRemovesStaleAtomicTempsOnOpen(t *testing.T) {
+	dir := t.TempDir()
+	objectTemp := filepath.Join(dir, "buckets", "bucket", "objects", ".tmp-stale")
+	multipartTemp := filepath.Join(dir, ".multipart", ".tmp-stale")
+	for _, path := range []string{objectTemp, multipartTemp} {
+		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+			t.Fatalf("mkdir temp parent: %v", err)
+		}
+		if err := os.WriteFile(path, []byte("partial"), 0o600); err != nil {
+			t.Fatalf("write temp: %v", err)
+		}
+	}
+	store, err := storage.NewFilesystemStore(dir)
+	if err != nil {
+		t.Fatalf("new store: %v", err)
+	}
+	defer store.Close()
+	for _, path := range []string{objectTemp, multipartTemp} {
+		if _, err := os.Stat(path); !os.IsNotExist(err) {
+			t.Fatalf("stale temp still exists at %s: %v", path, err)
+		}
+	}
+}
+
 func TestFilesystemStoreUsesSingleObjectRecord(t *testing.T) {
 	ctx := context.Background()
 	dir := t.TempDir()

@@ -34,6 +34,9 @@ func NewFilesystemStore(dataDir string) (*FilesystemStore, error) {
 	if err := os.MkdirAll(filepath.Join(dataDir, ".multipart"), 0o755); err != nil {
 		return nil, err
 	}
+	if err := removeStaleTemps(dataDir); err != nil {
+		return nil, fmt.Errorf("clean staging files: %w", err)
+	}
 	warnLegacyLayout(dataDir)
 	lockPath := filepath.Join(dataDir, ".stow.lock")
 	lock, err := os.OpenFile(lockPath, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
@@ -45,6 +48,18 @@ func NewFilesystemStore(dataDir string) (*FilesystemStore, error) {
 		return nil, err
 	}
 	return &FilesystemStore{dataDir: dataDir, lockPath: lockPath}, nil
+}
+
+func removeStaleTemps(dataDir string) error {
+	return filepath.WalkDir(dataDir, func(path string, entry os.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if entry.IsDir() || !strings.HasPrefix(entry.Name(), ".tmp-") {
+			return nil
+		}
+		return os.Remove(path)
+	})
 }
 
 func warnLegacyLayout(dataDir string) {

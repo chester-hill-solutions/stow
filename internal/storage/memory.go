@@ -312,6 +312,17 @@ func (s *MemoryStore) CreateMultipartUpload(_ context.Context, bucket, key strin
 	return &out, nil
 }
 
+func (s *MemoryStore) GetMultipartUpload(_ context.Context, uploadID string) (*MultipartUpload, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	mp, _, ok := s.findMultipart(uploadID)
+	if !ok {
+		return nil, ErrUploadNotFound
+	}
+	upload := mp.upload
+	return &upload, nil
+}
+
 func (s *MemoryStore) UploadPart(_ context.Context, uploadID string, partNumber int, body io.Reader) (*PartInfo, error) {
 	if partNumber < 1 || partNumber > 10000 {
 		return nil, ErrInvalidPart

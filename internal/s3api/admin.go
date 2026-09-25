@@ -112,6 +112,11 @@ func (s *Server) writeStatus(w http.ResponseWriter, r *http.Request) {
 	if s.config.UpstreamHost != "" {
 		payload["upstream"] = s.config.UpstreamHost
 	}
+	if provider, ok := s.store.(outboxStatsProvider); ok {
+		pending, terminal := provider.OutboxStats()
+		payload["outbox_pending"] = pending
+		payload["outbox_terminal"] = terminal
+	}
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(payload)
 }
