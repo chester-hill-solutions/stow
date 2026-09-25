@@ -45,19 +45,25 @@ func (i *Instance) removeMultipartTarget(target string) {
 	i.multipartTargets[target] = count - 1
 }
 
+// reserveTarget claims one object-count slot for a multipart target that has
+// no committed object yet, and reports whether it did. Callers decide what
+// running out of room means: initialization fails the open, while a live
+// reconciliation simply leaves the reservation unmade.
+func (i *Instance) reserveTarget(target string) bool {
+	if i.hasTargetReservation(target) || !i.objectQuotaFits(target, 0) {
+		return false
+	}
+	i.reservedTargets[target] = struct{}{}
+	i.reservedObjects++
+	return true
+}
+
 func (i *Instance) reconcileTargetReservation(target string, objectExists bool) {
 	if i.multipartTargets[target] == 0 || objectExists {
 		i.consumeTargetReservation(target)
 		return
 	}
-	if i.hasTargetReservation(target) {
-		return
-	}
-	if !i.objectQuotaFits(target, 0) {
-		return
-	}
-	i.reservedTargets[target] = struct{}{}
-	i.reservedObjects++
+	i.reserveTarget(target)
 }
 
 func (i *Instance) initialize(ctx context.Context) error {
@@ -164,10 +170,8 @@ func (i *Instance) initializeMultipartUpload(ctx context.Context, upload storage
 	if exists {
 		return nil
 	}
-	if !i.objectQuotaFits(target, 0) {
+	if !i.reserveTarget(target) {
 		return ErrQuotaExceeded
 	}
-	i.reservedTargets[target] = struct{}{}
-	i.reservedObjects++
 	return nil
 }
