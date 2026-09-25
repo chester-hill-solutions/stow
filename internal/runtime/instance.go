@@ -12,11 +12,13 @@ import (
 )
 
 type Instance struct {
-	mu      sync.Mutex
-	store   storage.Store
-	options Options
-	usage   Usage
-	closed  bool
+	mu        sync.Mutex
+	store     storage.Store
+	options   Options
+	usage     Usage
+	closed    bool
+	closeOnce sync.Once
+	closeErr  error
 }
 
 func Open(options Options) (*Instance, error) {
@@ -131,7 +133,6 @@ func (i *Instance) PutObject(ctx context.Context, bucket, key string, data []byt
 	if err := i.checkContext(ctx); err != nil {
 		return Object{}, err
 	}
-	copyData := append([]byte(nil), data...)
 	i.mu.Lock()
 	defer i.mu.Unlock()
 	if err := i.checkOpen(); err != nil {
@@ -142,12 +143,14 @@ func (i *Instance) PutObject(ctx context.Context, bucket, key string, data []byt
 	if err != nil {
 		return Object{}, err
 	}
+	requestedSize := int64(len(data))
 	if !exists && i.usage.Objects+1 > i.options.MaxObjects {
 		return Object{}, ErrQuotaExceeded
 	}
-	if i.usage.Bytes-oldSize+int64(len(copyData)) > i.options.MaxBytes {
+	if i.usage.Bytes-oldSize+requestedSize > i.options.MaxBytes {
 		return Object{}, ErrQuotaExceeded
 	}
+	copyData := append([]byte(nil), data...)
 	meta, err := i.store.PutObject(ctx, bucket, key, bytes.NewReader(copyData), storage.PutOptions{
 		ContentType: options.ContentType,
 		Metadata:    options.Metadata,
@@ -349,11 +352,12 @@ func (i *Instance) Reset(ctx context.Context) error {
 }
 
 func (i *Instance) Close() error {
-	i.mu.Lock()
-	defer i.mu.Unlock()
-	if i.closed {
-		return nil
-	}
-	i.closed = true
-	return i.store.Close()
+	i.closeOnce.Do(func() {
+		i.mu.Lock()
+		i.closed = true
+		store := i.store
+		i.mu.Unlock()
+		i.closeErr = store.Close()
+	})
+	return i.closeErr
 }

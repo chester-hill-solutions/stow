@@ -13,7 +13,11 @@ type Runtime struct {
 }
 
 func Open(options Options) (*Runtime, error) {
-	instance, err := stowruntime.Open(options)
+	instance, err := stowruntime.Open(stowruntime.Options{
+		Backend:    stowruntime.Backend(options.Backend),
+		MaxBytes:   options.MaxBytes,
+		MaxObjects: options.MaxObjects,
+	})
 	if err != nil {
 		return nil, mapError(err)
 	}
@@ -30,27 +34,61 @@ func (r *Runtime) DeleteBucket(ctx context.Context, name string) error {
 
 func (r *Runtime) ListBuckets(ctx context.Context) ([]Bucket, error) {
 	buckets, err := r.inner.ListBuckets(ctx)
-	return buckets, mapError(err)
+	if err != nil {
+		return nil, mapError(err)
+	}
+	out := make([]Bucket, 0, len(buckets))
+	for _, bucket := range buckets {
+		out = append(out, Bucket{Name: bucket.Name, CreationDate: bucket.CreationDate})
+	}
+	return out, nil
 }
 
 func (r *Runtime) PutObject(ctx context.Context, bucket, key string, data []byte, options PutOptions) (Object, error) {
-	object, err := r.inner.PutObject(ctx, bucket, key, data, options)
-	return object, mapError(err)
+	object, err := r.inner.PutObject(ctx, bucket, key, data, stowruntime.PutOptions{
+		ContentType: options.ContentType,
+		Metadata:    cloneMetadata(options.Metadata),
+	})
+	if err != nil {
+		return Object{}, mapError(err)
+	}
+	return objectOf(object), nil
 }
 
 func (r *Runtime) GetObject(ctx context.Context, bucket, key string) (Object, error) {
 	object, err := r.inner.GetObject(ctx, bucket, key)
-	return object, mapError(err)
+	if err != nil {
+		return Object{}, mapError(err)
+	}
+	return objectOf(object), nil
 }
 
 func (r *Runtime) HeadObject(ctx context.Context, bucket, key string) (Object, error) {
 	object, err := r.inner.HeadObject(ctx, bucket, key)
-	return object, mapError(err)
+	if err != nil {
+		return Object{}, mapError(err)
+	}
+	return objectOf(object), nil
 }
 
 func (r *Runtime) ListObjects(ctx context.Context, bucket string, options ListOptions) (ObjectPage, error) {
-	page, err := r.inner.ListObjects(ctx, bucket, options)
-	return page, mapError(err)
+	page, err := r.inner.ListObjects(ctx, bucket, stowruntime.ListOptions{
+		Prefix: options.Prefix,
+		Cursor: options.Cursor,
+		Limit:  options.Limit,
+	})
+	if err != nil {
+		return ObjectPage{}, mapError(err)
+	}
+	objects := make([]Object, 0, len(page.Objects))
+	for _, object := range page.Objects {
+		objects = append(objects, objectOf(object))
+	}
+	return ObjectPage{
+		Objects:    objects,
+		Truncated:  page.Truncated,
+		NextCursor: page.NextCursor,
+	}, nil
 }
 
 func (r *Runtime) DeleteObject(ctx context.Context, bucket, key string) error {
@@ -59,7 +97,10 @@ func (r *Runtime) DeleteObject(ctx context.Context, bucket, key string) error {
 
 func (r *Runtime) CopyObject(ctx context.Context, sourceBucket, sourceKey, destinationBucket, destinationKey string) (Object, error) {
 	object, err := r.inner.CopyObject(ctx, sourceBucket, sourceKey, destinationBucket, destinationKey)
-	return object, mapError(err)
+	if err != nil {
+		return Object{}, mapError(err)
+	}
+	return objectOf(object), nil
 }
 
 func (r *Runtime) Reset(ctx context.Context) error {
@@ -71,11 +112,20 @@ func (r *Runtime) Close() error {
 }
 
 func (r *Runtime) Usage() Usage {
-	return r.inner.Usage()
+	usage := r.inner.Usage()
+	return Usage{Bytes: usage.Bytes, Objects: usage.Objects}
 }
 
 func (r *Runtime) Capabilities() Capabilities {
-	return r.inner.Capabilities()
+	capabilities := r.inner.Capabilities()
+	return Capabilities{
+		Backend:    Backend(capabilities.Backend),
+		MaxBytes:   capabilities.MaxBytes,
+		MaxObjects: capabilities.MaxObjects,
+		Persistent: capabilities.Persistent,
+		Multipart:  capabilities.Multipart,
+		Upstream:   capabilities.Upstream,
+	}
 }
 
 func mapError(err error) error {
@@ -83,6 +133,14 @@ func mapError(err error) error {
 		return nil
 	}
 	switch {
+	case errors.Is(err, stowruntime.ErrClosed):
+		return ErrClosed
+	case errors.Is(err, stowruntime.ErrQuotaExceeded):
+		return ErrQuotaExceeded
+	case errors.Is(err, stowruntime.ErrUnsupportedBackend):
+		return ErrUnsupportedBackend
+	case errors.Is(err, stowruntime.ErrInvalidListLimit):
+		return ErrInvalidListLimit
 	case errors.Is(err, storage.ErrBucketNotFound):
 		return ErrBucketNotFound
 	case errors.Is(err, storage.ErrBucketExists):
@@ -98,4 +156,28 @@ func mapError(err error) error {
 	default:
 		return err
 	}
+}
+
+func objectOf(object stowruntime.Object) Object {
+	return Object{
+		Bucket:       object.Bucket,
+		Key:          object.Key,
+		Data:         append([]byte(nil), object.Data...),
+		Size:         object.Size,
+		ETag:         object.ETag,
+		ContentType:  object.ContentType,
+		Metadata:     cloneMetadata(object.Metadata),
+		LastModified: object.LastModified,
+	}
+}
+
+func cloneMetadata(metadata map[string]string) map[string]string {
+	if len(metadata) == 0 {
+		return nil
+	}
+	out := make(map[string]string, len(metadata))
+	for key, value := range metadata {
+		out[key] = value
+	}
+	return out
 }
