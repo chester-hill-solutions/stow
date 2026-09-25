@@ -140,6 +140,11 @@ func (s *Store) WorkspaceBucket() string { return s.manifest.Bucket }
 // ID is the workspace's durable identity.
 func (s *Store) ID() string { return s.manifest.WorkspaceID }
 
+// IsOwned reports whether stow created this workspace directory, as opposed to
+// adopting one that already existed. The registry records it so a later sweep
+// can tell the two apart without opening every workspace.
+func (s *Store) IsOwned() bool { return s.manifest.Owned }
+
 // Path returns where a key's bytes live on disk, and whether they are there.
 //
 // It exists so a host can hand a caller a real path without an S3 round trip:

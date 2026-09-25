@@ -451,6 +451,53 @@ Reporting "there is nothing there" as an error would make a retry after a
 partial failure impossible, and a caller that cannot retry a delete cannot clean
 up reliably.
 
+### 0.10 W4: liveness is established, never assumed
+
+Added 2026-09-25, with the registry and TTL collector.
+
+ADR 0009 §2 requires that collection "never" touch a live workspace, and adds
+the hard part: the collector must be able to *establish* that a workspace is
+unused, not assume it. Three designs were available and one was chosen:
+
+| Design | Why not |
+|---|---|
+| A heartbeat the owner refreshes | A heartbeat is stale in exactly the direction that deletes somebody's work — a frozen process stops refreshing, and the collector concludes nobody is there. It is a guess with a timestamp on it |
+| A recorded owner PID | PID reuse, and no way to tell a reused PID from the original. Needs a process start time, which is per-platform, to be safe at all |
+| **An advisory file lock** | **Chosen.** The kernel releases it when the holding process dies, including on `SIGKILL` and an OOM kill. "Is anyone using this?" is answered by the operating system, and there is no stale state to clean up and no window in which a dead process still looks alive |
+
+A second acquisition while one is held is refused rather than queued, and a
+probe answers "not live" when no lock file exists — so the probe is
+side-effect free and never leaves a lock behind that would block a real session.
+
+Two refusals are the substance of the feature, and their order is the design:
+
+1. **Liveness first.** A workspace that is merely *old* is never removed while
+   somebody is in it.
+2. **Ownership second.** An *adopted* workspace is never removed, ever, by a
+   sweep. It is checked before the age check precisely because the failure would
+   be catastrophic rather than merely wrong: adopting a directory is a documented
+   feature, so an age-based sweep that could delete one would be reachable by
+   waiting.
+3. **Age last**, and only for workspaces this machine created, with a TTL that
+   was explicitly recorded. An absent TTL means "no opinion" and is never
+   treated as expired.
+
+On Windows the standard library has no advisory file lock, and adding a
+dependency for one is not worth it. Rather than fall back to a heartbeat — the
+option this design exists to avoid — `Collect` refuses to run and says so. That
+is the same posture as the parent-death watch's `ErrUnsupported`: a workspace
+that cannot be reasoned about safely is left alone.
+
+`Collect` reports **every** decision, not only the removals, because "nothing
+was collected" and "three were skipped because they are in use" are different
+answers and a caller diagnosing a leaked workspace has to tell them apart.
+
+Worth recording: the TTL was only testable once the clock became injectable.
+`Touch` originally used the wall clock, so the behaviour could have been
+verified only by sleeping for an hour — and the first version of the test
+asserted that a touched workspace was *never* collected, which is wrong. Touch
+postpones; it does not exempt.
+
 ## 1. Product outcome
 
 > **Amended by revision 2.** The outcome is a bounded artifact workspace, not a
@@ -1520,7 +1567,7 @@ Phase 0 gates the rest rather than running beside it.
 | W0 | P0 | Workspace backend | — | **Done.** Both same-bytes directions pass; 74% covered; runs the shared backend contract suite |
 | W1 | P0 | Expose it through `pkg/stow` | W0 | **Done.** `stow.OpenWorkspace`, in-process, no injected store; `pkg/stow` at 76% |
 | W3 | P0 | `Destroy`, and the close/destroy split | W1 | **Go done.** `stow.Workspace.Destroy` removes the directory and refuses one stow *adopted*. The TypeScript and Python **sessions** are deliberately unchanged — see the correction below |
-| W4 | P0 | Session registry and TTL collector | W3 | A dead session's workspace is reclaimed; a live one, and a live cwd, never is |
+| W4 | P0 | Session registry and TTL collector | W3 | **Go done.** A dead session's workspace is reclaimed; a live one, and an adopted one, never are. Liveness is an OS-held advisory lock, not a guess — see §0.10 |
 | W2 | P1 | Finish the S3 compatibility contract | — | Virtual-hosted style runs in the corpus and the client stops hardcoding `forcePathStyle` |
 | W10 | P1 | Error codes SDKs already understand | W2 | `versions` and `location` return `NotImplemented` (0.6 defect 4) |
 | W6 | P1 | Quotas a host can actually set | W1 | Bytes, objects, request rate, wall clock, audit log, and a **raisable** `MaxRequestBytes` (0.6 defect 3) |
