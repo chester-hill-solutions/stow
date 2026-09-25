@@ -35,6 +35,36 @@ const client = new S3Client(stow.awsSdkV3Config());
 await stow.stop();
 ```
 
+## Embedded Go runtime
+
+The direct runtime is an in-process, memory-only profile for Go callers. It does not start an HTTP server or use AWS credentials:
+
+```go
+package main
+
+import (
+  "context"
+  "github.com/chester-hill-solutions/stow/pkg/stow"
+)
+
+func main() {
+  runtime, err := stow.Open(stow.Options{MaxBytes: 10 << 20, MaxObjects: 1000})
+  if err != nil { panic(err) }
+  defer runtime.Close()
+  ctx := context.Background()
+  if err := runtime.CreateBucket(ctx, "assets"); err != nil { panic(err) }
+  if _, err := runtime.PutObject(ctx, "assets", "hello.txt", []byte("hello"), stow.PutOptions{}); err != nil { panic(err) }
+}
+```
+
+The `js/wasm` bridge exposes the same memory runtime through a small JSON/base64 host protocol:
+
+```sh
+make test-wasm
+```
+
+The native S3 endpoint and the TypeScript `Stow.start()` / `Stow.connect()` contracts remain unchanged.
+
 ## Modes and policies
 
 | Mode | When |
@@ -60,7 +90,9 @@ internal/storage/   filesystem + memory stores (atomic JSON object records on di
 internal/auth/      SigV4
 internal/runthrough/ upstream adapter
 pkg/stow/            direct embedded Go runtime
-conformance/        AWS SDK Go v2 conformance tests
+cmd/stow-wasm/       js/wasm host bridge
+wasm/                Node-hosted WASM tests
+conformance/         AWS SDK Go v2 conformance tests
 packages/stow/      @chs/stow TypeScript wrapper
 ```
 
@@ -70,6 +102,7 @@ packages/stow/      @chs/stow TypeScript wrapper
 make build
 make test
 make test-conformance
+make test-wasm
 cd packages/stow && npm test
 ```
 

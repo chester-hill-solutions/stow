@@ -1,9 +1,13 @@
-.PHONY: build test test-race test-conformance test-node test-all lint format-check check-go-quality check-ts-quality check-type-escapes check-dry check-file-size check-coverage check-version standards check-generated
+.PHONY: build build-wasm test test-race test-conformance test-node test-wasm test-all lint format-check check-go-quality check-ts-quality check-type-escapes check-dry check-file-size check-coverage check-version standards check-generated
 
 BINARY := bin/stow
 
 build:
 	go build -o $(BINARY) ./cmd/stow
+
+build-wasm:
+	mkdir -p bin
+	GOOS=js GOARCH=wasm go build -o bin/stow-runtime.wasm ./cmd/stow-wasm
 
 test:
 	go test ./...
@@ -18,7 +22,10 @@ test-conformance:
 test-node: build
 	cd packages/stow && npm ci && npm test
 
-test-all: build test test-race test-conformance test-node
+test-wasm: build-wasm
+	node --test wasm/runtime.test.mjs
+
+test-all: build test test-race test-conformance test-node test-wasm
 
 lint:
 	go vet ./...

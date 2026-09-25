@@ -3,7 +3,7 @@
 ## Unreleased
 
 - Close the 0.2 remediation gate with race-safe server lifecycle, atomic filesystem object records, backend parity checks, ordered durable outbox behavior, admin metrics/retry controls, and expanded conformance coverage.
-- Keep the TypeScript package process-first for `@chs/stow` 0.2 while making startup cleanup, client cleanup, pagination, and temporary credential passthrough reliable.
+- Add a memory-only direct embedded Go runtime, bounded separate run-through caches, and a capability-gated `js/wasm` host bridge without changing the process/endpoint TypeScript contracts.
 
 ## 0.1.0
 

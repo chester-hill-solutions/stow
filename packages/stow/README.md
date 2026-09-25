@@ -33,7 +33,7 @@ process.env.S3_SECRET_ACCESS_KEY = bucket.secretAccessKey;
 await bucket.stop();
 ```
 
-`Stow.start()` owns the child process it launches. Use `backend: "memory"` for an explicitly ephemeral instance. To use an already-running endpoint, call `Stow.connect({ endpoint, accessKeyId, secretAccessKey, region })`; its connection is disconnected by the caller rather than by the managed-process `stop()` method. Both entry points remain endpoint-based in 0.2; the portable in-process/WASM API is a later additive profile.
+`Stow.start()` owns the child process it launches. Use `backend: "memory"` for an explicitly ephemeral instance. To use an already-running endpoint, call `Stow.connect({ endpoint, accessKeyId, secretAccessKey, region })`; its connection is disconnected by the caller rather than by the managed-process `stop()` method. The TypeScript entry points remain endpoint-based; the repository's experimental `js/wasm` bridge is a separate additive profile.
 
 Both connection helpers also accept an optional `sessionToken` or credential `provider` for temporary AWS credentials.
 

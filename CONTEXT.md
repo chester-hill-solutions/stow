@@ -8,6 +8,10 @@ Glossary for the dev S3 bucket service (`stow`).
 
 A local, S3-compatible HTTP endpoint intended for development and automated tests. It is not production object storage.
 
+### Embedded Runtime
+
+A direct in-process object runtime with a small lifecycle interface (`open`, object/bucket operations, quotas, `reset`, and `close`). The first profile is memory-only. The S3 HTTP service is an optional compatibility adapter, not the runtime's primary interface. The `js/wasm` bridge exposes the same runtime through a JSON/base64 host protocol.
+
 ### Run-Through Adapter
 
 A routing layer that accepts S3 requests at a local endpoint and, when configured, reads from or propagates supported mutations to a live upstream provider using the developer's existing environment credentials. Upstream propagation requires the explicit `mirrorWrites` policy or the agreed live-write opt-in.
