@@ -8,6 +8,10 @@ on:
 permissions:
   contents: write
   id-token: write
+  # GitHub Packages is the registry this organisation publishes to, and the
+  # built-in GITHUB_TOKEN may publish packages belonging to this repository.
+  # That is why no npm secret exists anywhere in this workflow.
+  packages: write
 
 jobs:
   test:
@@ -211,11 +215,21 @@ jobs:
           name: npm-package
           path: dist/npm
 
+      # GitHub Packages, not npmjs.org. This organisation publishes every one of
+      # its packages there and owns no packages on npmjs, where this scope does
+      # not exist, so publishing to npmjs returned 404 for a package rather than
+      # an authentication error and looked like a naming problem.
+      #
+      # The token is the built-in GITHUB_TOKEN, which may publish packages
+      # belonging to this repository. That is why no npm secret is stored
+      # anywhere: there is nothing to leak, rotate, or grant to a user.
       - name: Set up Node
         uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
           node-version: 24
-          registry-url: https://registry.npmjs.org
+          registry-url: https://npm.pkg.github.com
       - name: Verify npm package artifact
         shell: bash
         run: |

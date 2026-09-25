@@ -115,7 +115,11 @@ if (process.argv.includes("--online")) {
   const checks = [
     ...SURFACE.filter((e) => e.ecosystem === "npm").map((e) => ({
       ...e,
-      url: `https://registry.npmjs.org/${e.name.replace("/", "%2f")}`,
+      // GitHub Packages, not npmjs.org. This organisation publishes there and
+      // owns nothing on npmjs, where the scope does not exist at all, so
+      // checking npmjs reported the package as unpublished no matter what had
+      // been published.
+      url: `https://npm.pkg.github.com/${e.name.replace("/", "%2f")}`,
     })),
     ...SURFACE.filter((e) => e.ecosystem === "pypi").map((e) => ({
       ...e,
