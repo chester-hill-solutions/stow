@@ -74,18 +74,23 @@ move it behind its own subpath package, which is a separate decision.
 
 ## 5. Python: first-pass findings
 
-- **`stow` is taken on PyPI.** It is an unrelated artefact-management package
-  (`stow` 1.4.1, "stow artefacts anywhere, with ease"). The plan's warning not to
-  assume the name is available was correct. `chs-stow` and `stow-s3` are both
-  free.
+- **The PyPI distribution name is `stow-s3`, decided 2026-09-25.** `stow` is
+  taken on PyPI by an unrelated artefact-management package (`stow` 1.4.1,
+  "stow artefacts anywhere, with ease"), which the plan's warning anticipated.
+  `stow-s3` was confirmed unclaimed at decision time.
+- **The import package is `stow_s3`**, following the usual convention of
+  normalizing a hyphenated distribution name. The plan's `from stow import
+  session` sketch cannot be used: that import name belongs to the unrelated
+  package and is not the name being published.
+- **Supported Python versions are 3.10 and newer**, which is what the plan's own
+  API sketch requires: it uses `int | None` unions and builtin generic
+  `Iterator[...]` annotations, both of which are 3.10 syntax.
 - The same binary distribution question applies. Platform wheels are viable
   because the release pipeline already cross-compiles, but each platform wheel
   becomes a separately versioned artifact that must track the Go binary.
 - `boto3` must stay an optional extra, as the plan already requires.
 
-Not yet done: a clean-virtualenv install experiment, and a decision on the
-distribution name. Both are blocked on nothing and can proceed once the name is
-chosen.
+Not yet done: a clean-virtualenv install experiment.
 
 ## 6. What changed as a result of this spike
 
@@ -110,8 +115,7 @@ message: The stow server binary was not found (resolved to "stow"). It is
 
 ## 7. Next steps
 
-1. Choose the PyPI distribution name (`chs-stow` recommended).
-2. Add `@chs/stow-<platform>` optional packages and teach `resolveStowBinary` to
+1. Add `@chs/stow-<platform>` optional packages and teach `resolveStowBinary` to
    prefer a bundled platform binary over `PATH`.
-3. Run the clean-virtualenv Python experiment.
-4. Record the benchmark baseline, which remains the last open phase 0 item.
+2. Run the clean-virtualenv Python experiment for the `stow-s3` distribution.
+3. Record the benchmark baseline, which remains the last open phase 0 item.

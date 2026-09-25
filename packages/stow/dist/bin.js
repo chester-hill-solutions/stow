@@ -1,7 +1,12 @@
 import { accessSync, constants, existsSync } from "node:fs";
+import { createRequire } from "node:module";
 import { delimiter, dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 const PACKAGE_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
+// This package is ESM, so `require` is not in scope. createRequire gives us
+// standard Node resolution, including a package's own exports map, without
+// reimplementing node_modules lookup by hand.
+const requireFromHere = createRequire(import.meta.url);
 function isExecutable(path) {
     try {
         accessSync(path, constants.X_OK);
@@ -48,12 +53,47 @@ function findMonorepoBinary() {
     }
     return undefined;
 }
+// PLATFORM_PACKAGES maps a Node platform/arch pair to the optional npm package
+// that ships the matching stow binary. It mirrors the platform list the release
+// workflow builds, so an install on a supported platform resolves a binary with
+// no PATH or environment setup.
+const PLATFORM_PACKAGES = {
+    "linux-x64": "@chs/stow-linux-x64",
+    "linux-arm64": "@chs/stow-linux-arm64",
+    "darwin-x64": "@chs/stow-darwin-x64",
+    "darwin-arm64": "@chs/stow-darwin-arm64",
+};
+const BUNDLED_BINARY_SUBPATH = "bin/stow";
+function findBundledBinary() {
+    const platformPackage = PLATFORM_PACKAGES[`${process.platform}-${process.arch}`];
+    if (platformPackage === undefined) {
+        return undefined;
+    }
+    try {
+        // Resolve through the platform package's exports map so the path works
+        // whether it is installed flat or hoisted into a workspace.
+        const entry = requireFromHere.resolve(`${platformPackage}/${BUNDLED_BINARY_SUBPATH}`);
+        return isExecutable(entry) ? entry : undefined;
+    }
+    catch {
+        // The optional package is absent for this platform, or npm skipped it.
+        // Resolution continues with the remaining locations.
+        return undefined;
+    }
+}
 /**
  * Resolve the stow binary path.
  *
- * Precedence: STOW_BIN env, `bin/stow` relative to monorepo root, then `stow` on PATH.
+ * Precedence: a platform binary installed alongside this package, the STOW_BIN
+ * environment variable, `bin/stow` relative to a monorepo root, then `stow` on
+ * PATH. A plain `npm install` on a supported platform therefore works with no
+ * setup, while an explicit STOW_BIN still wins for development and testing.
  */
 export function resolveStowBinary() {
+    const bundled = findBundledBinary();
+    if (bundled !== undefined) {
+        return bundled;
+    }
     const fromEnv = process.env.STOW_BIN?.trim();
     if (fromEnv) {
         return fromEnv;

@@ -43,6 +43,12 @@
     "@smithy/signature-v4": "^5.0.2",
     "@smithy/types": "^4.1.0"
   },
+  "optionalDependencies": {
+    "@chs/stow-darwin-arm64": "0.2.0",
+    "@chs/stow-darwin-x64": "0.2.0",
+    "@chs/stow-linux-arm64": "0.2.0",
+    "@chs/stow-linux-x64": "0.2.0"
+  },
   "devDependencies": {
     "@eslint/js": "^9.39.5",
     "@types/node": "^22.13.10",

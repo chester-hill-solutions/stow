@@ -1,7 +1,10 @@
 /**
  * Resolve the stow binary path.
  *
- * Precedence: STOW_BIN env, `bin/stow` relative to monorepo root, then `stow` on PATH.
+ * Precedence: a platform binary installed alongside this package, the STOW_BIN
+ * environment variable, `bin/stow` relative to a monorepo root, then `stow` on
+ * PATH. A plain `npm install` on a supported platform therefore works with no
+ * setup, while an explicit STOW_BIN still wins for development and testing.
  */
 export declare function resolveStowBinary(): string;
 export declare function stowBinaryAvailable(): boolean;

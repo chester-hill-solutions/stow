@@ -1250,11 +1250,15 @@ The project becomes a strong agent and DX library when a new user can write one 
 
 - [ ] What is the exact default promise?
 - [ ] What is the canonical session name in TypeScript and Python?
-- [ ] What is the PyPI distribution name, and is it available?
+- [ ] What is the PyPI distribution name, and is it available? — **`stow-s3`**, import
+  package `stow_s3`, Python 3.10+. `stow` is taken on PyPI by an unrelated
+  package. Recorded in `docs/distribution-spike.md`.
 - [ ] Which S3 client libraries are first-class?
 - [ ] Is async Python part of the first release or a later release?
-- [ ] Which platforms ship in the first release, and is Windows in or out?
-- [ ] How is the binary distributed with each package? (A0.5 spike answer)
+- [ ] Which platforms ship in the first release? — **macOS arm64 and Linux x64.**
+  The release pipeline already builds all four candidate platforms.
+- [ ] How is the binary distributed with each package? (A0.5 answer: platform
+  optional packages. Measured in `docs/distribution-spike.md`.)
 - [ ] What are the default quotas, once the benchmark baseline exists?
 - [ ] Which capabilities must be present for an agent adapter?
 - [ ] How are child-agent credentials handed off?

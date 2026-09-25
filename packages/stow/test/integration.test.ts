@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
 import { describe, it } from "node:test";
+import type * as BinModule from "../dist/bin.js";
 import { stowBinaryAvailable } from "../dist/bin.js";
 import { verifyObjectReadable } from "../dist/instance.js";
 import { Stow } from "../dist/index.js";
@@ -23,6 +24,86 @@ describe("parseReadyLine", () => {
 });
 
 describe("stow binary discovery", () => {
+  // Derived the same way bin.ts derives it, so this exercises the real mapping
+  // on whichever platform runs it.
+  const platformPackage = `@chs/stow-${process.platform}-${process.arch}`;
+
+  async function isolatedBin(directory: string): Promise<typeof BinModule> {
+    const isolatedDist = join(directory, "isolated", "dist");
+    await mkdir(isolatedDist, { recursive: true });
+    await copyFile(new URL("../dist/bin.js", import.meta.url), join(isolatedDist, "bin.js"));
+    return import(pathToFileURL(join(isolatedDist, "bin.js")).href);
+  }
+
+  function restore(environment: NodeJS.ProcessEnv, name: string, value: string | undefined): void {
+    if (value === undefined) {
+      delete environment[name];
+    } else {
+      environment[name] = value;
+    }
+  }
+
+  it("resolves a platform package binary without PATH or environment setup", async () => {
+    if (process.platform === "win32") {
+      return;
+    }
+    const dir = await mkdtemp(join(tmpdir(), "stow-bundled-"));
+    try {
+      const packageDir = join(dir, "isolated", "node_modules", platformPackage);
+      await mkdir(join(packageDir, "bin"), { recursive: true });
+      await writeFile(
+        join(packageDir, "package.json"),
+        JSON.stringify({
+          name: platformPackage,
+          version: "0.0.0",
+          exports: { "./bin/stow": "./bin/stow" },
+        }),
+      );
+      const bundled = join(packageDir, "bin", "stow");
+      await writeFile(bundled, "#!/bin/sh\nexit 0\n");
+      await chmod(bundled, 0o755);
+
+      const isolated = await isolatedBin(dir);
+      const previousPath = process.env.PATH;
+      const previousBin = process.env.STOW_BIN;
+      // Empty PATH and STOW_BIN prove the bundled package is what resolved,
+      // rather than a fallback happening to succeed.
+      process.env.PATH = "";
+      process.env.STOW_BIN = "";
+      try {
+        assert.equal(isolated.resolveStowBinary(), bundled);
+        assert.equal(isolated.stowBinaryAvailable(), true);
+      } finally {
+        restore(process.env, "PATH", previousPath);
+        restore(process.env, "STOW_BIN", previousBin);
+      }
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("falls back cleanly when no platform package is installed", async () => {
+    if (process.platform === "win32") {
+      return;
+    }
+    const dir = await mkdtemp(join(tmpdir(), "stow-no-platform-"));
+    try {
+      const isolated = await isolatedBin(dir);
+      const previousBin = process.env.STOW_BIN;
+      process.env.STOW_BIN = "";
+      try {
+        // No platform package and no STOW_BIN: resolution must still return a
+        // usable answer rather than throwing.
+        assert.equal(isolated.resolveStowBinary(), "stow");
+        assert.equal(isolated.stowBinaryAvailable(), false);
+      } finally {
+        restore(process.env, "STOW_BIN", previousBin);
+      }
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
   it("finds an executable on PATH", async () => {
     if (process.platform === "win32") {
       return;

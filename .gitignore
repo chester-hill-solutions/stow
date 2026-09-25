@@ -5,6 +5,8 @@
 *.dll
 *.so
 *.dylib
+# Native binaries staged into the platform packages for packing
+/packages/stow-*/bin/
 
 # Go test artifacts
 *.test
