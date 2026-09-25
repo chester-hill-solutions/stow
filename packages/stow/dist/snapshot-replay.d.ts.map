@@ -1,0 +1,1 @@
+{"version":3,"file":"snapshot-replay.d.ts","sourceRoot":"","sources":["../src/snapshot-replay.ts"],"names":[],"mappings":"AAAA,OAAO,EAA2B,KAAK,mBAAmB,EAAE,MAAM,oBAAoB,CAAC;AACvF,OAAO,KAAK,EAAE,YAAY,EAAE,MAAM,eAAe,CAAC;AAElD,OAAO,EACL,YAAY,EACZ,aAAa,EACb,eAAe,EACf,iBAAiB,EACjB,aAAa,GACd,MAAM,yBAAyB,CAAC;AAEjC,wBAAgB,cAAc,CAAC,QAAQ,EAAE,YAAY,EAAE,QAAQ,EAAE,mBAAmB,GAAG,IAAI,CAa1F"}

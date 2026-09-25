@@ -16,6 +16,10 @@ export {
   EmbeddedStow,
   EmbeddedStowError,
 } from "./embedded.js";
+// The browser persistence profile is deliberately not re-exported here. It is
+// reachable only through the "./browser" subpath so that browser-only code
+// never enters the Node entry point, and so the profile has exactly one
+// documented import path.
 export {
   loadNodeWasmHost,
   type NodeWasmHost,

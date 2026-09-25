@@ -10,7 +10,7 @@ export interface EmbeddedStowOptions {
 }
 
 export interface EmbeddedCapabilities {
-  backend: "memory";
+  backend: "memory" | "indexeddb";
   maxBytes: number;
   maxObjects: number;
   persistent: boolean;

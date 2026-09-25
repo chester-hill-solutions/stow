@@ -78,6 +78,43 @@ for (;;) {
 
 Run `make test-wasm` or `make test-node` to rebuild the packaged asset. Custom hosts may still provide their own synchronous `call(request)` implementation.
 
+### Browser persistence profile
+
+The additive [`@chs/stow/browser`](../../docs/browser-persistence.md) entry
+point coordinates durable commits around the embedded memory profile. The
+`openBrowserEmbeddedStow` wrapper replays the committed generation during async
+open, serializes operations FIFO, and commits each mutation before its promise
+resolves. `IndexedDbPersistenceAdapter` uses a manifest, bucket store, and
+object store with direct `Uint8Array` values; it also enforces exclusive
+namespace ownership:
+
+```ts
+import {
+  IndexedDbPersistenceAdapter,
+  openBrowserEmbeddedStow,
+} from "@chs/stow/browser";
+
+const persistence = new IndexedDbPersistenceAdapter({
+  databaseName: "my-app-stow",
+});
+const embedded = await openBrowserEmbeddedStow(wasmHost, {
+  namespace: "app-profile",
+  persistence,
+  maxBytes: 10_000_000,
+});
+await embedded.createBucket("assets");
+await embedded.putObject("assets", "hello.txt", new TextEncoder().encode("hello"));
+await embedded.close();
+```
+
+`reset()` clears the persisted generation and live memory state while retaining
+ownership. `close()` is terminal, idempotent, drains accepted operations, and
+retains data; it does not close the caller-supplied host. Unsupported formats,
+stale generations, denied ownership, quota overflow, and closed profiles use
+stable persistence error codes rather than falling back to memory-only state.
+The existing `EmbeddedStow` and `@chs/stow/node-wasm` contracts remain
+unchanged.
+
 CLI equivalent:
 
 ```sh

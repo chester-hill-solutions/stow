@@ -2,6 +2,10 @@ import { buildAwsSdkV3Config, createStowConnection } from "./instance.js";
 import { startStow } from "./start.js";
 import { upstreamFromEnv } from "./upstream.js";
 export { EMBEDDED_PROTOCOL_VERSION, EmbeddedStow, EmbeddedStowError, } from "./embedded.js";
+// The browser persistence profile is deliberately not re-exported here. It is
+// reachable only through the "./browser" subpath so that browser-only code
+// never enters the Node entry point, and so the profile has exactly one
+// documented import path.
 export { loadNodeWasmHost, } from "./node-wasm-host.js";
 export { parseReadyLine } from "./start.js";
 export { resolveStowBinary, stowBinaryAvailable } from "./bin.js";

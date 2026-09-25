@@ -98,6 +98,8 @@ make test-wasm
 
 The native S3 endpoint and the TypeScript `Stow.start()` / `Stow.connect()` contracts remain unchanged.
 
+Browser hosts can opt into the additive [`@chs/stow/browser` profile](docs/browser-persistence.md), which commits every embedded mutation durably through IndexedDB and keeps the WASM runtime in memory.
+
 ## Modes and policies
 
 | Mode | When |
