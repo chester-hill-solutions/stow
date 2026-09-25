@@ -93,28 +93,17 @@ jobs:
 
   live_gate:
     name: Live provider gate
-    runs-on: ubuntu-latest
     if: startsWith(github.ref, 'refs/tags/v')
-    steps:
-      - name: Checkout
-        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
-      - name: Set up Go
-        uses: actions/setup-go@d35c59abb061a4a6fb18e82ac0862c26744d6ab5 # v5.5.0
-        with:
-          go-version-file: go.mod
-          cache: true
-      - name: Build
-        run: make build
-      - name: Run disposable live conformance
-        env:
-          STOW_CONFORMANCE_UPSTREAM: "1"
-          STOW_ENDPOINT: ${{ secrets.STOW_LIVE_ENDPOINT }}
-          STOW_ACCESS_KEY_ID: ${{ secrets.STOW_LIVE_ACCESS_KEY_ID }}
-          STOW_SECRET_ACCESS_KEY: ${{ secrets.STOW_LIVE_SECRET_ACCESS_KEY }}
-          STOW_SESSION_TOKEN: ${{ secrets.STOW_LIVE_SESSION_TOKEN }}
-          STOW_LIVE_BUCKET: ${{ vars.STOW_LIVE_BUCKET }}
-          STOW_LIVE_BUCKET_PREFIX: ${{ vars.STOW_LIVE_BUCKET_PREFIX }}
-        run: make test-conformance
+    uses: ./.github/workflows/live.yml
+    with:
+      dry_run: false
+      provider: auto
+      require_configured: true
+    secrets:
+      STOW_LIVE_ENDPOINT: ${{ secrets.STOW_LIVE_ENDPOINT }}
+      STOW_LIVE_ACCESS_KEY_ID: ${{ secrets.STOW_LIVE_ACCESS_KEY_ID }}
+      STOW_LIVE_SECRET_ACCESS_KEY: ${{ secrets.STOW_LIVE_SECRET_ACCESS_KEY }}
+      STOW_LIVE_SESSION_TOKEN: ${{ secrets.STOW_LIVE_SESSION_TOKEN }}
 
   release:
     name: Release

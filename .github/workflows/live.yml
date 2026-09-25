@@ -1,7 +1,57 @@
 name: Live conformance
 
 on:
+  workflow_call:
+    inputs:
+      dry_run:
+        description: Validate both matrix profiles without contacting a provider
+        required: false
+        type: boolean
+        default: false
+      provider:
+        description: Provider profile to run; auto selects by endpoint host
+        required: false
+        type: string
+        default: auto
+      require_configured:
+        description: Fail instead of skipping when live configuration is missing
+        required: false
+        type: boolean
+        default: false
+    secrets:
+      STOW_LIVE_ENDPOINT:
+        description: Existing live-provider endpoint secret
+        required: false
+      STOW_LIVE_ACCESS_KEY_ID:
+        description: Existing live-provider access key secret
+        required: false
+      STOW_LIVE_SECRET_ACCESS_KEY:
+        description: Existing live-provider secret key
+        required: false
+      STOW_LIVE_SESSION_TOKEN:
+        description: Existing optional live-provider session token
+        required: false
   workflow_dispatch:
+    inputs:
+      dry_run:
+        description: Validate both matrix profiles without contacting a provider
+        required: true
+        type: boolean
+        default: false
+      provider:
+        description: Provider profile to run
+        required: true
+        type: choice
+        default: auto
+        options:
+          - auto
+          - aws-s3
+          - cloudflare-r2-custom
+      require_configured:
+        description: Fail instead of skipping when live configuration is missing
+        required: true
+        type: boolean
+        default: false
   schedule:
     - cron: "17 3 * * 1"
 
@@ -9,31 +59,80 @@ permissions:
   contents: read
 
 concurrency:
-  group: live-conformance-${{ github.ref }}
+  group: live-conformance-${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
   upstream:
-    name: Run-through providers
+    name: ${{ matrix.label }}
     runs-on: ubuntu-latest
     timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - provider: aws-s3
+            label: Live / AWS S3
+          - provider: cloudflare-r2-custom
+            label: Live / Cloudflare R2 or custom S3
     steps:
       - name: Checkout
         uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+
       - name: Set up Go
         uses: actions/setup-go@d35c59abb061a4a6fb18e82ac0862c26744d6ab5 # v5.5.0
         with:
           go-version-file: go.mod
           cache: true
-      - name: Build
-        run: make build
-      - name: Run live conformance
+
+      - name: Resolve live provider
+        id: provider
         env:
-          STOW_CONFORMANCE_UPSTREAM: "1"
+          STOW_CONFORMANCE_DRY_RUN: ${{ inputs.dry_run || false }}
+          STOW_CONFORMANCE_REQUIRE_CONFIGURED: ${{ inputs.require_configured || false }}
+          STOW_CONFORMANCE_REQUESTED_PROVIDER: ${{ inputs.provider || 'auto' }}
+          STOW_LIVE_PROFILE: ${{ matrix.provider }}
           STOW_ENDPOINT: ${{ secrets.STOW_LIVE_ENDPOINT }}
           STOW_ACCESS_KEY_ID: ${{ secrets.STOW_LIVE_ACCESS_KEY_ID }}
           STOW_SECRET_ACCESS_KEY: ${{ secrets.STOW_LIVE_SECRET_ACCESS_KEY }}
           STOW_SESSION_TOKEN: ${{ secrets.STOW_LIVE_SESSION_TOKEN }}
           STOW_LIVE_BUCKET: ${{ vars.STOW_LIVE_BUCKET }}
           STOW_LIVE_BUCKET_PREFIX: ${{ vars.STOW_LIVE_BUCKET_PREFIX }}
-        run: make test-conformance
+        run: ./conformance/live-provider.sh resolve
+
+      - name: Build
+        if: steps.provider.outputs.active == 'true'
+        run: make build
+
+      - name: Run disposable live conformance
+        id: live
+        if: steps.provider.outputs.active == 'true'
+        env:
+          STOW_CONFORMANCE_UPSTREAM: "1"
+          STOW_CONFORMANCE_DISPOSABLE: "1"
+          STOW_CONFORMANCE_DRY_RUN: ${{ inputs.dry_run || false }}
+          STOW_CONFORMANCE_PROVIDER: ${{ steps.provider.outputs.provider }}
+          STOW_CONFORMANCE_RUN_ID: ${{ github.run_id }}-${{ github.run_attempt }}-${{ matrix.provider }}
+          STOW_ENDPOINT: ${{ secrets.STOW_LIVE_ENDPOINT }}
+          STOW_ACCESS_KEY_ID: ${{ secrets.STOW_LIVE_ACCESS_KEY_ID }}
+          STOW_SECRET_ACCESS_KEY: ${{ secrets.STOW_LIVE_SECRET_ACCESS_KEY }}
+          STOW_SESSION_TOKEN: ${{ secrets.STOW_LIVE_SESSION_TOKEN }}
+          STOW_LIVE_BUCKET: ${{ vars.STOW_LIVE_BUCKET }}
+          STOW_LIVE_BUCKET_PREFIX: ${{ vars.STOW_LIVE_BUCKET_PREFIX }}
+        run: ./conformance/live-provider.sh test
+
+      - name: Report provider status
+        if: always()
+        env:
+          ACTIVE: ${{ steps.provider.outputs.active }}
+          PROVIDER: ${{ steps.provider.outputs.provider }}
+          REASON: ${{ steps.provider.outputs.reason }}
+          TEST_OUTCOME: ${{ steps.live.outcome }}
+        run: |
+          if [[ "$ACTIVE" != "true" ]]; then
+            printf 'Live provider profile was not run: %s.\n' "${REASON:-unresolved}"
+          elif [[ "$TEST_OUTCOME" == "success" ]]; then
+            printf 'Live provider %s completed.\n' "$PROVIDER"
+          else
+            printf 'Live provider %s did not complete: %s.\n' "$PROVIDER" "${TEST_OUTCOME:-not-run}"
+          fi
