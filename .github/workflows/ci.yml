@@ -142,6 +142,42 @@ jobs:
       - name: Run standards gate
         run: make standards
 
+  # macOS is a first-class release platform: release.yml cross-compiles
+  # darwin/amd64 and darwin/arm64. Before this job existed, every job here ran on
+  # ubuntu-latest, so the parent-death tests never executed on the platform whose
+  # implementation they exist to protect, and the darwin kqueue watch shipped as
+  # a no-op that logged itself as armed (issue #4).
+  darwin:
+    name: Parent-death watch on macOS
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 10
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-latest]
+    steps:
+      - name: Checkout
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+
+      - name: Set up Go
+        uses: actions/setup-go@d35c59abb061a4a6fb18e82ac0862c26744d6ab5 # v5.5.0
+        with:
+          go-version-file: .go-version
+          cache: true
+
+      # This is the whole reason the job exists. The kill test SIGKILLs the
+      # watched parent so no close handler runs, which is the only case where
+      # the kernel mechanism is the sole thing that can save the child.
+      - name: Parent-death watch
+        run: go test -race -run 'TestWatch|TestChildExitsWhenParentIsKilled|TestValidate' -v ./internal/parentwatch/
+
+      # The Go build must also work on the platform it ships to, which a
+      # cross-compiled release artifact alone does not prove.
+      - name: Build and vet
+        run: |
+          go build ./...
+          go vet ./...
+
   lint:
     name: Lint
     runs-on: ubuntu-latest

@@ -91,7 +91,32 @@ func (s *FilesystemStore) objectsDir(bucket string) string {
 }
 
 func (s *FilesystemStore) objectPath(bucket, key string) string {
-	return filepath.Join(s.objectsDir(bucket), objectRelPath(key))
+	segments := append([]string{s.objectsDir(bucket)}, objectRelSegments(key)...)
+	return filepath.Join(segments...)
+}
+
+// pruneEmptyShards removes the shard directories a delete leaves behind, up to
+// but never including the bucket's objects directory.
+//
+// os.Remove only succeeds on an empty directory, so the walk stops by itself at
+// the first shard that still holds another object. Neither bound is trusted on
+// its own: the root is compared by path, and the base name must look like a
+// shard, so a future caller with a path outside the objects directory cannot
+// walk the loop upward deleting directories it did not create.
+func (s *FilesystemStore) pruneEmptyShards(bucket, objPath string) {
+	root := s.objectsDir(bucket)
+	for dir := filepath.Dir(objPath); dir != root && filepath.Dir(dir) != dir; dir = filepath.Dir(dir) {
+		base := filepath.Base(dir)
+		if base == "." || base == string(filepath.Separator) {
+			return
+		}
+		if !isShardName(base) {
+			return
+		}
+		if err := os.Remove(dir); err != nil {
+			return
+		}
+	}
 }
 
 func (s *FilesystemStore) multipartDir(uploadID string) string {
@@ -313,7 +338,11 @@ func (s *FilesystemStore) DeleteObject(_ context.Context, bucket, key string) er
 	if _, err := os.Stat(objPath); os.IsNotExist(err) {
 		return storage.ErrObjectNotFound
 	}
-	return os.Remove(objPath)
+	if err := os.Remove(objPath); err != nil {
+		return err
+	}
+	s.pruneEmptyShards(bucket, objPath)
+	return nil
 }
 
 func (s *FilesystemStore) DeleteObjects(_ context.Context, bucket string, keys []string) ([]string, error) {
@@ -339,6 +368,7 @@ func (s *FilesystemStore) DeleteObjects(_ context.Context, bucket string, keys [
 		if err := os.Remove(objPath); err != nil {
 			return deleted, err
 		}
+		s.pruneEmptyShards(bucket, objPath)
 		deleted = append(deleted, key)
 	}
 	return deleted, nil
