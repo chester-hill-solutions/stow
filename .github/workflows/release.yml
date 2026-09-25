@@ -192,6 +192,13 @@ jobs:
     runs-on: ubuntu-latest
     if: startsWith(github.ref, 'refs/tags/v')
     steps:
+      # This job runs scripts out of the tree, not just artifacts. Packing the
+      # platform packages calls scripts/pack-platform-package.mjs, and the
+      # install-surface gate calls scripts/check-install-surface.mjs, so without
+      # a checkout the first of those to run dies with MODULE_NOT_FOUND.
+      - name: Checkout
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+
       - name: Download native artifacts
         uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with:
@@ -330,7 +337,27 @@ jobs:
           done
           ls -l dist/wheel
 
+      # PyPI is off until a trusted publisher is configured for this project on
+      # pypi.org. A step that can never succeed is the same "designed but not
+      # wired" failure the live-provider gate used to be, and because the
+      # GitHub Release comes after this step, a hard failure here would publish
+      # to npm and then produce no release at all. The skip is recorded and
+      # printed in the release notes rather than passing silently.
+      - name: Record PyPI publishing status
+        id: pypi
+        env:
+          STOW_PUBLISH_PYPI: ${{ vars.STOW_PUBLISH_PYPI }}
+        run: |
+          set -euo pipefail
+          if [[ "${STOW_PUBLISH_PYPI:-}" == "true" ]]; then
+            echo "status=enabled" >> "$GITHUB_OUTPUT"
+          else
+            echo "status=SKIPPED - no PyPI trusted publisher is configured, so stow-s3 was NOT published to PyPI" >> "$GITHUB_OUTPUT"
+            echo "::warning title=PyPI publishing skipped::STOW_PUBLISH_PYPI is not set to true, so this release did not publish to PyPI."
+          fi
+
       - name: Publish to PyPI
+        if: steps.pypi.outputs.status == 'enabled'
         uses: pypa/gh-action-pypi-publish@release/v1
         with:
           packages-dir: dist/wheel
@@ -380,3 +407,5 @@ jobs:
             is published.
 
             Live-provider gate: ${{ steps.live.outputs.status }}
+
+            PyPI: ${{ steps.pypi.outputs.status }}
