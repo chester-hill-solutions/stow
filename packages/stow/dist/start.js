@@ -19,6 +19,8 @@ export function parseReadyLine(line) {
         mode: mode === "run-through" ? "run-through" : "local",
     };
 }
+const MAX_DIAGNOSTIC_BYTES = 64 * 1024;
+const STARTUP_TIMEOUT_MS = 10_000;
 async function waitForReady(child, timeoutMs = 10_000) {
     return new Promise((resolve, reject) => {
         let stdoutBuffer = "";
@@ -34,6 +36,7 @@ async function waitForReady(child, timeoutMs = 10_000) {
         }, timeoutMs);
         const onError = (error) => {
             if (settled) {
+                cleanup();
                 return;
             }
             settled = true;
@@ -42,6 +45,7 @@ async function waitForReady(child, timeoutMs = 10_000) {
         };
         const onExit = (code, signal) => {
             if (settled) {
+                cleanup();
                 return;
             }
             settled = true;
@@ -49,7 +53,10 @@ async function waitForReady(child, timeoutMs = 10_000) {
             reject(new Error(`stow exited before STOW_READY (code=${code ?? "null"}, signal=${signal ?? "null"}).\nstdout:\n${stdoutBuffer}\nstderr:\n${stderrBuffer}`));
         };
         const onStdout = (chunk) => {
-            stdoutBuffer += chunk.toString("utf8");
+            if (settled) {
+                return;
+            }
+            stdoutBuffer = (stdoutBuffer + chunk.toString("utf8")).slice(-MAX_DIAGNOSTIC_BYTES);
             for (const line of stdoutBuffer.split(/\r?\n/)) {
                 const ready = parseReadyLine(line);
                 if (!ready) {
@@ -59,18 +66,23 @@ async function waitForReady(child, timeoutMs = 10_000) {
                     return;
                 }
                 settled = true;
-                cleanup();
+                cleanup(false);
                 resolve(ready);
                 return;
             }
         };
         const onStderr = (chunk) => {
-            stderrBuffer += chunk.toString("utf8");
+            if (settled) {
+                return;
+            }
+            stderrBuffer = (stderrBuffer + chunk.toString("utf8")).slice(-MAX_DIAGNOSTIC_BYTES);
         };
-        const cleanup = () => {
+        const cleanup = (removeOutput = true) => {
             clearTimeout(timer);
-            child.stdout?.off("data", onStdout);
-            child.stderr?.off("data", onStderr);
+            if (removeOutput) {
+                child.stdout?.off("data", onStdout);
+                child.stderr?.off("data", onStderr);
+            }
             child.off("error", onError);
             child.off("exit", onExit);
         };
@@ -154,13 +166,34 @@ function createStopProcess(child) {
         return stopPromise;
     };
 }
+async function withTimeout(operation, timeoutMs, message) {
+    let timer;
+    try {
+        return await Promise.race([
+            operation,
+            new Promise((_, reject) => {
+                timer = setTimeout(() => reject(new Error(message)), timeoutMs);
+            }),
+        ]);
+    }
+    finally {
+        if (timer !== undefined) {
+            clearTimeout(timer);
+        }
+    }
+}
 export async function startStow(options = {}) {
     const dataDir = options.dataDir ?? ".stow";
+    if ((options.cacheMaxBytes ?? 0) < 0 || (options.cacheMaxObjects ?? 0) < 0) {
+        throw new Error("cache limits must not be negative");
+    }
     const port = options.port ?? 0;
     const host = options.host ?? "127.0.0.1";
     if (options.cleanSlate) {
         await rm(dataDir, { recursive: true, force: true });
     }
+    const startupDeadline = Date.now() + STARTUP_TIMEOUT_MS;
+    const remainingStartupMs = () => Math.max(1, startupDeadline - Date.now());
     const binary = resolveStowBinary();
     const args = ["serve", "--port", String(port), "--data-dir", dataDir, "--host", host];
     if (options.baseHost) {
@@ -178,6 +211,12 @@ export async function startStow(options = {}) {
     if (options.cacheDir) {
         args.push("--cache-dir", options.cacheDir);
     }
+    if (options.cacheMaxBytes !== undefined) {
+        args.push("--cache-max-bytes", String(options.cacheMaxBytes));
+    }
+    if (options.cacheMaxObjects !== undefined) {
+        args.push("--cache-max-objects", String(options.cacheMaxObjects));
+    }
     if (options.allowLiveWrites) {
         args.push("--allow-live-writes");
     }
@@ -193,7 +232,7 @@ export async function startStow(options = {}) {
         env: childEnv,
     });
     try {
-        const ready = await waitForReady(child);
+        const ready = await waitForReady(child, remainingStartupMs());
         const instance = createStowInstance({
             endpoint: ready.endpoint,
             accessKeyId: ready.accessKeyId,
@@ -204,7 +243,7 @@ export async function startStow(options = {}) {
             stopProcess: createStopProcess(child),
         });
         for (const bucket of options.buckets ?? []) {
-            await instance.createBucket(bucket);
+            await withTimeout(instance.createBucket(bucket), remainingStartupMs(), `Timed out creating bucket ${bucket}`);
         }
         return instance;
     }

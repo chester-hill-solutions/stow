@@ -154,6 +154,13 @@ describe("startup lifecycle", () => {
     }
   });
 
+  it("rejects negative cache limits before starting a child", async () => {
+    await assert.rejects(
+      startStow({ cacheMaxBytes: -1 }),
+      /cache limits must not be negative/,
+    );
+  });
+
   it("kills and awaits a child when post-ready initialization fails", async () => {
     if (process.platform === "win32") {
       return;

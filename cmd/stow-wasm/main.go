@@ -180,6 +180,8 @@ func errorResponse(err error) response {
 		code = "quota_exceeded"
 	case errors.Is(err, stow.ErrClosed):
 		code = "closed"
+	case errors.Is(err, stow.ErrInvalidListLimit):
+		code = "invalid_list_limit"
 	case errors.Is(err, stow.ErrUnsupportedBackend):
 		code = "unsupported_backend"
 	case errors.Is(err, stow.ErrBucketNotFound):

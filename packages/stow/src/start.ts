@@ -31,6 +31,9 @@ export function parseReadyLine(line: string): ReadyLine | null {
   };
 }
 
+const MAX_DIAGNOSTIC_BYTES = 64 * 1024;
+const STARTUP_TIMEOUT_MS = 10_000;
+
 async function waitForReady(
   child: ChildProcess,
   timeoutMs = 10_000,
@@ -55,6 +58,7 @@ async function waitForReady(
 
     const onError = (error: Error) => {
       if (settled) {
+        cleanup();
         return;
       }
       settled = true;
@@ -64,6 +68,7 @@ async function waitForReady(
 
     const onExit = (code: number | null, signal: NodeJS.Signals | null) => {
       if (settled) {
+        cleanup();
         return;
       }
       settled = true;
@@ -76,7 +81,10 @@ async function waitForReady(
     };
 
     const onStdout = (chunk: Buffer) => {
-      stdoutBuffer += chunk.toString("utf8");
+      if (settled) {
+        return;
+      }
+      stdoutBuffer = (stdoutBuffer + chunk.toString("utf8")).slice(-MAX_DIAGNOSTIC_BYTES);
       for (const line of stdoutBuffer.split(/\r?\n/)) {
         const ready = parseReadyLine(line);
         if (!ready) {
@@ -86,20 +94,25 @@ async function waitForReady(
           return;
         }
         settled = true;
-        cleanup();
+        cleanup(false);
         resolve(ready);
         return;
       }
     };
 
     const onStderr = (chunk: Buffer) => {
-      stderrBuffer += chunk.toString("utf8");
+      if (settled) {
+        return;
+      }
+      stderrBuffer = (stderrBuffer + chunk.toString("utf8")).slice(-MAX_DIAGNOSTIC_BYTES);
     };
 
-    const cleanup = () => {
+    const cleanup = (removeOutput = true) => {
       clearTimeout(timer);
-      child.stdout?.off("data", onStdout);
-      child.stderr?.off("data", onStderr);
+      if (removeOutput) {
+        child.stdout?.off("data", onStdout);
+        child.stderr?.off("data", onStderr);
+      }
       child.off("error", onError);
       child.off("exit", onExit);
     };
@@ -193,8 +206,31 @@ function createStopProcess(child: ChildProcess): () => Promise<void> {
   };
 }
 
+async function withTimeout<T>(
+  operation: Promise<T>,
+  timeoutMs: number,
+  message: string,
+): Promise<T> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    return await Promise.race([
+      operation,
+      new Promise<T>((_, reject) => {
+        timer = setTimeout(() => reject(new Error(message)), timeoutMs);
+      }),
+    ]);
+  } finally {
+    if (timer !== undefined) {
+      clearTimeout(timer);
+    }
+  }
+}
+
 export async function startStow(options: StartOptions = {}): Promise<StowInstance> {
   const dataDir = options.dataDir ?? ".stow";
+  if ((options.cacheMaxBytes ?? 0) < 0 || (options.cacheMaxObjects ?? 0) < 0) {
+    throw new Error("cache limits must not be negative");
+  }
   const port = options.port ?? 0;
   const host = options.host ?? "127.0.0.1";
 
@@ -202,6 +238,8 @@ export async function startStow(options: StartOptions = {}): Promise<StowInstanc
     await rm(dataDir, { recursive: true, force: true });
   }
 
+  const startupDeadline = Date.now() + STARTUP_TIMEOUT_MS;
+  const remainingStartupMs = (): number => Math.max(1, startupDeadline - Date.now());
   const binary = resolveStowBinary();
   const args = ["serve", "--port", String(port), "--data-dir", dataDir, "--host", host];
   if (options.baseHost) {
@@ -218,6 +256,12 @@ export async function startStow(options: StartOptions = {}): Promise<StowInstanc
   }
   if (options.cacheDir) {
     args.push("--cache-dir", options.cacheDir);
+  }
+  if (options.cacheMaxBytes !== undefined) {
+    args.push("--cache-max-bytes", String(options.cacheMaxBytes));
+  }
+  if (options.cacheMaxObjects !== undefined) {
+    args.push("--cache-max-objects", String(options.cacheMaxObjects));
   }
   if (options.allowLiveWrites) {
     args.push("--allow-live-writes");
@@ -236,7 +280,7 @@ export async function startStow(options: StartOptions = {}): Promise<StowInstanc
   });
 
   try {
-    const ready = await waitForReady(child);
+    const ready = await waitForReady(child, remainingStartupMs());
     const instance = createStowInstance({
       endpoint: ready.endpoint,
       accessKeyId: ready.accessKeyId,
@@ -248,7 +292,11 @@ export async function startStow(options: StartOptions = {}): Promise<StowInstanc
     });
 
     for (const bucket of options.buckets ?? []) {
-      await instance.createBucket(bucket);
+      await withTimeout(
+        instance.createBucket(bucket),
+        remainingStartupMs(),
+        `Timed out creating bucket ${bucket}`,
+      );
     }
 
     return instance;

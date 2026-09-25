@@ -23,6 +23,8 @@ export interface StartOptions {
     /** When omitted, CLI auto-detects from env (STOW_* > S3_* > AWS_*). */
     mode?: StowMode | "auto";
     cacheDir?: string;
+    cacheMaxBytes?: number;
+    cacheMaxObjects?: number;
     allowLiveWrites?: boolean;
 }
 export interface AwsSdkV3ConfigOptions {

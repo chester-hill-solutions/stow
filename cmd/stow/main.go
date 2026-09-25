@@ -61,6 +61,8 @@ func serve(args []string) {
 	modeFlag := fs.String("mode", "auto", "Operational mode: local, run-through, or auto (default)")
 	allowLiveWrites := fs.Bool("allow-live-writes", false, "Propagate writes to upstream S3")
 	cacheDir := fs.String("cache-dir", "", "Run-through cache directory (default: <data-dir>/cache)")
+	cacheMaxBytes := fs.Int64("cache-max-bytes", 0, "Maximum separate cache bytes (0 disables the limit)")
+	cacheMaxObjects := fs.Int64("cache-max-objects", 0, "Maximum separate cache objects (0 disables the limit)")
 	fs.Parse(args)
 	*accessKey, *secretKey = resolveLocalCredentials(*accessKey, *secretKey)
 
@@ -68,6 +70,11 @@ func serve(args []string) {
 	if cfgErr != nil {
 		log.Fatal(cfgErr)
 	}
+	if *cacheMaxBytes < 0 || *cacheMaxObjects < 0 {
+		log.Fatal("cache limits must not be negative")
+	}
+	rtCfg.Cache.MaxBytes = *cacheMaxBytes
+	rtCfg.Cache.MaxObjects = *cacheMaxObjects
 	mode := runthrough.DetectMode()
 	switch strings.ToLower(strings.TrimSpace(*modeFlag)) {
 	case "auto", "":
