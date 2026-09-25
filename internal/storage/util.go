@@ -2,6 +2,7 @@ package storage
 
 import (
 	"crypto/md5"
+	"crypto/rand"
 	"encoding/hex"
 	"fmt"
 	"io"
@@ -32,6 +33,14 @@ func validateKey(key string) error {
 		return ErrInvalidKey
 	}
 	return nil
+}
+
+func newRecordVersion() (string, error) {
+	var version [16]byte
+	if _, err := rand.Read(version[:]); err != nil {
+		return "", err
+	}
+	return hex.EncodeToString(version[:]), nil
 }
 
 func etagForBytes(data []byte) string {

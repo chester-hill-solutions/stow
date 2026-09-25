@@ -11,6 +11,7 @@ const objectRecordVersion = 1
 
 type objectRecord struct {
 	Version           int               `json:"version"`
+	RecordVersion     string            `json:"record_version,omitempty"`
 	Data              []byte            `json:"data"`
 	ContentType       string            `json:"content_type,omitempty"`
 	Metadata          map[string]string `json:"metadata,omitempty"`
@@ -44,9 +45,14 @@ func readObjectRecord(path string) (objectRecord, error) {
 }
 
 func (r objectRecord) meta(bucket, key string) ObjectMeta {
+	versionID := r.RecordVersion
+	if versionID == "" {
+		versionID = r.ETag
+	}
 	return ObjectMeta{
 		Bucket:            bucket,
 		Key:               key,
+		VersionID:         versionID,
 		Size:              int64(len(r.Data)),
 		ETag:              r.ETag,
 		ContentType:       r.ContentType,

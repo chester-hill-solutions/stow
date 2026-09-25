@@ -147,10 +147,15 @@ func (s *MemoryStore) PutObject(_ context.Context, bucket, key string, body io.R
 	if err := checkWritePreconditions(opts, existing); err != nil {
 		return nil, err
 	}
+	versionID, err := newRecordVersion()
+	if err != nil {
+		return nil, err
+	}
 	now := time.Now().UTC()
 	meta := ObjectMeta{
 		Bucket:            bucket,
 		Key:               key,
+		VersionID:         versionID,
 		Size:              int64(len(data)),
 		ETag:              etag,
 		ContentType:       opts.ContentType,
@@ -389,10 +394,15 @@ func (s *MemoryStore) CompleteMultipartUpload(_ context.Context, uploadID string
 	}
 
 	etag := compositeETag(partETags)
+	versionID, err := newRecordVersion()
+	if err != nil {
+		return nil, err
+	}
 	now := time.Now().UTC()
 	meta := ObjectMeta{
 		Bucket:       mp.upload.Bucket,
 		Key:          mp.upload.Key,
+		VersionID:    versionID,
 		Size:         int64(len(combined)),
 		ETag:         etag,
 		LastModified: now,

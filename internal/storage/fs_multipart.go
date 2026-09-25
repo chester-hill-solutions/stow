@@ -135,8 +135,12 @@ func (s *FilesystemStore) CompleteMultipartUpload(_ context.Context, uploadID st
 		combined = append(combined, data...)
 	}
 	etag := compositeETag(partETags)
+	recordVersion, err := newRecordVersion()
+	if err != nil {
+		return nil, err
+	}
 	now := time.Now().UTC()
-	record := objectRecord{Data: combined, ETag: etag, LastModified: now}
+	record := objectRecord{RecordVersion: recordVersion, Data: combined, ETag: etag, LastModified: now}
 	objPath := s.objectPath(manifest.Bucket, manifest.Key)
 	if err := writeObjectRecord(objPath, record); err != nil {
 		return nil, err

@@ -219,8 +219,13 @@ func (s *FilesystemStore) PutObject(_ context.Context, bucket, key string, body 
 	if err != nil {
 		return nil, err
 	}
+	recordVersion, err := newRecordVersion()
+	if err != nil {
+		return nil, err
+	}
 	now := time.Now().UTC()
 	record := objectRecord{
+		RecordVersion:     recordVersion,
 		Data:              data,
 		ContentType:       opts.ContentType,
 		Metadata:          cloneMetadata(opts.Metadata),

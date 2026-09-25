@@ -8,6 +8,7 @@ import (
 type ObjectMeta struct {
 	Bucket            string
 	Key               string
+	VersionID         string
 	Size              int64
 	ETag              string
 	ContentType       string

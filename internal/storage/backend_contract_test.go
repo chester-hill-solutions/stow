@@ -129,6 +129,33 @@ func TestStoreMetadataMapsDoNotAliasStoredState(t *testing.T) {
 	})
 }
 
+func TestStoreAssignsImmutableVersionForEqualContent(t *testing.T) {
+	withStores(t, func(t *testing.T, store storage.Store) {
+		ctx := context.Background()
+		if err := store.CreateBucket(ctx, "versions"); err != nil {
+			t.Fatalf("create bucket: %v", err)
+		}
+		first, err := store.PutObject(ctx, "versions", "object", strings.NewReader("same bytes"), storage.PutOptions{
+			Metadata: map[string]string{"generation": "one"},
+		})
+		if err != nil {
+			t.Fatalf("first put: %v", err)
+		}
+		second, err := store.PutObject(ctx, "versions", "object", strings.NewReader("same bytes"), storage.PutOptions{
+			Metadata: map[string]string{"generation": "two"},
+		})
+		if err != nil {
+			t.Fatalf("second put: %v", err)
+		}
+		if first.VersionID == "" || second.VersionID == "" {
+			t.Fatalf("versions = %q, %q; want non-empty", first.VersionID, second.VersionID)
+		}
+		if first.VersionID == second.VersionID {
+			t.Fatalf("version IDs reused for separate commits: %q", first.VersionID)
+		}
+	})
+}
+
 func TestStoreMultipartLookup(t *testing.T) {
 	withStores(t, func(t *testing.T, store storage.Store) {
 		ctx := context.Background()
