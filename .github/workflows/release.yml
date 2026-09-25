@@ -319,10 +319,14 @@ jobs:
         # so the flag attests to nothing here. Provenance for these packages
         # comes from the repository link in package.json plus the fact that the
         # publishing workflow is the only thing with permission to write them.
-        run: npm publish --ignore-scripts --access public ./dist/npm/*.tgz
+        #
+        # The script publishes one tarball at a time and skips any version the
+        # registry already has, so a re-run completes a partial release instead
+        # of failing on the packages that already landed.
+        run: node scripts/publish-if-absent.mjs ./dist/npm/*.tgz
 
       - name: Publish platform packages
-        run: npm publish --ignore-scripts --access public ./dist/npm-platform/*.tgz
+        run: node scripts/publish-if-absent.mjs ./dist/npm-platform/*.tgz
 
       # PyPI, by trusted publishing from this workflow's OIDC identity, so there
       # is no API token to store. Every matrix entry contributes one wheel and
