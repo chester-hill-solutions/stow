@@ -8,7 +8,7 @@ import (
 	"encoding/json"
 	"fmt"
 
-	stowruntime "github.com/chester-hill-solutions/stow/internal/runtime"
+	stow "github.com/chester-hill-solutions/stow/pkg/stow"
 )
 
 var operationHandlers = map[string]handler{
@@ -27,15 +27,15 @@ var operationHandlers = map[string]handler{
 	"capabilities": handleCapabilities,
 }
 
-func handleCreateBucket(ctx context.Context, instance *stowruntime.Instance, req request) (json.RawMessage, error) {
+func handleCreateBucket(ctx context.Context, instance *stow.Runtime, req request) (json.RawMessage, error) {
 	return nil, instance.CreateBucket(ctx, req.Bucket)
 }
 
-func handleDeleteBucket(ctx context.Context, instance *stowruntime.Instance, req request) (json.RawMessage, error) {
+func handleDeleteBucket(ctx context.Context, instance *stow.Runtime, req request) (json.RawMessage, error) {
 	return nil, instance.DeleteBucket(ctx, req.Bucket)
 }
 
-func handleListBuckets(ctx context.Context, instance *stowruntime.Instance, _ request) (json.RawMessage, error) {
+func handleListBuckets(ctx context.Context, instance *stow.Runtime, _ request) (json.RawMessage, error) {
 	buckets, err := instance.ListBuckets(ctx)
 	if err != nil {
 		return nil, err
@@ -50,12 +50,12 @@ func handleListBuckets(ctx context.Context, instance *stowruntime.Instance, _ re
 	return marshalResult(result)
 }
 
-func handlePutObject(ctx context.Context, instance *stowruntime.Instance, req request) (json.RawMessage, error) {
+func handlePutObject(ctx context.Context, instance *stow.Runtime, req request) (json.RawMessage, error) {
 	data, err := base64.StdEncoding.DecodeString(req.Data)
 	if err != nil {
 		return nil, fmt.Errorf("decode object data: %w", err)
 	}
-	object, err := instance.PutObject(ctx, req.Bucket, req.Key, data, stowruntime.PutOptions{
+	object, err := instance.PutObject(ctx, req.Bucket, req.Key, data, stow.PutOptions{
 		ContentType: req.ContentType,
 		Metadata:    req.Metadata,
 	})
@@ -65,7 +65,7 @@ func handlePutObject(ctx context.Context, instance *stowruntime.Instance, req re
 	return marshalResult(objectResultOf(object))
 }
 
-func handleGetObject(ctx context.Context, instance *stowruntime.Instance, req request) (json.RawMessage, error) {
+func handleGetObject(ctx context.Context, instance *stow.Runtime, req request) (json.RawMessage, error) {
 	object, err := instance.GetObject(ctx, req.Bucket, req.Key)
 	if err != nil {
 		return nil, err
@@ -73,7 +73,7 @@ func handleGetObject(ctx context.Context, instance *stowruntime.Instance, req re
 	return marshalResult(objectResultOf(object))
 }
 
-func handleHeadObject(ctx context.Context, instance *stowruntime.Instance, req request) (json.RawMessage, error) {
+func handleHeadObject(ctx context.Context, instance *stow.Runtime, req request) (json.RawMessage, error) {
 	object, err := instance.HeadObject(ctx, req.Bucket, req.Key)
 	if err != nil {
 		return nil, err
@@ -81,7 +81,7 @@ func handleHeadObject(ctx context.Context, instance *stowruntime.Instance, req r
 	return marshalResult(objectResultOf(object))
 }
 
-func handleListObjects(ctx context.Context, instance *stowruntime.Instance, req request) (json.RawMessage, error) {
+func handleListObjects(ctx context.Context, instance *stow.Runtime, req request) (json.RawMessage, error) {
 	page, err := instance.ListObjects(ctx, req.Bucket, req.List)
 	if err != nil {
 		return nil, err
@@ -97,11 +97,11 @@ func handleListObjects(ctx context.Context, instance *stowruntime.Instance, req 
 	return marshalResult(result)
 }
 
-func handleDeleteObject(ctx context.Context, instance *stowruntime.Instance, req request) (json.RawMessage, error) {
+func handleDeleteObject(ctx context.Context, instance *stow.Runtime, req request) (json.RawMessage, error) {
 	return nil, instance.DeleteObject(ctx, req.Bucket, req.Key)
 }
 
-func handleCopyObject(ctx context.Context, instance *stowruntime.Instance, req request) (json.RawMessage, error) {
+func handleCopyObject(ctx context.Context, instance *stow.Runtime, req request) (json.RawMessage, error) {
 	sourceBucket := req.SourceBucket
 	if sourceBucket == "" {
 		sourceBucket = req.Bucket
@@ -117,26 +117,26 @@ func handleCopyObject(ctx context.Context, instance *stowruntime.Instance, req r
 	return marshalResult(objectResultOf(object))
 }
 
-func handleReset(ctx context.Context, instance *stowruntime.Instance, _ request) (json.RawMessage, error) {
+func handleReset(ctx context.Context, instance *stow.Runtime, _ request) (json.RawMessage, error) {
 	return nil, instance.Reset(ctx)
 }
 
-func handleClose(_ context.Context, instance *stowruntime.Instance, req request) (json.RawMessage, error) {
+func handleClose(_ context.Context, instance *stow.Runtime, req request) (json.RawMessage, error) {
 	err := instance.Close()
 	delete(state.instances, req.Handle)
 	return nil, err
 }
 
-func handleUsage(_ context.Context, instance *stowruntime.Instance, _ request) (json.RawMessage, error) {
+func handleUsage(_ context.Context, instance *stow.Runtime, _ request) (json.RawMessage, error) {
 	usage := instance.Usage()
 	return marshalResult(usageResult{Bytes: usage.Bytes, Objects: usage.Objects})
 }
 
-func handleCapabilities(_ context.Context, instance *stowruntime.Instance, _ request) (json.RawMessage, error) {
+func handleCapabilities(_ context.Context, instance *stow.Runtime, _ request) (json.RawMessage, error) {
 	return marshalResult(capabilities(instance.Capabilities()))
 }
 
-func objectResultOf(object stowruntime.Object) objectResult {
+func objectResultOf(object stow.Object) objectResult {
 	return objectResult{
 		Bucket:       object.Bucket,
 		Key:          object.Key,

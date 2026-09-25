@@ -10,27 +10,26 @@ import (
 	"sync"
 	"syscall/js"
 
-	stowruntime "github.com/chester-hill-solutions/stow/internal/runtime"
-	"github.com/chester-hill-solutions/stow/internal/storage"
+	stow "github.com/chester-hill-solutions/stow/pkg/stow"
 )
 
 const protocolVersion = 1
 
 type request struct {
-	Version           int                     `json:"version"`
-	Op                string                  `json:"op"`
-	Handle            int                     `json:"handle"`
-	Options           stowruntime.Options     `json:"options"`
-	Bucket            string                  `json:"bucket"`
-	Key               string                  `json:"key"`
-	Data              string                  `json:"data"`
-	ContentType       string                  `json:"contentType"`
-	Metadata          map[string]string       `json:"metadata"`
-	List              stowruntime.ListOptions `json:"list"`
-	SourceBucket      string                  `json:"sourceBucket"`
-	SourceKey         string                  `json:"sourceKey"`
-	DestinationBucket string                  `json:"destinationBucket"`
-	DestinationKey    string                  `json:"destinationKey"`
+	Version           int               `json:"version"`
+	Op                string            `json:"op"`
+	Handle            int               `json:"handle"`
+	Options           stow.Options      `json:"options"`
+	Bucket            string            `json:"bucket"`
+	Key               string            `json:"key"`
+	Data              string            `json:"data"`
+	ContentType       string            `json:"contentType"`
+	Metadata          map[string]string `json:"metadata"`
+	List              stow.ListOptions  `json:"list"`
+	SourceBucket      string            `json:"sourceBucket"`
+	SourceKey         string            `json:"sourceKey"`
+	DestinationBucket string            `json:"destinationBucket"`
+	DestinationKey    string            `json:"destinationKey"`
 }
 
 type errorPayload struct {
@@ -51,12 +50,12 @@ type openResult struct {
 }
 
 type capabilitiesResult struct {
-	Backend    stowruntime.Backend `json:"backend"`
-	MaxBytes   int64               `json:"maxBytes"`
-	MaxObjects int64               `json:"maxObjects"`
-	Persistent bool                `json:"persistent"`
-	Multipart  bool                `json:"multipart"`
-	Upstream   bool                `json:"upstream"`
+	Backend    stow.Backend `json:"backend"`
+	MaxBytes   int64        `json:"maxBytes"`
+	MaxObjects int64        `json:"maxObjects"`
+	Persistent bool         `json:"persistent"`
+	Multipart  bool         `json:"multipart"`
+	Upstream   bool         `json:"upstream"`
 }
 
 type objectResult struct {
@@ -90,13 +89,13 @@ type usageResult struct {
 	Objects int64 `json:"objects"`
 }
 
-type handler func(context.Context, *stowruntime.Instance, request) (json.RawMessage, error)
+type handler func(context.Context, *stow.Runtime, request) (json.RawMessage, error)
 
 var state = struct {
 	sync.Mutex
 	next      int
-	instances map[int]*stowruntime.Instance
-}{instances: make(map[int]*stowruntime.Instance)}
+	instances map[int]*stow.Runtime
+}{instances: make(map[int]*stow.Runtime)}
 
 func main() {
 	state.Lock()
@@ -149,7 +148,7 @@ func dispatch(req request) (json.RawMessage, error) {
 }
 
 func openRuntime(req request) (json.RawMessage, error) {
-	instance, err := stowruntime.Open(req.Options)
+	instance, err := stow.Open(req.Options)
 	if err != nil {
 		return nil, err
 	}
@@ -159,7 +158,7 @@ func openRuntime(req request) (json.RawMessage, error) {
 	return marshalResult(openResult{Handle: handle, Capabilities: capabilities(instance.Capabilities())})
 }
 
-func capabilities(value stowruntime.Capabilities) capabilitiesResult {
+func capabilities(value stow.Capabilities) capabilitiesResult {
 	return capabilitiesResult{
 		Backend:    value.Backend,
 		MaxBytes:   value.MaxBytes,
@@ -177,23 +176,23 @@ func failure(code, message string) response {
 func errorResponse(err error) response {
 	code := "runtime_error"
 	switch {
-	case errors.Is(err, stowruntime.ErrQuotaExceeded):
+	case errors.Is(err, stow.ErrQuotaExceeded):
 		code = "quota_exceeded"
-	case errors.Is(err, stowruntime.ErrClosed):
+	case errors.Is(err, stow.ErrClosed):
 		code = "closed"
-	case errors.Is(err, stowruntime.ErrUnsupportedBackend):
+	case errors.Is(err, stow.ErrUnsupportedBackend):
 		code = "unsupported_backend"
-	case errors.Is(err, storage.ErrBucketNotFound):
+	case errors.Is(err, stow.ErrBucketNotFound):
 		code = "bucket_not_found"
-	case errors.Is(err, storage.ErrBucketExists):
+	case errors.Is(err, stow.ErrBucketExists):
 		code = "bucket_exists"
-	case errors.Is(err, storage.ErrBucketNotEmpty):
+	case errors.Is(err, stow.ErrBucketNotEmpty):
 		code = "bucket_not_empty"
-	case errors.Is(err, storage.ErrObjectNotFound):
+	case errors.Is(err, stow.ErrObjectNotFound):
 		code = "object_not_found"
-	case errors.Is(err, storage.ErrInvalidBucketName):
+	case errors.Is(err, stow.ErrInvalidBucket):
 		code = "invalid_bucket"
-	case errors.Is(err, storage.ErrInvalidKey):
+	case errors.Is(err, stow.ErrInvalidKey):
 		code = "invalid_key"
 	}
 	return failure(code, err.Error())
