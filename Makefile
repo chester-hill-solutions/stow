@@ -7,7 +7,7 @@ build:
 
 build-wasm:
 	mkdir -p bin
-	GOOS=js GOARCH=wasm go build -o bin/stow-runtime.wasm ./cmd/stow-wasm
+	GOOS=js GOARCH=wasm go build -buildvcs=false -o bin/stow-runtime.wasm ./cmd/stow-wasm
 
 test:
 	go test ./...
