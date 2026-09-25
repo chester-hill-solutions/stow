@@ -1,3 +1,5 @@
 {
-  "percentage": 60.2
+  "percentage": 60.11,
+  "coveredStatements": 2981,
+  "totalStatements": 4959
 }

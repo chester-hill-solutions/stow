@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"flag"
 	"fmt"
 	"log"
@@ -14,6 +15,7 @@ import (
 	"time"
 
 	"github.com/chester-hill-solutions/stow/internal/auth"
+	"github.com/chester-hill-solutions/stow/internal/parentwatch"
 	"github.com/chester-hill-solutions/stow/internal/ready"
 	"github.com/chester-hill-solutions/stow/internal/runthrough"
 	"github.com/chester-hill-solutions/stow/internal/s3api"
@@ -93,6 +95,26 @@ func openLocalStore(backend, dataDir string) storage.Store {
 	default:
 		log.Fatalf("invalid --backend %q (want filesystem or memory)", backend)
 		return nil
+	}
+}
+
+// armParentWatch installs the opt-in parent-death watch.
+//
+// Only a session passes a parent pid, so a hand-run server keeps its existing
+// behavior of surviving its shell. A pid that is not this process's parent is
+// fatal rather than watched, because watching a stranger would leave the server
+// serving with no safety net while appearing protected. A platform with no
+// mechanism is a missing safety net, not a reason to refuse to serve, but it
+// must never be silent.
+func armParentWatch(pid int) {
+	request := parentwatch.Requested{Pid: pid, Getppid: os.Getppid}
+	switch err := parentwatch.Watch(request); {
+	case err == nil:
+		log.Printf("will exit when parent process %d dies", pid)
+	case errors.Is(err, parentwatch.ErrNotParent):
+		log.Fatalf("refusing to start: %v", err)
+	default:
+		log.Printf("WARNING: parent-death watch unavailable: %v", err)
 	}
 }
 
@@ -192,6 +214,7 @@ func serve(args []string) {
 	maxBytes := flags.Int64("max-bytes", 0, "Maximum stored object bytes enforced on every native S3 request (0 disables the limit)")
 	maxObjects := flags.Int64("max-objects", 0, "Maximum stored object count enforced on every native S3 request (0 disables the limit)")
 	readyFd := flags.Int("ready-fd", -1, "Write one machine-readable readiness object to this file descriptor instead of the STOW_READY line on stdout")
+	parentPid := flags.Int("parent-pid", 0, "Exit when this parent process dies (0 disables the watch, which is the default for a hand-run server)")
 	flags.Parse(args)
 	*accessKey, *secretKey = resolveLocalCredentials(*accessKey, *secretKey)
 	rtCfg, cfgErr := runthrough.ConfigFromEnvChecked()
@@ -320,6 +343,10 @@ func serve(args []string) {
 	addr := srv.Addr()
 	if addr == "" {
 		log.Fatal("server failed to bind")
+	}
+
+	if *parentPid > 0 {
+		armParentWatch(*parentPid)
 	}
 
 	endpoint := "http://" + addr

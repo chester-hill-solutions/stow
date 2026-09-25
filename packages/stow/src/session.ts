@@ -119,6 +119,9 @@ export async function openStow(options: EphemeralStowOptions = {}): Promise<Stow
       maxBytes: options.maxBytes ?? DEFAULT_SESSION_MAX_BYTES,
       maxObjects: options.maxObjects ?? DEFAULT_SESSION_MAX_OBJECTS,
       isolatedEnvironment: true,
+      // If this process is killed rather than closed, the server must not
+      // outlive it.
+      parentPid: process.pid,
       buckets: [bucket],
     });
 

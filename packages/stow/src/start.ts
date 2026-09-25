@@ -349,6 +349,11 @@ function buildServeArgs(
   // Ask for the versioned readiness channel. The server then keeps credentials
   // off stdout and writes them to this descriptor instead.
   args.push("--ready-fd", String(READY_FD));
+  if (options.parentPid) {
+    // Opt-in parent-death watch. The server exits if this process disappears,
+    // even if it is killed rather than closed cleanly.
+    args.push("--parent-pid", String(options.parentPid));
+  }
   return args;
 }
 

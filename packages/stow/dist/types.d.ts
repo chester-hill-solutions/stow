@@ -37,6 +37,11 @@ export interface StartOptions {
      * server deliberately does not.
      */
     isolatedEnvironment?: boolean;
+    /**
+     * Exit the server when this process dies, even if it is killed rather than
+     * closed. Opt-in, because a hand-run server must keep surviving its shell.
+     */
+    parentPid?: number;
 }
 type AwsSdkV3ConfigBase = {
     endpoint: string;
