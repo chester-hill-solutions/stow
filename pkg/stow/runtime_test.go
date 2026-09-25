@@ -9,14 +9,18 @@ import (
 	"github.com/chester-hill-solutions/stow/pkg/stow"
 )
 
-func TestRuntimeDirectObjectLifecycle(t *testing.T) {
-	ctx := context.Background()
+func newPublicRuntime(t *testing.T) (context.Context, *stow.Runtime) {
+	t.Helper()
 	runtime, err := stow.Open(stow.Options{})
 	if err != nil {
 		t.Fatalf("open runtime: %v", err)
 	}
-	defer runtime.Close()
+	t.Cleanup(func() { _ = runtime.Close() })
+	return context.Background(), runtime
+}
 
+func TestRuntimeDirectObjectLifecycle(t *testing.T) {
+	ctx, runtime := newPublicRuntime(t)
 	if err := runtime.CreateBucket(ctx, "assets"); err != nil {
 		t.Fatalf("create bucket: %v", err)
 	}
@@ -30,7 +34,6 @@ func TestRuntimeDirectObjectLifecycle(t *testing.T) {
 	if put.Size != 4 || put.ETag == "" || put.ContentType != "image/png" {
 		t.Fatalf("put metadata = %+v", put)
 	}
-
 	got, err := runtime.GetObject(ctx, "assets", "images/logo.bin")
 	if err != nil {
 		t.Fatalf("get object: %v", err)
@@ -38,7 +41,6 @@ func TestRuntimeDirectObjectLifecycle(t *testing.T) {
 	if !bytes.Equal(got.Data, []byte("logo")) || got.Metadata["owner"] != "test" {
 		t.Fatalf("object = %+v", got)
 	}
-
 	head, err := runtime.HeadObject(ctx, "assets", "images/logo.bin")
 	if err != nil {
 		t.Fatalf("head object: %v", err)
@@ -46,7 +48,6 @@ func TestRuntimeDirectObjectLifecycle(t *testing.T) {
 	if len(head.Data) != 0 || head.Size != 4 {
 		t.Fatalf("head object = %+v", head)
 	}
-
 	objects, err := runtime.ListObjects(ctx, "assets", stow.ListOptions{})
 	if err != nil {
 		t.Fatalf("list objects: %v", err)
@@ -54,11 +55,20 @@ func TestRuntimeDirectObjectLifecycle(t *testing.T) {
 	if len(objects.Objects) != 1 || objects.Objects[0].Key != "images/logo.bin" {
 		t.Fatalf("objects = %+v", objects)
 	}
+}
 
+func TestRuntimeObjectDeletion(t *testing.T) {
+	ctx, runtime := newPublicRuntime(t)
+	if err := runtime.CreateBucket(ctx, "assets"); err != nil {
+		t.Fatalf("create bucket: %v", err)
+	}
+	if _, err := runtime.PutObject(ctx, "assets", "images/logo.bin", []byte("logo"), stow.PutOptions{}); err != nil {
+		t.Fatalf("put object: %v", err)
+	}
 	if err := runtime.DeleteObject(ctx, "assets", "images/logo.bin"); err != nil {
 		t.Fatalf("delete object: %v", err)
 	}
-	_, err = runtime.GetObject(ctx, "assets", "images/logo.bin")
+	_, err := runtime.GetObject(ctx, "assets", "images/logo.bin")
 	if !errors.Is(err, stow.ErrObjectNotFound) {
 		t.Fatalf("get after delete error = %v, want ErrObjectNotFound", err)
 	}

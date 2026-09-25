@@ -139,7 +139,7 @@ func previousBaseline(path string) (report, bool) {
 func scan() (report, error) {
 	result := report{Version: baselineVersion, Counts: map[string]int{}}
 	seen := map[string]int{}
-	for _, root := range []string{"cmd", "internal", "conformance"} {
+	for _, root := range []string{"cmd", "internal", "conformance", "pkg"} {
 		if err := filepath.WalkDir(root, func(path string, entry os.DirEntry, err error) error {
 			if err != nil {
 				return err

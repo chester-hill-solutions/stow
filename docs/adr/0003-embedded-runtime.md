@@ -14,7 +14,7 @@ Stow began as an S3-compatible HTTP service. That interface is useful for AWS SD
 
 ### 1. Direct runtime is the primary embedded interface
 
-The first embedded profile is a direct in-process API with explicit `open`, bucket and object operations, quotas, usage and capability reporting, `reset`, and `close`. The public Go entry point is `pkg/stow`; callers do not depend on `internal/storage` or `internal/runthrough`.
+The first embedded profile is a direct in-process API with explicit `open`, bucket and object operations, quotas, usage and capability reporting, paginated object results, `reset`, and `close`. The public Go entry point is `pkg/stow`; callers do not depend on `internal/storage` or `internal/runthrough`.
 
 The first profile is memory-only. It has no filesystem, network, signal, environment, Node, or AWS SDK dependency. Each instance owns its own data and is isolated from every other instance.
 
@@ -30,7 +30,7 @@ Mirror writes require a durable outbox. A memory-only profile without such an ou
 
 ### 4. WASM is a host adapter, not a second object model
 
-The `js/wasm` artifact uses the same platform-neutral memory runtime. Its first host bridge is a small JSON/base64 protocol so browser and Node hosts can provide their own byte and error marshalling. The bridge is capability-gated and additive; it does not change the TypeScript process or endpoint entry points.
+The `js/wasm` artifact uses the same platform-neutral memory runtime. Its first host bridge is a small versioned JSON/base64 protocol so browser and Node hosts can provide their own byte and error marshalling. The bridge is capability-gated and additive; it does not change the TypeScript process or endpoint entry points.
 
 ### 5. Compatibility remains testable
 

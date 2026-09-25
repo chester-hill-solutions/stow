@@ -5,7 +5,7 @@ import { readPreviousBaseline } from "./baseline-history.mjs";
 
 const repoRoot = resolve(import.meta.dirname, "..");
 const baselinePath = resolve(repoRoot, "scripts/baselines/file-size.json");
-const roots = ["cmd", "internal", "conformance", "packages/stow/src", "packages/stow/test"];
+const roots = ["cmd", "internal", "conformance", "pkg", "wasm", "packages/stow/src", "packages/stow/test"];
 const maximum = 500;
 const violations = [];
 
@@ -16,7 +16,7 @@ function visit(path) {
     for (const entry of readdirSync(path)) visit(join(path, entry));
     return;
   }
-  if (!/\.(go|ts)$/.test(path) || path.endsWith(".d.ts")) return;
+  if (!/\.(go|ts|mjs)$/.test(path) || path.endsWith(".d.ts")) return;
   const lines = readFileSync(path, "utf8").split("\n").length;
   if (lines > maximum) violations.push({ identity: `${relative(repoRoot, path)}:${lines}`, lines });
 }
