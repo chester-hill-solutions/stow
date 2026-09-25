@@ -22,6 +22,7 @@ export type {
   EmbeddedHost,
   EmbeddedListOptions,
   EmbeddedObject,
+  EmbeddedObjectPage,
   EmbeddedPutOptions,
   EmbeddedStowOptions,
   EmbeddedUsage,

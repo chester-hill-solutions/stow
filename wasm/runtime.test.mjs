@@ -37,10 +37,9 @@ test("EmbeddedStow drives the real memory runtime", async () => {
 
     const got = embedded.getObject("assets", "hello.txt");
     assert.deepEqual(got.data, new TextEncoder().encode("hello"));
-    assert.deepEqual(
-      embedded.listObjects("assets").map((object) => object.key),
-      ["hello.txt"],
-    );
+    const listed = embedded.listObjects("assets", { limit: 1 });
+    assert.equal(listed.truncated, false);
+    assert.deepEqual(listed.objects.map((object) => object.key), ["hello.txt"]);
     assert.deepEqual(
       embedded.listBuckets().map((bucket) => bucket.name),
       ["assets"],

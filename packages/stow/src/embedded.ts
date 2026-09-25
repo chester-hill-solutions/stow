@@ -46,11 +46,24 @@ export interface EmbeddedPutOptions {
 
 export interface EmbeddedListOptions {
   prefix?: string;
+  cursor?: string;
   limit?: number;
+}
+
+export interface EmbeddedObjectPage {
+  objects: EmbeddedObject[];
+  truncated: boolean;
+  nextCursor?: string;
 }
 
 interface BridgeObject extends Omit<EmbeddedObject, "data"> {
   data?: string;
+}
+
+interface BridgeObjectPage {
+  objects: BridgeObject[];
+  truncated: boolean;
+  nextCursor?: string;
 }
 
 interface OpenResult {
@@ -147,13 +160,17 @@ export class EmbeddedStow {
     );
   }
 
-  listObjects(bucket: string, options: EmbeddedListOptions = {}): EmbeddedObject[] {
-    const result = this.invoke<{ objects: BridgeObject[] }>({
+  listObjects(bucket: string, options: EmbeddedListOptions = {}): EmbeddedObjectPage {
+    const result = this.invoke<BridgeObjectPage>({
       op: "listObjects",
       bucket,
-      list: { prefix: options.prefix, limit: options.limit },
+      list: { prefix: options.prefix, cursor: options.cursor, limit: options.limit },
     });
-    return result.objects.map(fromBridgeObject);
+    return {
+      objects: result.objects.map(fromBridgeObject),
+      truncated: result.truncated,
+      nextCursor: result.nextCursor,
+    };
   }
 
   deleteObject(bucket: string, key: string): void {

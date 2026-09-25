@@ -71,9 +71,13 @@ export class EmbeddedStow {
         const result = this.invoke({
             op: "listObjects",
             bucket,
-            list: { prefix: options.prefix, limit: options.limit },
+            list: { prefix: options.prefix, cursor: options.cursor, limit: options.limit },
         });
-        return result.objects.map(fromBridgeObject);
+        return {
+            objects: result.objects.map(fromBridgeObject),
+            truncated: result.truncated,
+            nextCursor: result.nextCursor,
+        };
     }
     deleteObject(bucket, key) {
         this.invoke({ op: "deleteObject", bucket, key });

@@ -51,7 +51,7 @@ func TestRuntimeDirectObjectLifecycle(t *testing.T) {
 	if err != nil {
 		t.Fatalf("list objects: %v", err)
 	}
-	if len(objects) != 1 || objects[0].Key != "images/logo.bin" {
+	if len(objects.Objects) != 1 || objects.Objects[0].Key != "images/logo.bin" {
 		t.Fatalf("objects = %+v", objects)
 	}
 
@@ -109,7 +109,7 @@ func TestRuntimeInstancesAreIsolatedAndResettable(t *testing.T) {
 	if !errors.Is(err, stow.ErrBucketNotFound) {
 		t.Fatalf("isolated list error = %v, want ErrBucketNotFound", err)
 	}
-	if len(objects) != 0 {
+	if len(objects.Objects) != 0 {
 		t.Fatalf("isolated objects = %+v", objects)
 	}
 
@@ -125,6 +125,40 @@ func TestRuntimeInstancesAreIsolatedAndResettable(t *testing.T) {
 	}
 	if first.Usage() != (stow.Usage{}) {
 		t.Fatalf("usage after reset = %+v", first.Usage())
+	}
+}
+
+func TestRuntimeListObjectsReturnsCursorPage(t *testing.T) {
+	ctx := context.Background()
+	runtime, err := stow.Open(stow.Options{})
+	if err != nil {
+		t.Fatalf("open runtime: %v", err)
+	}
+	defer runtime.Close()
+	if err := runtime.CreateBucket(ctx, "assets"); err != nil {
+		t.Fatalf("create bucket: %v", err)
+	}
+	for _, key := range []string{"a", "b", "c"} {
+		if _, err := runtime.PutObject(ctx, "assets", key, []byte(key), stow.PutOptions{}); err != nil {
+			t.Fatalf("put %s: %v", key, err)
+		}
+	}
+	first, err := runtime.ListObjects(ctx, "assets", stow.ListOptions{Limit: 1})
+	if err != nil {
+		t.Fatalf("list first page: %v", err)
+	}
+	if len(first.Objects) != 1 || !first.Truncated || first.NextCursor == "" {
+		t.Fatalf("first page = %+v", first)
+	}
+	second, err := runtime.ListObjects(ctx, "assets", stow.ListOptions{Limit: 1, Cursor: first.NextCursor})
+	if err != nil {
+		t.Fatalf("list second page: %v", err)
+	}
+	if len(second.Objects) != 1 || second.Truncated || second.NextCursor != "" {
+		t.Fatalf("second page = %+v", second)
+	}
+	if _, err := runtime.ListObjects(ctx, "assets", stow.ListOptions{Limit: -1}); !errors.Is(err, stow.ErrInvalidListLimit) {
+		t.Fatalf("negative limit error = %v, want ErrInvalidListLimit", err)
 	}
 }
 

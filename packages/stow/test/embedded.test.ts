@@ -44,7 +44,10 @@ class FakeHost implements EmbeddedHost {
       case "listBuckets":
         return response({ buckets: [{ name: "assets" }] });
       case "listObjects":
-        return response({ objects: [{ bucket: "assets", key: "hello.txt", size: 5, etag: "etag" }] });
+        return response({
+          objects: [{ bucket: "assets", key: "hello.txt", size: 5, etag: "etag" }],
+          truncated: false,
+        });
       case "usage":
         return response({ bytes: 5, objects: 1 });
       case "copyObject":
@@ -77,7 +80,7 @@ describe("EmbeddedStow", () => {
     assert.deepEqual(object.data, new TextEncoder().encode("hello"));
     assert.equal(object.metadata?.owner, "test");
     assert.deepEqual(stow.listBuckets(), [{ name: "assets" }]);
-    assert.equal(stow.listObjects("assets")[0]?.key, "hello.txt");
+    assert.equal(stow.listObjects("assets").objects[0]?.key, "hello.txt");
     assert.deepEqual(stow.usage(), { bytes: 5, objects: 1 });
     assert.equal(stow.copyObject("assets", "hello.txt", "assets", "copy.txt").key, "copy.txt");
     stow.reset();

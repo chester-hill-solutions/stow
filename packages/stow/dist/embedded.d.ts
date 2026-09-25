@@ -38,7 +38,13 @@ export interface EmbeddedPutOptions {
 }
 export interface EmbeddedListOptions {
     prefix?: string;
+    cursor?: string;
     limit?: number;
+}
+export interface EmbeddedObjectPage {
+    objects: EmbeddedObject[];
+    truncated: boolean;
+    nextCursor?: string;
 }
 export declare class EmbeddedStowError extends Error {
     readonly code: string;
@@ -60,7 +66,7 @@ export declare class EmbeddedStow {
     putObject(bucket: string, key: string, data: Uint8Array, options?: EmbeddedPutOptions): EmbeddedObject;
     getObject(bucket: string, key: string): EmbeddedObject;
     headObject(bucket: string, key: string): EmbeddedObject;
-    listObjects(bucket: string, options?: EmbeddedListOptions): EmbeddedObject[];
+    listObjects(bucket: string, options?: EmbeddedListOptions): EmbeddedObjectPage;
     deleteObject(bucket: string, key: string): void;
     copyObject(sourceBucket: string, sourceKey: string, destinationBucket: string, destinationKey: string): EmbeddedObject;
     reset(): void;

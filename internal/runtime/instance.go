@@ -201,31 +201,39 @@ func (i *Instance) HeadObject(ctx context.Context, bucket, key string) (Object, 
 	return objectFromMeta(meta, nil), nil
 }
 
-func (i *Instance) ListObjects(ctx context.Context, bucket string, options ListOptions) ([]Object, error) {
+func (i *Instance) ListObjects(ctx context.Context, bucket string, options ListOptions) (ObjectPage, error) {
 	if err := i.checkContext(ctx); err != nil {
-		return nil, err
+		return ObjectPage{}, err
+	}
+	if options.Limit < 0 {
+		return ObjectPage{}, ErrInvalidListLimit
 	}
 	i.mu.Lock()
 	defer i.mu.Unlock()
 	if err := i.checkOpen(); err != nil {
-		return nil, err
+		return ObjectPage{}, err
 	}
 	limit := options.Limit
-	if limit <= 0 {
+	if limit == 0 {
 		limit = 1000
 	}
 	result, err := i.store.ListObjectsV2(ctx, bucket, storage.ListOptions{
-		Prefix:  options.Prefix,
-		MaxKeys: limit,
+		Prefix:            options.Prefix,
+		ContinuationToken: options.Cursor,
+		MaxKeys:           limit,
 	})
 	if err != nil {
-		return nil, err
+		return ObjectPage{}, err
 	}
-	out := make([]Object, 0, len(result.Objects))
+	objects := make([]Object, 0, len(result.Objects))
 	for _, meta := range result.Objects {
-		out = append(out, objectFromMeta(&meta, nil))
+		objects = append(objects, objectFromMeta(&meta, nil))
 	}
-	return out, nil
+	return ObjectPage{
+		Objects:    objects,
+		Truncated:  result.IsTruncated,
+		NextCursor: result.NextContinuationToken,
+	}, nil
 }
 
 func (i *Instance) DeleteObject(ctx context.Context, bucket, key string) error {

@@ -48,9 +48,9 @@ func (r *Runtime) HeadObject(ctx context.Context, bucket, key string) (Object, e
 	return object, mapError(err)
 }
 
-func (r *Runtime) ListObjects(ctx context.Context, bucket string, options ListOptions) ([]Object, error) {
-	objects, err := r.inner.ListObjects(ctx, bucket, options)
-	return objects, mapError(err)
+func (r *Runtime) ListObjects(ctx context.Context, bucket string, options ListOptions) (ObjectPage, error) {
+	page, err := r.inner.ListObjects(ctx, bucket, options)
+	return page, mapError(err)
 }
 
 func (r *Runtime) DeleteObject(ctx context.Context, bucket, key string) error {

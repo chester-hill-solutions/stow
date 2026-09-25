@@ -77,7 +77,7 @@ func TestInstanceObjectReadLifecycle(t *testing.T) {
 		t.Fatalf("head = %+v, err = %v", head, err)
 	}
 	objects, err := instance.ListObjects(ctx, "assets", ListOptions{Prefix: "o", Limit: 1})
-	if err != nil || len(objects) != 1 || objects[0].Key != "one" {
+	if err != nil || len(objects.Objects) != 1 || objects.Objects[0].Key != "one" {
 		t.Fatalf("list = %+v, err = %v", objects, err)
 	}
 	if err := instance.DeleteObject(ctx, "assets", "one"); err != nil {

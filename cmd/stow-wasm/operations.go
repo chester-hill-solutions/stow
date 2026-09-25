@@ -82,12 +82,16 @@ func handleHeadObject(ctx context.Context, instance *stowruntime.Instance, req r
 }
 
 func handleListObjects(ctx context.Context, instance *stowruntime.Instance, req request) (json.RawMessage, error) {
-	objects, err := instance.ListObjects(ctx, req.Bucket, req.List)
+	page, err := instance.ListObjects(ctx, req.Bucket, req.List)
 	if err != nil {
 		return nil, err
 	}
-	result := listResult{Objects: make([]objectResult, 0, len(objects))}
-	for _, object := range objects {
+	result := listResult{
+		Objects:    make([]objectResult, 0, len(page.Objects)),
+		Truncated:  page.Truncated,
+		NextCursor: page.NextCursor,
+	}
+	for _, object := range page.Objects {
 		result.Objects = append(result.Objects, objectResultOf(object))
 	}
 	return marshalResult(result)
