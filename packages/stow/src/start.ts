@@ -226,21 +226,12 @@ async function withTimeout<T>(
   }
 }
 
-export async function startStow(options: StartOptions = {}): Promise<StowInstance> {
-  const dataDir = options.dataDir ?? ".stow";
-  if ((options.cacheMaxBytes ?? 0) < 0 || (options.cacheMaxObjects ?? 0) < 0) {
-    throw new Error("cache limits must not be negative");
-  }
-  const port = options.port ?? 0;
-  const host = options.host ?? "127.0.0.1";
-
-  if (options.cleanSlate) {
-    await rm(dataDir, { recursive: true, force: true });
-  }
-
-  const startupDeadline = Date.now() + STARTUP_TIMEOUT_MS;
-  const remainingStartupMs = (): number => Math.max(1, startupDeadline - Date.now());
-  const binary = resolveStowBinary();
+function buildServeArgs(
+  options: StartOptions,
+  dataDir: string,
+  port: number,
+  host: string,
+): string[] {
   const args = ["serve", "--port", String(port), "--data-dir", dataDir, "--host", host];
   if (options.baseHost) {
     args.push("--base-host", options.baseHost);
@@ -266,6 +257,10 @@ export async function startStow(options: StartOptions = {}): Promise<StowInstanc
   if (options.allowLiveWrites) {
     args.push("--allow-live-writes");
   }
+  return args;
+}
+
+function buildChildEnv(options: StartOptions): NodeJS.ProcessEnv {
   const childEnv = { ...process.env };
   if (options.accessKey) {
     childEnv.STOW_LOCAL_ACCESS_KEY_ID = options.accessKey;
@@ -273,10 +268,40 @@ export async function startStow(options: StartOptions = {}): Promise<StowInstanc
   if (options.secretKey) {
     childEnv.STOW_LOCAL_SECRET_ACCESS_KEY = options.secretKey;
   }
+  return childEnv;
+}
 
-  const child = spawn(binary, args, {
+async function createStartupBuckets(
+  instance: StowInstance,
+  buckets: string[],
+  remainingStartupMs: () => number,
+): Promise<void> {
+  for (const bucket of buckets) {
+    await withTimeout(
+      instance.createBucket(bucket),
+      remainingStartupMs(),
+      `Timed out creating bucket ${bucket}`,
+    );
+  }
+}
+
+export async function startStow(options: StartOptions = {}): Promise<StowInstance> {
+  const dataDir = options.dataDir ?? ".stow";
+  if ((options.cacheMaxBytes ?? 0) < 0 || (options.cacheMaxObjects ?? 0) < 0) {
+    throw new Error("cache limits must not be negative");
+  }
+  const port = options.port ?? 0;
+  const host = options.host ?? "127.0.0.1";
+
+  if (options.cleanSlate) {
+    await rm(dataDir, { recursive: true, force: true });
+  }
+
+  const startupDeadline = Date.now() + STARTUP_TIMEOUT_MS;
+  const remainingStartupMs = (): number => Math.max(1, startupDeadline - Date.now());
+  const child = spawn(resolveStowBinary(), buildServeArgs(options, dataDir, port, host), {
     stdio: ["ignore", "pipe", "pipe"],
-    env: childEnv,
+    env: buildChildEnv(options),
   });
 
   try {
@@ -290,15 +315,7 @@ export async function startStow(options: StartOptions = {}): Promise<StowInstanc
       dataDir,
       stopProcess: createStopProcess(child),
     });
-
-    for (const bucket of options.buckets ?? []) {
-      await withTimeout(
-        instance.createBucket(bucket),
-        remainingStartupMs(),
-        `Timed out creating bucket ${bucket}`,
-      );
-    }
-
+    await createStartupBuckets(instance, options.buckets ?? [], remainingStartupMs);
     return instance;
   } catch (error) {
     await stopChild(child);

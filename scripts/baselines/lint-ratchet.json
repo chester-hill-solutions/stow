@@ -1,13 +1,13 @@
 {
   "_comment": "Ratchet baseline for the TypeScript wrapper. Growth fails; lower intentionally after debt reduction.",
   "counts": {
-    "complexity": 1,
+    "complexity": 0,
     "max-depth": 0,
     "max-params": 0,
     "max-lines-per-function": 0,
     "no-console": 0,
     "no-return-await": 0,
-    "@typescript-eslint/no-explicit-any": 2,
+    "@typescript-eslint/no-explicit-any": 0,
     "@typescript-eslint/no-non-null-assertion": 0,
     "@typescript-eslint/consistent-type-imports": 0,
     "@typescript-eslint/no-unused-vars": 0

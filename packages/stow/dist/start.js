@@ -182,19 +182,7 @@ async function withTimeout(operation, timeoutMs, message) {
         }
     }
 }
-export async function startStow(options = {}) {
-    const dataDir = options.dataDir ?? ".stow";
-    if ((options.cacheMaxBytes ?? 0) < 0 || (options.cacheMaxObjects ?? 0) < 0) {
-        throw new Error("cache limits must not be negative");
-    }
-    const port = options.port ?? 0;
-    const host = options.host ?? "127.0.0.1";
-    if (options.cleanSlate) {
-        await rm(dataDir, { recursive: true, force: true });
-    }
-    const startupDeadline = Date.now() + STARTUP_TIMEOUT_MS;
-    const remainingStartupMs = () => Math.max(1, startupDeadline - Date.now());
-    const binary = resolveStowBinary();
+function buildServeArgs(options, dataDir, port, host) {
     const args = ["serve", "--port", String(port), "--data-dir", dataDir, "--host", host];
     if (options.baseHost) {
         args.push("--base-host", options.baseHost);
@@ -220,6 +208,9 @@ export async function startStow(options = {}) {
     if (options.allowLiveWrites) {
         args.push("--allow-live-writes");
     }
+    return args;
+}
+function buildChildEnv(options) {
     const childEnv = { ...process.env };
     if (options.accessKey) {
         childEnv.STOW_LOCAL_ACCESS_KEY_ID = options.accessKey;
@@ -227,9 +218,28 @@ export async function startStow(options = {}) {
     if (options.secretKey) {
         childEnv.STOW_LOCAL_SECRET_ACCESS_KEY = options.secretKey;
     }
-    const child = spawn(binary, args, {
+    return childEnv;
+}
+async function createStartupBuckets(instance, buckets, remainingStartupMs) {
+    for (const bucket of buckets) {
+        await withTimeout(instance.createBucket(bucket), remainingStartupMs(), `Timed out creating bucket ${bucket}`);
+    }
+}
+export async function startStow(options = {}) {
+    const dataDir = options.dataDir ?? ".stow";
+    if ((options.cacheMaxBytes ?? 0) < 0 || (options.cacheMaxObjects ?? 0) < 0) {
+        throw new Error("cache limits must not be negative");
+    }
+    const port = options.port ?? 0;
+    const host = options.host ?? "127.0.0.1";
+    if (options.cleanSlate) {
+        await rm(dataDir, { recursive: true, force: true });
+    }
+    const startupDeadline = Date.now() + STARTUP_TIMEOUT_MS;
+    const remainingStartupMs = () => Math.max(1, startupDeadline - Date.now());
+    const child = spawn(resolveStowBinary(), buildServeArgs(options, dataDir, port, host), {
         stdio: ["ignore", "pipe", "pipe"],
-        env: childEnv,
+        env: buildChildEnv(options),
     });
     try {
         const ready = await waitForReady(child, remainingStartupMs());
@@ -242,9 +252,7 @@ export async function startStow(options = {}) {
             dataDir,
             stopProcess: createStopProcess(child),
         });
-        for (const bucket of options.buckets ?? []) {
-            await withTimeout(instance.createBucket(bucket), remainingStartupMs(), `Timed out creating bucket ${bucket}`);
-        }
+        await createStartupBuckets(instance, options.buckets ?? [], remainingStartupMs);
         return instance;
     }
     catch (error) {

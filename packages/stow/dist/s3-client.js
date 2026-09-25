@@ -1,11 +1,16 @@
-import { S3Client } from "@aws-sdk/client-s3";
+import { S3Client, } from "@aws-sdk/client-s3";
 import { UNSIGNED_PAYLOAD } from "@smithy/signature-v4";
 const unsignedPayloadMiddleware = (next) => async (args) => {
-    const request = args.request;
-    request.headers ??= {};
-    request.headers["x-amz-content-sha256"] = UNSIGNED_PAYLOAD;
+    if (!isHttpRequest(args.request)) {
+        return next(args);
+    }
+    args.request.headers ??= {};
+    args.request.headers["x-amz-content-sha256"] = UNSIGNED_PAYLOAD;
     return next(args);
 };
+function isHttpRequest(value) {
+    return typeof value === "object" && value !== null && "headers" in value;
+}
 /**
  * S3 client configured for stow's SigV4 verifier (UNSIGNED-PAYLOAD).
  */
