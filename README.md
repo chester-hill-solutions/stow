@@ -44,6 +44,38 @@ Use Stow when a workload needs S3 behavior without a cloud account or network se
 - browser or Node.js integrations that need an embedded runtime;
 - development against an existing upstream S3-compatible service.
 
+## Install
+
+**The npm and PyPI packages are not published yet.** Both names are reserved and
+the release pipeline that will publish them is built and green, but `@chs/stow-s3`
+is not on npm and `stow-s3` is not on PyPI. `npm install @chs/stow-s3` and
+`pip install stow-s3` will fail with a 404 today.
+
+The Go module is published and installs today:
+
+```bash
+go get github.com/chester-hill-solutions/stow-s3/pkg/stow
+```
+
+TypeScript and Python work from a source checkout:
+
+```bash
+git clone https://github.com/chester-hill-solutions/stow-s3
+cd stow-s3
+make build                        # bin/stow-s3 for your platform
+export STOW_BIN="$PWD/bin/stow-s3"
+
+# TypeScript client
+cd packages/stow-s3 && npm install && npm run build && cd ../..
+
+# Python client
+pip install -e "packages/stow-s3-py[boto3]"
+```
+
+`STOW_BIN` tells a client which server binary to run. A published package carries
+its own binary for your platform and does not need it. `stow-s3 doctor` reports
+which side is broken if the binary cannot be found or run.
+
 ## Quick start: a scoped session
 
 A session is the shortest path from nothing to a working S3 client. It starts a
@@ -51,10 +83,12 @@ private server on an ephemeral port, creates a bucket, waits until the server
 reports itself ready, and hands back a client that is already pointed at it. On
 close it stops the server and removes the data directory.
 
-TypeScript:
+TypeScript (not yet on npm — see [Install](#install)):
 
 ```bash
-npm install @chs/stow-s3 @aws-sdk/client-s3
+# from a source checkout
+make build && export STOW_BIN="$PWD/bin/stow-s3"
+cd packages/stow-s3 && npm install && npm run build
 ```
 
 ```ts
@@ -80,10 +114,11 @@ const body = await withStow(async (session) => {
 errors if the close also fails. Use `openStow` when you need the session to
 outlive a single callback.
 
-Python:
+Python (not yet on PyPI — see [Install](#install)):
 
 ```bash
-pip install "stow-s3[boto3]"
+make build && export STOW_BIN="$PWD/bin/stow-s3"
+pip install -e "packages/stow-s3-py[boto3]"
 ```
 
 ```python
@@ -187,10 +222,11 @@ For a temporary in-memory server:
 
 ## Quick start: TypeScript
 
-Install the package and start a managed server:
+Start a managed server (see [Install](#install) for why this is not yet an
+`npm install`):
 
 ```bash
-npm install @chs/stow-s3
+export STOW_BIN="$PWD/bin/stow-s3"
 ```
 
 ```ts

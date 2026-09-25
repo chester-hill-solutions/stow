@@ -19,14 +19,21 @@ deletes itself when it closes.
 
 ## Install
 
+The npm and PyPI packages are **not published yet**: `@chs/stow-s3` and
+`stow-s3` are not on npm or PyPI, so those installs 404. The Go module is
+published.
+
 ```bash
-npm install @chs/stow-s3 @aws-sdk/client-s3   # TypeScript
-pip install "stow-s3[boto3]"                  # Python
-go get github.com/chester-hill-solutions/stow-s3/pkg/stow   # Go
+go get github.com/chester-hill-solutions/stow-s3/pkg/stow   # Go, works now
 ```
 
-Each package ships the server binary. Nothing else is required. If the binary
-cannot be found, `npx stow-doctor` or `stow-s3 doctor` reports which side is
+TypeScript and Python work from a source checkout: `git clone`, `make build`,
+then `export STOW_BIN="$PWD/bin/stow-s3"`, then `npm install && npm run build`
+in `packages/stow-s3` (TypeScript) or `pip install -e
+"packages/stow-s3-py[boto3]"` (Python). A published package carries its own
+binary and does not need `STOW_BIN`.
+
+If the binary cannot be found or run, `stow-s3 doctor` reports which side is
 broken.
 
 ## Optional

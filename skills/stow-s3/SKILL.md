@@ -30,16 +30,32 @@ reads, error shapes.
 
 ## Install
 
+**npm and PyPI are not published yet.** `@chs/stow-s3` and `stow-s3` are not on
+npm or PyPI, so those two commands fail with a 404. Do not try them first. The
+Go module is published and is the shortest working path.
+
 ```bash
-npm install @chs/stow-s3 @aws-sdk/client-s3   # TypeScript
-pip install "stow-s3[boto3]"                  # Python
-go get github.com/chester-hill-solutions/stow-s3/pkg/stow   # Go
+go get github.com/chester-hill-solutions/stow-s3/pkg/stow   # Go, works now
 ```
 
-Each package ships the server binary, so there is nothing else to install and
-no PATH entry to set. If the binary is missing, `npx stow-doctor` (TypeScript)
-or `stow-s3 doctor` (server side) reports which of the two sides is broken
-rather than failing opaquely.
+For TypeScript or Python, work from a source checkout:
+
+```bash
+git clone https://github.com/chester-hill-solutions/stow-s3
+cd stow-s3
+make build                        # bin/stow-s3 for your platform
+export STOW_BIN="$PWD/bin/stow-s3"
+
+# TypeScript
+cd packages/stow-s3 && npm install && npm run build && cd ../..
+
+# Python
+pip install -e "packages/stow-s3-py[boto3]"
+```
+
+A published package ships its own binary and needs no `STOW_BIN`. If the binary
+is missing or unrunnable, `stow-s3 doctor` reports which of the two sides is
+broken rather than failing opaquely.
 
 ## The scoped session
 

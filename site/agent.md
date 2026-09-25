@@ -21,17 +21,38 @@ would otherwise need a live bucket.
 
 ## Install
 
-Pick the one that matches the language you are already writing in.
+**The npm and PyPI packages are not published yet.** Both registry names are
+reserved and the release pipeline is built, but `@chs/stow-s3` and `stow-s3` are
+not on npm or PyPI, so `npm install` and `pip install` will fail with a 404. Do
+not spend a turn discovering that. The Go module *is* published and is the
+shortest path today.
+
+Go, published and installable now:
 
 ```bash
-npm install @chs/stow-s3 @aws-sdk/client-s3   # TypeScript
-pip install "stow-s3[boto3]"                  # Python
-go get github.com/chester-hill-solutions/stow-s3/pkg/stow   # Go
+go get github.com/chester-hill-solutions/stow-s3/pkg/stow
 ```
 
-Each package ships the server binary, so nothing else needs installing. If the
-binary is missing, run `npx stow-doctor` or `stow-s3 doctor`; it reports which
-of the client and server sides is broken instead of failing opaquely.
+TypeScript and Python, from a source checkout:
+
+```bash
+git clone https://github.com/chester-hill-solutions/stow-s3
+cd stow-s3
+make build                      # produces bin/stow-s3 for your platform
+export STOW_BIN="$PWD/bin/stow-s3"
+
+# TypeScript
+cd packages/stow-s3 && npm install && npm run build && cd ../..
+
+# Python
+pip install -e "packages/stow-s3-py[boto3]"
+```
+
+`STOW_BIN` tells the client which server binary to run. A published package
+carries its own binary and does not need it.
+
+If the binary cannot be found or run, `stow-s3 doctor` reports which of the
+client and server sides is broken instead of failing opaquely.
 
 ## The pattern you want
 

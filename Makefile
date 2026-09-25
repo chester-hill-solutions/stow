@@ -1,4 +1,4 @@
-.PHONY: build build-wasm test test-race test-conformance test-node test-python test-wasm test-all lint format-check check-go-quality check-ts-quality check-type-escapes check-dry check-file-size check-coverage check-version standards check-generated benchmark
+.PHONY: build build-wasm test test-race test-conformance test-node test-python test-wasm test-all lint format-check check-go-quality check-ts-quality check-type-escapes check-dry check-file-size check-coverage check-version check-install-surface standards check-generated benchmark
 
 BINARY := bin/stow-s3
 
@@ -84,4 +84,11 @@ benchmark: build build-wasm
 check-version:
 	node scripts/check-version.mjs
 
-standards: format-check lint test-race check-go-quality check-file-size check-coverage check-version check-ts-quality check-generated
+# The documented install surface has to match what is actually published. The
+# default run is offline and deterministic so it is safe as a required check;
+# --online resolves each published target against its registry and belongs in
+# the release path, where the network is already a dependency.
+check-install-surface:
+	node scripts/check-install-surface.mjs
+
+standards: format-check lint test-race check-go-quality check-file-size check-coverage check-version check-install-surface check-ts-quality check-generated

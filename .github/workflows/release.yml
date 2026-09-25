@@ -182,6 +182,13 @@ jobs:
           done
           ls -l dist/npm-platform
 
+      # A release is the one place where "is this actually published" is a
+      # question about the world rather than about the tree, so it is the one
+      # place worth asking a registry. This is what would have caught issue #3
+      # before the install instructions shipped pointing at nothing.
+      - name: Check the documented install surface against the registries
+        run: node scripts/check-install-surface.mjs --online
+
       - name: Publish npm package
         run: npm publish --ignore-scripts --access public --provenance ./dist/npm/*.tgz
 
