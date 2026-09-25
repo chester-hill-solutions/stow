@@ -3,9 +3,12 @@ package runthrough_test
 import (
 	"bytes"
 	"context"
+	"encoding/json"
+	"errors"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"sync"
 	"testing"
 	"time"
@@ -13,6 +16,32 @@ import (
 	"github.com/chester-hill-solutions/stow/internal/runthrough"
 	"github.com/chester-hill-solutions/stow/internal/storage"
 )
+
+func expireFileOutboxClaim(t *testing.T, path, id string) {
+	t.Helper()
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read outbox: %v", err)
+	}
+	var state struct {
+		Entries map[string]map[string]interface{} `json:"entries"`
+	}
+	if err := json.Unmarshal(data, &state); err != nil {
+		t.Fatalf("decode outbox: %v", err)
+	}
+	entry, ok := state.Entries[id]
+	if !ok {
+		t.Fatalf("claim entry %q not found", id)
+	}
+	entry["claim_until"] = time.Now().Add(-time.Second).Format(time.RFC3339Nano)
+	data, err = json.Marshal(state)
+	if err != nil {
+		t.Fatalf("encode outbox: %v", err)
+	}
+	if err := os.WriteFile(path, data, 0o600); err != nil {
+		t.Fatalf("write expired claim: %v", err)
+	}
+}
 
 func TestFileOutboxSharedInstancesReloadBeforeMutation(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "outbox.json")
@@ -90,19 +119,124 @@ func TestFileOutboxClaimIsExclusiveAndExpires(t *testing.T) {
 	if err != nil {
 		t.Fatalf("enqueue: %v", err)
 	}
-	claimed, ok, err := first.Claim(entry.ID, "owner-a", 500*time.Millisecond)
+	claimed, ok, err := first.Claim(entry.ID, "owner-a", time.Minute)
 	if err != nil || !ok || claimed.ClaimOwner != "owner-a" {
 		t.Fatalf("first claim = %+v, ok=%v, err=%v", claimed, ok, err)
 	}
 	if _, ok, err := second.Claim(entry.ID, "owner-b", time.Minute); err != nil || ok {
 		t.Fatalf("competing claim ok=%v err=%v, want refusal", ok, err)
 	}
-	if err := second.MarkClaimedSuccess(entry.ID, "owner-b"); err == nil {
+	if err := second.MarkClaimedSuccess(entry.ID, "owner-b", claimed.ClaimToken); err == nil {
 		t.Fatal("stale owner was allowed to mark success")
 	}
-	time.Sleep(600 * time.Millisecond)
+	expireFileOutboxClaim(t, path, entry.ID)
 	if _, ok, err := second.Claim(entry.ID, "owner-b", time.Minute); err != nil || !ok {
 		t.Fatalf("expired claim ok=%v err=%v, want takeover", ok, err)
+	}
+}
+
+func TestPreparedIntentIsOwnedAndRejectsDuplicateKey(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "outbox.json")
+	first, err := runthrough.NewFileOutbox(path)
+	if err != nil {
+		t.Fatalf("first outbox: %v", err)
+	}
+	owner := "stow-" + strconv.Itoa(os.Getpid()) + "-prepared"
+	entry, err := first.PrepareOwned(runthrough.OutboxEntry{Operation: runthrough.OutboxPut, Bucket: "bucket", Key: "key"}, owner, time.Minute)
+	if err != nil {
+		t.Fatalf("prepare owned: %v", err)
+	}
+	second, err := runthrough.NewFileOutbox(path)
+	if err != nil {
+		t.Fatalf("second outbox: %v", err)
+	}
+	if _, err := second.PrepareOwned(runthrough.OutboxEntry{Operation: runthrough.OutboxPut, Bucket: "bucket", Key: "key"}, "other", time.Minute); !errors.Is(err, runthrough.ErrOutboxPreparedUnresolved) {
+		t.Fatalf("duplicate prepare error = %v", err)
+	}
+	if _, err := second.CommitPrepared(entry.ID, owner, entry.PreparedToken, "version-1"); err != nil {
+		t.Fatalf("commit owned prepared intent: %v", err)
+	}
+	if pending := second.Pending(); len(pending) != 1 || pending[0].Prepared {
+		t.Fatalf("committed prepared state = %+v", pending)
+	}
+}
+
+func TestRecoverPreparedSkipsLiveOwner(t *testing.T) {
+	ctx := context.Background()
+	local := storage.NewMemoryStore()
+	if err := local.CreateBucket(ctx, "bucket"); err != nil {
+		t.Fatalf("create bucket: %v", err)
+	}
+	outbox, err := runthrough.NewFileOutbox(filepath.Join(t.TempDir(), "outbox.json"))
+	if err != nil {
+		t.Fatalf("outbox: %v", err)
+	}
+	owner := "stow-" + strconv.Itoa(os.Getpid()) + "-prepared"
+	if _, err := outbox.PrepareOwned(runthrough.OutboxEntry{Operation: runthrough.OutboxPut, Bucket: "bucket", Key: "key"}, owner, time.Minute); err != nil {
+		t.Fatalf("prepare owned: %v", err)
+	}
+	adapter := runthrough.NewWithOutbox(runthrough.Config{Policy: runthrough.PolicyMirrorWrites, AllowLiveWrites: true}, local, local, newMockUpstream(), outbox)
+	if err := adapter.RetryPending(ctx); err != nil {
+		t.Fatalf("retry: %v", err)
+	}
+	if prepared := outbox.Prepared(); len(prepared) != 1 {
+		t.Fatalf("prepared = %+v, want live-owner entry", prepared)
+	}
+}
+
+func TestLegacyMutationsCannotBypassClaim(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "outbox.json")
+	outbox, err := runthrough.NewFileOutbox(path)
+	if err != nil {
+		t.Fatalf("outbox: %v", err)
+	}
+	entry, err := outbox.Enqueue(runthrough.OutboxEntry{Operation: runthrough.OutboxPut, Bucket: "bucket", Key: "key"})
+	if err != nil {
+		t.Fatalf("enqueue: %v", err)
+	}
+	claimed, ok, err := outbox.Claim(entry.ID, "owner", time.Minute)
+	if err != nil || !ok {
+		t.Fatalf("claim = %+v, ok=%v, err=%v", claimed, ok, err)
+	}
+	if err := outbox.MarkSuccess(entry.ID); !errors.Is(err, runthrough.ErrOutboxClaimHeld) {
+		t.Fatalf("mark success error = %v", err)
+	}
+	if err := outbox.MarkFailure(entry.ID, errors.New("late"), time.Now()); !errors.Is(err, runthrough.ErrOutboxClaimHeld) {
+		t.Fatalf("mark failure error = %v", err)
+	}
+	if err := outbox.Discard(entry.ID); !errors.Is(err, runthrough.ErrOutboxClaimHeld) {
+		t.Fatalf("discard error = %v", err)
+	}
+}
+
+func TestClaimTokenFencesStaleOwner(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "outbox.json")
+	first, err := runthrough.NewFileOutbox(path)
+	if err != nil {
+		t.Fatalf("first outbox: %v", err)
+	}
+	second, err := runthrough.NewFileOutbox(path)
+	if err != nil {
+		t.Fatalf("second outbox: %v", err)
+	}
+	entry, err := first.Enqueue(runthrough.OutboxEntry{Operation: runthrough.OutboxPut, Bucket: "bucket", Key: "key"})
+	if err != nil {
+		t.Fatalf("enqueue: %v", err)
+	}
+	old, ok, err := first.Claim(entry.ID, "old-owner", time.Minute)
+	if err != nil || !ok {
+		t.Fatalf("old claim = %+v, ok=%v, err=%v", old, ok, err)
+	}
+	expireFileOutboxClaim(t, path, entry.ID)
+	current, ok, err := second.Claim(entry.ID, "new-owner", time.Minute)
+	if err != nil || !ok {
+		t.Fatalf("takeover claim = %+v, ok=%v, err=%v", current, ok, err)
+	}
+	if err := first.MarkClaimedSuccess(entry.ID, "old-owner", old.ClaimToken); !errors.Is(err, runthrough.ErrOutboxClaimLost) {
+		t.Fatalf("stale completion error = %v", err)
+	}
+	if err := second.MarkClaimedSuccess(entry.ID, "new-owner", current.ClaimToken); err != nil {
+		t.Fatalf("current completion: %v", err)
 	}
 }
 

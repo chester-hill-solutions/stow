@@ -163,9 +163,12 @@ func (a *Adapter) DiscardOutboxEntry(id string) error {
 		if entry.ID != id {
 			continue
 		}
+		if entry.PreparedOwner != "" && (entry.PreparedUntil.After(time.Now().UTC()) || outboxOwnerAlive(entry.PreparedOwner)) {
+			return ErrOutboxClaimHeld
+		}
 		unlock := a.outboxLocks.lock(outboxIdentity(entry.Bucket, entry.Key))
 		defer unlock()
-		return a.discardPreparedIntent(id)
+		return a.discardPreparedIntent(entry)
 	}
 	return fmt.Errorf("outbox entry %q not found", id)
 }
@@ -267,7 +270,7 @@ func (a *Adapter) PutObject(ctx context.Context, bucket, key string, body io.Rea
 	}
 	a.invalidateCache(ctx, bucket, key)
 	if action == writePropagate {
-		if _, err := a.commitPreparedIntent(prepared.ID, objectVersion(meta)); err != nil {
+		if _, err := a.commitPreparedIntent(prepared, objectVersion(meta)); err != nil {
 			return meta, err
 		}
 		if err := a.completeIntentLocked(ctx, prepared); err != nil {

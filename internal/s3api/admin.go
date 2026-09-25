@@ -3,6 +3,7 @@ package s3api
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"strings"
@@ -305,6 +306,10 @@ func (s *Server) discardOutbox(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err := provider.DiscardOutboxEntry(id); err != nil {
+		if errors.Is(err, runthrough.ErrOutboxClaimHeld) {
+			writeAdminError(w, http.StatusConflict, "outbox entry is currently claimed")
+			return
+		}
 		writeAdminError(w, http.StatusNotFound, "outbox entry was not found")
 		return
 	}

@@ -75,21 +75,31 @@ func (a *Adapter) prepareIntent(operation OutboxOperation, bucket, key, previous
 	if len(source) > 1 {
 		entry.SourceKey = source[1]
 	}
+	if owned, ok := a.coordinatedOutbox.(OwnedPreparedOutbox); ok {
+		return owned.PrepareOwned(entry, a.claimOwner, defaultOutboxClaimLease)
+	}
 	return a.coordinatedOutbox.Prepare(entry)
 }
 
-func (a *Adapter) commitPreparedIntent(id, version string) (OutboxEntry, error) {
+func (a *Adapter) commitPreparedIntent(entry OutboxEntry, version string) (OutboxEntry, error) {
 	if a.coordinatedOutbox == nil {
 		return OutboxEntry{}, ErrDurableOutboxRequired
 	}
-	return a.coordinatedOutbox.Commit(id, version)
+	if owned, ok := a.coordinatedOutbox.(OwnedPreparedOutbox); ok && entry.PreparedOwner != "" {
+		owner := entry.PreparedOwner
+		return owned.CommitPrepared(entry.ID, owner, entry.PreparedToken, version)
+	}
+	return a.coordinatedOutbox.Commit(entry.ID, version)
 }
 
-func (a *Adapter) discardPreparedIntent(id string) error {
+func (a *Adapter) discardPreparedIntent(entry OutboxEntry) error {
 	if a.coordinatedOutbox == nil {
 		return ErrDurableOutboxRequired
 	}
-	return a.coordinatedOutbox.DiscardPrepared(id)
+	if owned, ok := a.coordinatedOutbox.(OwnedPreparedOutbox); ok && entry.PreparedOwner != "" {
+		return owned.DiscardPreparedOwned(entry.ID, entry.PreparedOwner, entry.PreparedToken)
+	}
+	return a.coordinatedOutbox.DiscardPrepared(entry.ID)
 }
 
 func (a *Adapter) enqueuePreparedIntentLocked(operation OutboxOperation, bucket, key, previousVersion string, source ...string) (OutboxEntry, error) {
@@ -214,8 +224,15 @@ func (a *Adapter) RecoverPrepared(ctx context.Context) error {
 	if a.coordinatedOutbox == nil {
 		return nil
 	}
+	entries, err := a.preparedEntriesWithError()
+	if err != nil {
+		return err
+	}
 	var firstErr error
-	for _, entry := range a.coordinatedOutbox.Prepared() {
+	for _, entry := range entries {
+		if entry.PreparedOwner != "" && (entry.PreparedUntil.After(time.Now().UTC()) || outboxOwnerAlive(entry.PreparedOwner)) {
+			continue
+		}
 		unlock := a.outboxLocks.lock(outboxIdentity(entry.Bucket, entry.Key))
 		_, err := a.reconcilePreparedEntryLocked(ctx, entry)
 		unlock()
@@ -227,7 +244,11 @@ func (a *Adapter) RecoverPrepared(ctx context.Context) error {
 }
 
 func (a *Adapter) rejectPreparedKey(bucket, key string) error {
-	for _, entry := range a.preparedEntries() {
+	entries, err := a.preparedEntriesWithError()
+	if err != nil {
+		return err
+	}
+	for _, entry := range entries {
 		if entry.Bucket == bucket && entry.Key == key {
 			return ErrOutboxPreparedUnresolved
 		}
@@ -236,10 +257,18 @@ func (a *Adapter) rejectPreparedKey(bucket, key string) error {
 }
 
 func (a *Adapter) preparedEntries() []OutboxEntry {
+	entries, _ := a.preparedEntriesWithError()
+	return entries
+}
+
+func (a *Adapter) preparedEntriesWithError() ([]OutboxEntry, error) {
 	if a.coordinatedOutbox == nil {
-		return nil
+		return nil, nil
 	}
-	return a.coordinatedOutbox.Prepared()
+	if snapshot, ok := a.outbox.(SnapshotOutbox); ok {
+		return snapshot.PreparedSnapshot()
+	}
+	return a.coordinatedOutbox.Prepared(), nil
 }
 
 func (a *Adapter) orderingEntries() []OutboxEntry {
@@ -282,28 +311,28 @@ func (a *Adapter) reconcilePreparedEntryLocked(ctx context.Context, entry Outbox
 		meta, err := a.local.HeadObject(ctx, entry.Bucket, entry.Key)
 		if err != nil {
 			if errors.Is(err, storage.ErrObjectNotFound) {
-				return false, a.discardPreparedIntent(entry.ID)
+				return false, a.discardPreparedIntent(entry)
 			}
 			return false, err
 		}
 		currentVersion := objectVersion(meta)
 		if entry.PreviousVersion != "" && currentVersion == entry.PreviousVersion {
-			return false, a.discardPreparedIntent(entry.ID)
+			return false, a.discardPreparedIntent(entry)
 		}
-		_, err = a.commitPreparedIntent(entry.ID, currentVersion)
+		_, err = a.commitPreparedIntent(entry, currentVersion)
 		return true, err
 	case OutboxDelete:
 		meta, err := a.local.HeadObject(ctx, entry.Bucket, entry.Key)
 		if err == nil {
 			if entry.Version != "" && objectVersion(meta) == entry.Version {
-				return false, a.discardPreparedIntent(entry.ID)
+				return false, a.discardPreparedIntent(entry)
 			}
 			return false, ErrOutboxPreparedUnresolved
 		}
 		if !errors.Is(err, storage.ErrObjectNotFound) {
 			return false, err
 		}
-		_, err = a.commitPreparedIntent(entry.ID, entry.Version)
+		_, err = a.commitPreparedIntent(entry, entry.Version)
 		return true, err
 	default:
 		return false, ErrOutboxPreparedUnresolved

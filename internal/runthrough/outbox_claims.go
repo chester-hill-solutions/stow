@@ -9,7 +9,11 @@ import (
 	"time"
 )
 
-var ErrOutboxClaimLost = errors.New("outbox claim is no longer owned")
+var (
+	ErrOutboxClaimLost  = errors.New("outbox claim is no longer owned")
+	ErrOutboxClaimHeld  = errors.New("outbox entry is claimed")
+	ErrOutboxClaimLease = errors.New("outbox claim lease must be positive")
+)
 
 const defaultOutboxClaimLease = 30 * time.Second
 
@@ -19,10 +23,21 @@ const defaultOutboxClaimLease = 30 * time.Second
 type ClaimableOutbox interface {
 	Outbox
 	Claim(id, owner string, lease time.Duration) (OutboxEntry, bool, error)
-	Renew(id, owner string, lease time.Duration) error
-	Release(id, owner string) error
-	MarkClaimedSuccess(id, owner string) error
-	MarkClaimedFailure(id, owner string, cause error, retryAt time.Time) error
+	Renew(id, owner string, token uint64, lease time.Duration) error
+	Release(id, owner string, token uint64) error
+	MarkClaimedSuccess(id, owner string, token uint64) error
+	MarkClaimedFailure(id, owner string, token uint64, cause error, retryAt time.Time) error
+}
+
+// OwnedPreparedOutbox extends the coordinated prepare phase with an owner and
+// fencing token. A process may recover an owned intent only after its lease
+// expires; an active owner must acknowledge the same token it prepared.
+type OwnedPreparedOutbox interface {
+	CoordinatedOutbox
+	PrepareOwned(entry OutboxEntry, owner string, lease time.Duration) (OutboxEntry, error)
+	RenewPrepared(id, owner string, token uint64, lease time.Duration) error
+	CommitPrepared(id, owner string, token uint64, version string) (OutboxEntry, error)
+	DiscardPreparedOwned(id, owner string, token uint64) error
 }
 
 func newOutboxOwner() string {
@@ -34,16 +49,22 @@ func newOutboxOwner() string {
 }
 
 func (s *outboxState) claim(id, owner string, lease time.Duration) (OutboxEntry, bool, error) {
+	if owner == "" || lease <= 0 {
+		return OutboxEntry{}, false, ErrOutboxClaimLease
+	}
 	entry, ok := s.entries[id]
 	if !ok || entry.Terminal || !outboxEntryDue(entry, time.Now()) || !s.firstForKey(entry) {
 		return OutboxEntry{}, false, nil
 	}
 	now := time.Now().UTC()
-	if entry.ClaimOwner != "" && entry.ClaimUntil.After(now) && entry.ClaimOwner != owner {
-		return OutboxEntry{}, false, nil
+	if entry.ClaimOwner != "" {
+		if entry.ClaimUntil.After(now) || outboxOwnerAlive(entry.ClaimOwner) {
+			return OutboxEntry{}, false, nil
+		}
 	}
 	entry.ClaimOwner = owner
 	entry.ClaimUntil = now.Add(lease)
+	entry.ClaimToken = s.assignToken()
 	s.entries[id] = entry
 	return entry, true, nil
 }
@@ -62,12 +83,15 @@ func (s *outboxState) firstForKey(target OutboxEntry) bool {
 	return true
 }
 
-func (s *outboxState) renewClaim(id, owner string, lease time.Duration) error {
+func (s *outboxState) renewClaim(id, owner string, token uint64, lease time.Duration) error {
+	if lease <= 0 {
+		return ErrOutboxClaimLease
+	}
 	entry, ok := s.entries[id]
 	if !ok {
 		return fmt.Errorf("outbox entry %q not found", id)
 	}
-	if entry.ClaimOwner != owner || !entry.ClaimUntil.After(time.Now().UTC()) {
+	if entry.ClaimOwner != owner || entry.ClaimToken != token {
 		return ErrOutboxClaimLost
 	}
 	entry.ClaimUntil = time.Now().UTC().Add(lease)
@@ -75,48 +99,88 @@ func (s *outboxState) renewClaim(id, owner string, lease time.Duration) error {
 	return nil
 }
 
-func (s *outboxState) releaseClaim(id, owner string) error {
+func (s *outboxState) releaseClaim(id, owner string, token uint64) error {
 	entry, ok := s.entries[id]
 	if !ok {
 		return nil
 	}
-	if entry.ClaimOwner != owner {
+	if entry.ClaimOwner != owner || entry.ClaimToken != token {
 		return ErrOutboxClaimLost
 	}
 	entry.ClaimOwner = ""
 	entry.ClaimUntil = time.Time{}
+	entry.ClaimToken = 0
 	s.entries[id] = entry
 	return nil
 }
 
-func (s *outboxState) markClaimedSuccess(id, owner string) error {
+func (s *outboxState) markClaimedSuccess(id, owner string, token uint64) error {
 	entry, ok := s.entries[id]
 	if !ok {
 		return fmt.Errorf("outbox entry %q not found", id)
 	}
-	if entry.ClaimOwner != owner || !entry.ClaimUntil.After(time.Now().UTC()) {
+	if entry.ClaimOwner != owner || entry.ClaimToken != token {
 		return ErrOutboxClaimLost
 	}
 	delete(s.entries, id)
 	return nil
 }
 
-func (s *outboxState) markClaimedFailure(id, owner string, cause error, retryAt time.Time) error {
+func (s *outboxState) markClaimedFailure(id, owner string, token uint64, cause error, retryAt time.Time) error {
 	entry, ok := s.entries[id]
 	if !ok {
 		return fmt.Errorf("outbox entry %q not found", id)
 	}
-	if entry.ClaimOwner != owner || !entry.ClaimUntil.After(time.Now().UTC()) {
+	if entry.ClaimOwner != owner || entry.ClaimToken != token {
 		return ErrOutboxClaimLost
 	}
-	if err := s.markFailure(id, cause, retryAt); err != nil {
+	if err := s.markFailureUnchecked(entry, cause, retryAt); err != nil {
 		return err
 	}
 	entry = s.entries[id]
 	entry.ClaimOwner = ""
 	entry.ClaimUntil = time.Time{}
+	entry.ClaimToken = 0
 	s.entries[id] = entry
 	return nil
+}
+
+func (o *FileOutbox) PrepareOwned(entry OutboxEntry, owner string, lease time.Duration) (OutboxEntry, error) {
+	var prepared OutboxEntry
+	err := o.withState(func(state *outboxState) error {
+		var err error
+		prepared, err = state.prepareOwned(entry, owner, lease)
+		return err
+	})
+	if err != nil {
+		return OutboxEntry{}, err
+	}
+	return prepared, nil
+}
+
+func (o *FileOutbox) RenewPrepared(id, owner string, token uint64, lease time.Duration) error {
+	return o.withState(func(state *outboxState) error {
+		return state.renewPrepared(id, owner, token, lease)
+	})
+}
+
+func (o *FileOutbox) CommitPrepared(id, owner string, token uint64, version string) (OutboxEntry, error) {
+	var committed OutboxEntry
+	err := o.withState(func(state *outboxState) error {
+		var err error
+		committed, err = state.commitPrepared(id, owner, token, version)
+		return err
+	})
+	if err != nil {
+		return OutboxEntry{}, err
+	}
+	return committed, nil
+}
+
+func (o *FileOutbox) DiscardPreparedOwned(id, owner string, token uint64) error {
+	return o.withState(func(state *outboxState) error {
+		return state.discardPreparedOwned(id, owner, token)
+	})
 }
 
 func (o *FileOutbox) Claim(id, owner string, lease time.Duration) (OutboxEntry, bool, error) {
@@ -133,26 +197,29 @@ func (o *FileOutbox) Claim(id, owner string, lease time.Duration) (OutboxEntry, 
 	return claimed, ok, nil
 }
 
-func (o *FileOutbox) Renew(id, owner string, lease time.Duration) error {
+func (o *FileOutbox) Renew(id, owner string, token uint64, lease time.Duration) error {
 	return o.withState(func(state *outboxState) error {
-		return state.renewClaim(id, owner, lease)
+		return state.renewClaim(id, owner, token, lease)
 	})
 }
 
-func (o *FileOutbox) Release(id, owner string) error {
+func (o *FileOutbox) Release(id, owner string, token uint64) error {
 	return o.withState(func(state *outboxState) error {
-		return state.releaseClaim(id, owner)
+		return state.releaseClaim(id, owner, token)
 	})
 }
 
-func (o *FileOutbox) MarkClaimedSuccess(id, owner string) error {
+func (o *FileOutbox) MarkClaimedSuccess(id, owner string, token uint64) error {
 	return o.withState(func(state *outboxState) error {
-		return state.markClaimedSuccess(id, owner)
+		return state.markClaimedSuccess(id, owner, token)
 	})
 }
 
-func (o *FileOutbox) MarkClaimedFailure(id, owner string, cause error, retryAt time.Time) error {
+func (o *FileOutbox) MarkClaimedFailure(id, owner string, token uint64, cause error, retryAt time.Time) error {
 	return o.withState(func(state *outboxState) error {
-		return state.markClaimedFailure(id, owner, cause, retryAt)
+		return state.markClaimedFailure(id, owner, token, cause, retryAt)
 	})
 }
+
+var _ ClaimableOutbox = (*FileOutbox)(nil)
+var _ OwnedPreparedOutbox = (*FileOutbox)(nil)

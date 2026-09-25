@@ -19,9 +19,10 @@ type FileOutbox struct {
 }
 
 type persistedOutbox struct {
-	Entries  map[string]OutboxEntry `json:"entries"`
-	Prepared map[string]OutboxEntry `json:"prepared,omitempty"`
-	Seq      uint64                 `json:"seq"`
+	Entries   map[string]OutboxEntry `json:"entries"`
+	Prepared  map[string]OutboxEntry `json:"prepared,omitempty"`
+	Seq       uint64                 `json:"seq"`
+	NextToken uint64                 `json:"next_token,omitempty"`
 }
 
 func NewFileOutbox(path string) (*FileOutbox, error) {
@@ -73,7 +74,7 @@ func decodeOutboxState(data []byte) (outboxState, error) {
 			return outboxState{}, fmt.Errorf("outbox entry %q is both prepared and active", id)
 		}
 	}
-	return outboxState{entries: persisted.Entries, prepared: persisted.Prepared, seq: persisted.Seq}, nil
+	return outboxState{entries: persisted.Entries, prepared: persisted.Prepared, seq: persisted.Seq, nextToken: persisted.NextToken}, nil
 }
 
 func (o *FileOutbox) reloadLocked() error {
@@ -95,6 +96,7 @@ func (o *FileOutbox) reloadLocked() error {
 	}
 	o.state = state
 	o.updateSequences()
+	o.updateTokens()
 	return nil
 }
 
@@ -104,6 +106,22 @@ func (o *FileOutbox) updateSequences() {
 	}
 	for id := range o.state.prepared {
 		o.updateSequence(id)
+	}
+}
+
+func (o *FileOutbox) updateTokens() {
+	for _, entry := range o.state.entries {
+		if entry.ClaimToken > o.state.nextToken {
+			o.state.nextToken = entry.ClaimToken
+		}
+		if entry.PreparedToken > o.state.nextToken {
+			o.state.nextToken = entry.PreparedToken
+		}
+	}
+	for _, entry := range o.state.prepared {
+		if entry.PreparedToken > o.state.nextToken {
+			o.state.nextToken = entry.PreparedToken
+		}
 	}
 }
 
@@ -124,11 +142,7 @@ func (o *FileOutbox) withState(update func(*outboxState) error) (err error) {
 	if err != nil {
 		return err
 	}
-	defer func() {
-		if releaseErr := lock.release(); err == nil {
-			err = releaseErr
-		}
-	}()
+	defer func() { _ = lock.release() }()
 	if err := o.reloadLocked(); err != nil {
 		return err
 	}
@@ -150,11 +164,7 @@ func (o *FileOutbox) readState() (state outboxState, err error) {
 	if err != nil {
 		return outboxState{}, err
 	}
-	defer func() {
-		if releaseErr := lock.release(); err == nil {
-			err = releaseErr
-		}
-	}()
+	defer func() { _ = lock.release() }()
 	if err := o.reloadLocked(); err != nil {
 		return outboxState{}, err
 	}
@@ -186,23 +196,39 @@ func (o *FileOutbox) Prepare(entry OutboxEntry) (OutboxEntry, error) {
 }
 
 func (o *FileOutbox) Prepared() []OutboxEntry {
-	state, err := o.readState()
+	entries, err := o.PreparedSnapshot()
 	if err != nil {
 		o.mu.Lock()
 		defer o.mu.Unlock()
 		return o.state.preparedEntries()
 	}
-	return state.preparedEntries()
+	return entries
+}
+
+func (o *FileOutbox) PreparedSnapshot() ([]OutboxEntry, error) {
+	state, err := o.readState()
+	if err != nil {
+		return nil, err
+	}
+	return state.preparedEntries(), nil
 }
 
 func (o *FileOutbox) Pending() []OutboxEntry {
-	state, err := o.readState()
+	entries, err := o.PendingSnapshot()
 	if err != nil {
 		o.mu.Lock()
 		defer o.mu.Unlock()
 		return o.state.pending()
 	}
-	return state.pending()
+	return entries
+}
+
+func (o *FileOutbox) PendingSnapshot() ([]OutboxEntry, error) {
+	state, err := o.readState()
+	if err != nil {
+		return nil, err
+	}
+	return state.pending(), nil
 }
 
 func (o *FileOutbox) MarkSuccess(id string) error {
@@ -249,7 +275,7 @@ func (o *FileOutbox) Close() error {
 }
 
 func (o *FileOutbox) persistState(state outboxState) error {
-	data, err := json.MarshalIndent(persistedOutbox{Entries: state.entries, Prepared: state.prepared, Seq: state.seq}, "", "  ")
+	data, err := json.MarshalIndent(persistedOutbox{Entries: state.entries, Prepared: state.prepared, Seq: state.seq, NextToken: state.nextToken}, "", "  ")
 	if err != nil {
 		return err
 	}

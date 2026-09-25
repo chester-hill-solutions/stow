@@ -41,6 +41,10 @@ type OutboxEntry struct {
 	Terminal        bool            `json:"terminal,omitempty"`
 	ClaimOwner      string          `json:"claim_owner,omitempty"`
 	ClaimUntil      time.Time       `json:"claim_until,omitempty"`
+	ClaimToken      uint64          `json:"claim_token,omitempty"`
+	PreparedOwner   string          `json:"prepared_owner,omitempty"`
+	PreparedUntil   time.Time       `json:"prepared_until,omitempty"`
+	PreparedToken   uint64          `json:"prepared_token,omitempty"`
 }
 
 type Outbox interface {
@@ -66,10 +70,16 @@ type DurableOutbox interface {
 	Durable() bool
 }
 
+type SnapshotOutbox interface {
+	PendingSnapshot() ([]OutboxEntry, error)
+	PreparedSnapshot() ([]OutboxEntry, error)
+}
+
 type outboxState struct {
-	entries  map[string]OutboxEntry
-	prepared map[string]OutboxEntry
-	seq      uint64
+	entries   map[string]OutboxEntry
+	prepared  map[string]OutboxEntry
+	seq       uint64
+	nextToken uint64
 }
 
 func newOutboxState() outboxState {
@@ -85,7 +95,7 @@ func (s outboxState) clone() outboxState {
 	for id, entry := range s.prepared {
 		prepared[id] = entry
 	}
-	return outboxState{entries: entries, prepared: prepared, seq: s.seq}
+	return outboxState{entries: entries, prepared: prepared, seq: s.seq, nextToken: s.nextToken}
 }
 
 func (s *outboxState) assignID(entry OutboxEntry) OutboxEntry {
@@ -103,6 +113,11 @@ func (s *outboxState) assignID(entry OutboxEntry) OutboxEntry {
 	return entry
 }
 
+func (s *outboxState) assignToken() uint64 {
+	s.nextToken++
+	return s.nextToken
+}
+
 func (s *outboxState) enqueue(entry OutboxEntry) OutboxEntry {
 	entry = s.assignID(entry)
 	entry.Prepared = false
@@ -117,6 +132,80 @@ func (s *outboxState) prepare(entry OutboxEntry) OutboxEntry {
 	return entry
 }
 
+func (s *outboxState) prepareOwned(entry OutboxEntry, owner string, lease time.Duration) (OutboxEntry, error) {
+	if owner == "" || lease <= 0 {
+		return OutboxEntry{}, ErrOutboxClaimLease
+	}
+	entry = s.assignID(entry)
+	if s.hasPreparedKey(entry) {
+		return OutboxEntry{}, ErrOutboxPreparedUnresolved
+	}
+	entry.Prepared = true
+	entry.PreparedOwner = owner
+	entry.PreparedUntil = time.Now().UTC().Add(lease)
+	entry.PreparedToken = s.assignToken()
+	s.prepared[entry.ID] = entry
+	return entry, nil
+}
+
+func (s *outboxState) hasPreparedKey(entry OutboxEntry) bool {
+	for _, prepared := range s.prepared {
+		if prepared.Bucket == entry.Bucket && prepared.Key == entry.Key {
+			return true
+		}
+	}
+	return false
+}
+
+func (s *outboxState) renewPrepared(id, owner string, token uint64, lease time.Duration) error {
+	if lease <= 0 {
+		return ErrOutboxClaimLease
+	}
+	entry, ok := s.prepared[id]
+	if !ok {
+		return fmt.Errorf("outbox prepared entry %q not found", id)
+	}
+	if entry.PreparedOwner != owner || entry.PreparedToken != token {
+		return ErrOutboxClaimLost
+	}
+	entry.PreparedUntil = time.Now().UTC().Add(lease)
+	s.prepared[id] = entry
+	return nil
+}
+
+func (s *outboxState) commitPrepared(id, owner string, token uint64, version string) (OutboxEntry, error) {
+	entry, ok := s.prepared[id]
+	if !ok {
+		if active, activeOK := s.entries[id]; activeOK {
+			return active, nil
+		}
+		return OutboxEntry{}, fmt.Errorf("outbox prepared entry %q not found", id)
+	}
+	if entry.PreparedOwner != owner || entry.PreparedToken != token || !entry.PreparedUntil.After(time.Now().UTC()) {
+		return OutboxEntry{}, ErrOutboxClaimLost
+	}
+	delete(s.prepared, id)
+	entry.Prepared = false
+	entry.PreparedOwner = ""
+	entry.PreparedUntil = time.Time{}
+	entry.PreparedToken = 0
+	entry.Version = version
+	s.entries[id] = entry
+	return entry, nil
+}
+
+func (s *outboxState) discardPreparedOwned(id, owner string, token uint64) error {
+	entry, ok := s.prepared[id]
+	if !ok {
+		return nil
+	}
+	if entry.PreparedOwner != owner || entry.PreparedToken != token {
+		return ErrOutboxClaimLost
+	}
+	delete(s.prepared, id)
+	return nil
+}
+
 func (s *outboxState) pending() []OutboxEntry {
 	return pendingEntries(s.entries)
 }
@@ -126,13 +215,24 @@ func (s *outboxState) preparedEntries() []OutboxEntry {
 }
 
 func (s *outboxState) markSuccess(id string) error {
+	entry, ok := s.entries[id]
+	if !ok {
+		return nil
+	}
+	if entry.ClaimOwner != "" {
+		return ErrOutboxClaimHeld
+	}
 	delete(s.entries, id)
 	return nil
 }
 
 func (s *outboxState) discard(id string) error {
-	if _, ok := s.entries[id]; !ok {
+	entry, ok := s.entries[id]
+	if !ok {
 		return fmt.Errorf("outbox entry %q not found", id)
+	}
+	if entry.ClaimOwner != "" {
+		return ErrOutboxClaimHeld
 	}
 	delete(s.entries, id)
 	return nil
@@ -143,10 +243,15 @@ func (s *outboxState) markFailure(id string, cause error, retryAt time.Time) err
 	if !ok {
 		return fmt.Errorf("outbox entry %q not found", id)
 	}
+	if entry.ClaimOwner != "" {
+		return ErrOutboxClaimHeld
+	}
+	return s.markFailureUnchecked(entry, cause, retryAt)
+}
+
+func (s *outboxState) markFailureUnchecked(entry OutboxEntry, cause error, retryAt time.Time) error {
 	entry.Attempts++
 	entry.NextAttempt = retryAt
-	entry.ClaimOwner = ""
-	entry.ClaimUntil = time.Time{}
 	if cause != nil {
 		entry.LastError = cause.Error()
 	}
@@ -154,7 +259,7 @@ func (s *outboxState) markFailure(id string, cause error, retryAt time.Time) err
 		entry.Terminal = true
 		entry.NextAttempt = time.Time{}
 	}
-	s.entries[id] = entry
+	s.entries[entry.ID] = entry
 	return nil
 }
 
@@ -166,16 +271,26 @@ func (s *outboxState) commit(id, version string) (OutboxEntry, error) {
 		}
 		return OutboxEntry{}, fmt.Errorf("outbox prepared entry %q not found", id)
 	}
+	if entry.PreparedOwner != "" {
+		return OutboxEntry{}, ErrOutboxClaimHeld
+	}
 	delete(s.prepared, id)
 	entry.Prepared = false
+	entry.PreparedOwner = ""
+	entry.PreparedUntil = time.Time{}
+	entry.PreparedToken = 0
 	entry.Version = version
 	s.entries[id] = entry
 	return entry, nil
 }
 
 func (s *outboxState) discardPrepared(id string) error {
-	if _, ok := s.prepared[id]; !ok {
+	entry, ok := s.prepared[id]
+	if !ok {
 		return fmt.Errorf("outbox prepared entry %q not found", id)
+	}
+	if entry.PreparedOwner != "" {
+		return ErrOutboxClaimHeld
 	}
 	delete(s.prepared, id)
 	return nil

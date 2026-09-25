@@ -54,7 +54,7 @@ func (a *Adapter) DeleteObject(ctx context.Context, bucket, key string) error {
 	}
 	a.invalidateCache(ctx, bucket, key)
 	if action == writePropagate {
-		if _, err := a.commitPreparedIntent(prepared.ID, version); err != nil {
+		if _, err := a.commitPreparedIntent(prepared, version); err != nil {
 			return err
 		}
 		return a.completeIntentLocked(ctx, prepared)
@@ -144,12 +144,12 @@ func (a *Adapter) commitDeleteIntents(prepared []OutboxEntry, deleted []string) 
 	committed := make([]OutboxEntry, 0, len(deleted))
 	for _, entry := range prepared {
 		if _, ok := deletedSet[entry.Key]; !ok {
-			if err := a.discardPreparedIntent(entry.ID); err != nil {
+			if err := a.discardPreparedIntent(entry); err != nil {
 				return nil, err
 			}
 			continue
 		}
-		committedEntry, err := a.commitPreparedIntent(entry.ID, entry.PreviousVersion)
+		committedEntry, err := a.commitPreparedIntent(entry, entry.PreviousVersion)
 		if err != nil {
 			return nil, err
 		}
@@ -210,7 +210,7 @@ func (a *Adapter) CopyObject(ctx context.Context, srcBucket, srcKey, dstBucket, 
 	}
 	a.invalidateCache(ctx, dstBucket, dstKey)
 	if action == writePropagate {
-		if _, err := a.commitPreparedIntent(prepared.ID, objectVersion(meta)); err != nil {
+		if _, err := a.commitPreparedIntent(prepared, objectVersion(meta)); err != nil {
 			return meta, err
 		}
 		if err := a.completeIntentLocked(ctx, prepared); err != nil {
@@ -270,7 +270,7 @@ func (a *Adapter) CompleteMultipartUpload(ctx context.Context, uploadID string, 
 		return nil, err
 	}
 	if action == writePropagate {
-		if _, err := a.commitPreparedIntent(prepared.ID, objectVersion(meta)); err != nil {
+		if _, err := a.commitPreparedIntent(prepared, objectVersion(meta)); err != nil {
 			return meta, err
 		}
 		if err := a.completeIntentLocked(ctx, prepared); err != nil {

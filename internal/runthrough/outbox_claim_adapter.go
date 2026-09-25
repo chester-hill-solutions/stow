@@ -30,14 +30,14 @@ func (claim propagationClaim) success() error {
 	if claim.provider == nil {
 		return nil
 	}
-	return claim.provider.MarkClaimedSuccess(claim.entry.ID, claim.entry.ClaimOwner)
+	return claim.provider.MarkClaimedSuccess(claim.entry.ID, claim.entry.ClaimOwner, claim.entry.ClaimToken)
 }
 
 func (claim propagationClaim) failure(cause error, retryAt time.Time) error {
 	if claim.provider == nil {
 		return nil
 	}
-	return claim.provider.MarkClaimedFailure(claim.entry.ID, claim.entry.ClaimOwner, cause, retryAt)
+	return claim.provider.MarkClaimedFailure(claim.entry.ID, claim.entry.ClaimOwner, claim.entry.ClaimToken, cause, retryAt)
 }
 
 func (claim propagationClaim) propagate(ctx context.Context, a *Adapter) error {
@@ -60,7 +60,7 @@ func (claim propagationClaim) propagate(ctx context.Context, a *Adapter) error {
 			case <-claimCtx.Done():
 				return
 			case <-ticker.C:
-				if err := claim.provider.Renew(claim.entry.ID, claim.entry.ClaimOwner, a.claimLease); err != nil {
+				if err := claim.provider.Renew(claim.entry.ID, claim.entry.ClaimOwner, claim.entry.ClaimToken, a.claimLease); err != nil {
 					select {
 					case renewed <- err:
 					default:

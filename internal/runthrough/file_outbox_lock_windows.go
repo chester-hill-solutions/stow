@@ -4,33 +4,63 @@ package runthrough
 
 import (
 	"os"
-	"time"
+	"syscall"
+	"unsafe"
+)
+
+const (
+	lockFileExclusiveLock = 0x00000002
+	lockFileReserved      = 0
+	lockFileBytes         = ^uint32(0)
+)
+
+var (
+	kernel32     = syscall.NewLazyDLL("kernel32.dll")
+	lockFileEx   = kernel32.NewProc("LockFileEx")
+	unlockFileEx = kernel32.NewProc("UnlockFileEx")
 )
 
 type outboxFileLock struct {
-	file *os.File
-	path string
+	file       *os.File
+	overlapped syscall.Overlapped
 }
 
 func acquireOutboxFileLock(path string) (*outboxFileLock, error) {
-	for attempt := 0; attempt < 10000; attempt++ {
-		file, err := os.OpenFile(path, os.O_CREATE|os.O_EXCL|os.O_RDWR, 0o600)
-		if err == nil {
-			return &outboxFileLock{file: file, path: path}, nil
-		}
-		if !os.IsExist(err) {
-			return nil, err
-		}
-		time.Sleep(time.Millisecond)
+	file, err := os.OpenFile(path, os.O_CREATE|os.O_RDWR, 0o600)
+	if err != nil {
+		return nil, err
 	}
-	return nil, os.ErrExist
+
+	lock := &outboxFileLock{file: file}
+	result, _, err := lockFileEx.Call(
+		file.Fd(),
+		uintptr(lockFileExclusiveLock),
+		uintptr(lockFileReserved),
+		uintptr(lockFileBytes),
+		uintptr(lockFileBytes),
+		uintptr(unsafe.Pointer(&lock.overlapped)),
+	)
+	if result == 0 {
+		_ = file.Close()
+		if err == nil {
+			err = syscall.EINVAL
+		}
+		return nil, err
+	}
+	return lock, nil
 }
 
 func (lock *outboxFileLock) release() error {
+	result, _, unlockErr := unlockFileEx.Call(
+		lock.file.Fd(),
+		uintptr(lockFileReserved),
+		uintptr(lockFileBytes),
+		uintptr(lockFileBytes),
+		uintptr(unsafe.Pointer(&lock.overlapped)),
+	)
 	closeErr := lock.file.Close()
-	removeErr := os.Remove(lock.path)
-	if closeErr != nil {
-		return closeErr
+	if result == 0 {
+		return unlockErr
 	}
-	return removeErr
+	return closeErr
 }
