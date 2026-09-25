@@ -8,6 +8,7 @@ import (
 
 	"github.com/chester-hill-solutions/stow-s3/internal/storage"
 	"github.com/chester-hill-solutions/stow-s3/internal/storage/fs"
+	"github.com/chester-hill-solutions/stow-s3/internal/storage/workspace"
 )
 
 type storeFactory struct {
@@ -32,6 +33,25 @@ func backendFactories(t *testing.T) []storeFactory {
 				store, err := fs.NewFilesystemStore(t.TempDir())
 				if err != nil {
 					t.Fatalf("new filesystem store: %v", err)
+				}
+				return store
+			},
+		},
+		{
+			// The workspace backend is a third implementation of the same
+			// contract, so it runs the same suite as the other two. The
+			// guarantees that make it more than a store — adoption, the
+			// key-to-path encoding, the manifest — are covered in its own
+			// package, not here.
+			name: "workspace",
+			new: func(t *testing.T) storage.Store {
+				t.Helper()
+				store, err := workspace.New(workspace.Options{
+					Root:   t.TempDir(),
+					Bucket: "contract",
+				})
+				if err != nil {
+					t.Fatalf("new workspace store: %v", err)
 				}
 				return store
 			},

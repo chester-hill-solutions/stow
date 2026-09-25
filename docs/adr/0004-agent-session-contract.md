@@ -4,6 +4,14 @@ status: accepted
 
 # Agent session contract
 
+**Partly superseded.** Sections 1 and 2 are superseded for the *default* path
+by ADR 0007 (the workspace, not a scoped S3 session, is the default) and ADR
+0009 (a workspace outlives the process that created it). This ADR continues to
+govern the child-process session, which remains supported and unchanged: a
+caller who wants a real S3 endpoint from a client that cannot embed gets this
+contract, and it is the right one for them. Read section 1 as the contract for
+the S3 session profile, not for the product default.
+
 This ADR records the contract that the TypeScript and Python session APIs
 implement. It exists so that the two language packages cannot drift apart while
 the agent-facing surface is built, and so that the decisions made in

@@ -879,3 +879,267 @@ marketed as such.
     because it is MinIO's successor rather than an independent alternative. RustFS is named but not
     evaluated. Both should be added on their own primary sources before this document is used to
     support any claim about self-hosted storage.
+
+---
+
+# Part 2 — The agent workspace market, and two exits in one quarter
+
+**Added 2026-09-25.** Part 1 (sections 1–9) covers the storage-emulation set and
+is unchanged. This part covers the *agent workspace* market, which is the
+category the product direction in `docs/agent-dx-plan.md` section 0.5 targets,
+and it revises the strategic reading in section 8.
+
+## 10.0 Method for Part 2, and its evidence grades
+
+Part 1's rule was first-party sources only. Part 2 holds to it, and grades every
+claim, because the single most load-bearing claim here — that AWS has shipped the
+product thesis — is **not** first-party-sourced and must not be treated as
+settled.
+
+| Grade | Meaning |
+|---|---|
+| **A** | First-party: the vendor's own documentation, repository, or release notes |
+| **B** | Two or more independent secondary sources agreeing, no first-party page found |
+| **C** | One secondary source. Treated as a lead to verify, not as a fact |
+
+Where a claim is B or C, it is written as a lead. No roadmap decision should rest
+on a C claim without the primary page being read first.
+
+---
+
+## 10.1 What the market converged on
+
+Four designs for "where an agent's files live between runs". This taxonomy is
+useful because it is descriptive rather than competitive, and every product
+below lands in one of the four.
+
+| Design | How it works | Who |
+|---|---|---|
+| **Live disk** | A block-storage volume stays provisioned while compute is gone; nothing is copied on pause | Managed VM and block-storage providers |
+| **Snapshot / copy-on-write** | State is captured on pause and restored on resume; restores may expire | Container and edge sandboxes |
+| **Object-backed mount** | An S3-compatible bucket presented as a filesystem, usually via FUSE | Cloudflare Sandbox, Daytona volumes, AWS S3 Files |
+| **In-process / library** | The agent's runtime is linked into the host process; no boundary at all | Embedded runtimes |
+
+The fourth is where Stow now sits, and until 2026 it was the least represented
+design in agent tooling. The first three all require something the caller does
+not have: a volume, a container runtime, or a bucket.
+
+## 10.2 Fact sheets
+
+### Amazon S3 Files — grade C, and this is the most important thing to verify
+
+**Claim.** AWS has shipped a product that makes an S3 bucket usable with
+filesystem semantics, synchronised with S3 objects, positioned explicitly for
+agent workloads.
+
+**Evidence.** Secondary only. A VentureBeat article dated in the 2026 window
+frames it as giving "AI agents a native file system workspace, ending the
+object-file split that breaks multi-agent pipelines," and quotes an IDC analyst:
+*"For agentic AI, which thinks in terms of files, paths, and local scripts, this
+is the missing link. It allows an AI agent to treat an exabyte-scale bucket as its
+own local hard drive, enabling a level of autonomous operational speed that was
+previously bottled up by API overhead associated with approaches like FUSE."* A
+second independent source states the feature was announced in May 2026 and that
+AWS's own agent-runtime product now attaches both this and a network filesystem,
+with a documented split placing "generated artifacts" on the object side.
+
+**Why it matters anyway.** If true, the product thesis in
+`docs/agent-dx-plan.md` section 0.5 — one call gives an agent a workspace that is
+already its working directory, and the same bytes are reachable through S3 — was
+published by AWS first, at exabyte scale. That does not invalidate the direction.
+It does mean the *concept* stopped being a differentiator, and it makes reading
+the primary page the highest-value verification task in this document.
+
+**What it does not tell us.** Whether it is generally available, what it costs,
+whether it needs a VPC attachment or a kernel module, or whether a laptop process
+can use it at all. Any of those could move Stow's position substantially, in
+either direction.
+
+### OpenAI Agents SDK — sandbox providers and storage mounts — grade A
+
+**Claim.** The Agents SDK has a first-party sandbox abstraction whose manifest
+accepts external storage mounts, and names a fixed set of official hosted
+providers.
+
+**Evidence.** `developers.openai.com/api/docs/guides/agents/sandboxes` documents
+a sandbox manifest whose inputs include `File`, `Dir`, a local file or
+directory, a Git repository, and `S3Mount`, `GCSMount`, `R2Mount`,
+`AzureBlobMount`, `BoxMount`, `S3FilesMount`; plus `environment` for variables
+set at start. Built-in clients cover a local container runtime and a
+Unix-local environment, alongside hosted providers.
+
+**Consequence for the roadmap.** This is the most consequential finding in Part
+2, and it is first-party. The plan's original W7 asserted a win condition of
+`Agent(workspace=...)` being Stow — that the package becomes infrastructure when
+nobody imports it on purpose. That seam now exists, is owned by a framework
+vendor, and has a vocabulary. Stow does not get to define the integration
+surface; it has to satisfy an existing one, against a named concept
+(`S3Mount`) rather than a chosen one.
+
+This is a downgrade in leverage and an upgrade in specificity. The work is
+smaller and better defined, and the prize is a provider slot rather than a
+standard.
+
+### Kubernetes SIG Agent Sandbox — grade A
+
+**Claim.** There is a Kubernetes special-interest-group standard for agent
+sandboxes, with an API and client libraries.
+
+**Evidence.** `agent-sandbox.sigs.k8s.io/docs` documents an API reference and
+resource types, a filesystem capability, hibernation and resume, a volume
+attached to a sandbox, and high-level clients for Python and Go. The site's
+changelog records Go client documentation being added in April 2026.
+
+**Consequence.** A second standards body, on a different axis (infrastructure
+rather than framework), converging on the same vocabulary. Conformance here is
+cheaper than invention and buys credibility with the operators who run agent
+infrastructure, which is a different audience from framework authors.
+
+### Cloudflare Sandbox — grade A
+
+**Claim.** An edge sandbox SDK can mount an S3-compatible bucket as a local
+filesystem path inside a sandbox.
+
+**Evidence.** `developers.cloudflare.com/sandbox/guides/mount-buckets` documents
+`sandbox.mountBucket(bucket, path)` for R2, S3, GCS and others, accessed with
+ordinary file operations, including mounting an R2 bucket by Worker binding name
+so credentials stay in the Worker runtime. The overview documents persistent
+storage with object storage, and the page states a production deployment is
+required.
+
+**Consequence.** Requirement 2 of the product brief, shipped, with a
+first-party API. The qualification is the interesting part: it requires a
+deployed Worker, and the sandbox is documented as beta on a paid plan. It is not
+a local default and does not compete for the same job.
+
+### Hosted sandbox providers — grade B
+
+Seven providers are named as officially integrated by the Agents SDK: a
+Firecracker-microVM provider, Cloudflare, a Daytona-style provider with
+S3-backed volume mounts, E2B, Modal, Runloop, and Vercel. Every one of them is a
+hosted service requiring an account. Secondary sources also describe a
+"block-storage-backed agent sandbox" product and a Kubernetes-conformant
+alternative with a Python client.
+
+**Consequence.** The hosted tier is well served and crowded. It is not where a
+zero-infrastructure library competes, and should not be treated as the threat
+that it superficially resembles.
+
+### TTL-bounded scratch — grade A
+
+Durable-but-expiring agent scratch is already ordinary. Cloudflare's sandbox
+documentation describes snapshot restores that expire on a three-day default
+TTL and are extendable.
+
+**Consequence.** Requirement 3's TTL collection is table stakes, not
+differentiation. The plan is right to build it and wrong to lead with it.
+
+---
+
+## 10.3 Two exits, five weeks apart
+
+This is the finding that changes the roadmap, and both are grade A.
+
+### MinIO community edition — archived, source-only, unmaintained
+
+**Evidence.** `github.com/minio/minio` states, in the repository itself,
+**"THIS REPOSITORY IS NO LONGER MAINTAINED,"** lists no maintained alternatives
+other than the vendor's commercial products, and carries a **"Source-Only
+Distribution"** notice: *"The MinIO community edition is now distributed as source
+code only. We will no longer provide pre-compiled binary releases for the
+community version."* Installation is now `go install` or a source build; legacy
+binary releases are marked "no longer maintained." The project is AGPLv3, and a
+named commercial successor publishes its own support-lifecycle terms.
+
+**Precision, per this document's rules.** Three separable facts, not one:
+repository unmaintained; community distribution is source-only; a commercial
+successor exists with published upgrade paths. Secondary sources place the
+archive in February 2026, and a container vendor's lifecycle announcement
+independently describes the project as end-of-life and no longer shipping
+security patches. **This document does not assert a first-party archive date**,
+because none was found — the same discipline §9 records for the earlier
+draft of this question. Secondary sources also describe at least one independent
+community fork that keeps a release line alive under the same licence and the
+same on-disk format, which is the strongest available mitigation and the reason
+"MinIO is dead" would be an overstatement.
+
+### LocalStack — account-gated
+
+**Evidence.** `blog.localstack.cloud/localstack-for-aws-release-2026-03-0`
+states: *"As of version 2026.03.0, an auth token or CI auth token is required to
+start LocalStack for AWS."* A first-party migration post states that from
+**March 23, 2026** the project ships a single unified image requiring
+authentication **"including in CI,"** and that a temporary bypass via an
+acknowledgement variable was available only until April 6, 2026. A free plan
+continues for non-commercial hobbyists and a student plan. Independent
+corroboration appears in the testcontainers and Spring Cloud AWS tracker issues
+filed by users whose pipelines broke on that date.
+
+**Precision.** This is not a discontinuation. A free tier exists, the project is
+active, and the vendor gave roughly three months' notice. What ended is the
+property that mattered for this product's earliest audience: **a local AWS
+emulator that starts with no account at all.**
+
+### Why the two together matter more than either
+
+The two most widely used local S3 options both stopped being zero-account inside
+about five weeks of each other. One is unmaintained and source-only; the other is
+active, well-funded, and now requires an identity before it will start.
+
+The remaining field is thin: a Node-oriented server of uncertain maintenance, a
+Python mocking library rather than a server, two production-storage projects not
+shaped for ephemeral dev use, at least one community fork of the dead project, and
+— per a single secondary source, grade C — one young multi-service emulator with
+known API-parity gaps that is not yet a safe default for a shared pipeline.
+
+This is a stronger opening than "the category is validated." A validated category
+with occupied positions is a harder market than an unvalidated one. This is an
+occupied category whose lowest-friction occupant left.
+
+## 10.4 What is no longer a differentiator
+
+Stated plainly, because the plan's earlier framing implied otherwise:
+
+- **The concept.** An agent workspace that is a filesystem and speaks object
+  storage is now a shipping product category with a framework-vendor interface, a
+  Kubernetes standard, and a cloud-vendor product.
+- **TTL-bounded scratch.** Ordinary.
+- **Framework embedding as a moat.** The seam is owned by others.
+- **Being S3-compatible.** Table stakes, and the incumbents had it first.
+- **Being cheap.** The hosted providers are cheap per-second at volumes nobody
+  testing at scale will hit.
+
+## 10.5 The position that is actually open
+
+Every product in section 10.2 requires at least one of: a cloud account, a
+cluster, a deployed edge function on a paid plan, a container runtime, or a
+signed-up provider account. The two exits in 10.3 removed the two ways that
+requirement used to be satisfiable locally and cheaply.
+
+What is left is narrow and specific:
+
+> **The only S3-shaped workspace an agent or a CI job can start with no account,
+> no container runtime, and no path to production credentials — and which is
+> also that process's working directory.**
+
+That is a distribution claim, not a feature claim. It is won or lost entirely on
+whether installation works, which makes the account-side unblock in
+`docs/agent-dx-plan.md` section 10.1 the precondition for the whole strategy
+rather than a packaging chore.
+
+## 10.6 Verify before betting on it
+
+1. **The AWS product page.** Grade C, strategically load-bearing, and everything
+   in section 10.5 is stated relative to it. Read the primary page before the
+   roadmap is approved.
+2. **The Agents SDK sandbox contract.** Grade A for existence, unverified for
+   stability. Determine whether the manifest interface is versioned, whether
+   third-party providers are first-class or merely supported, and what a provider
+   must implement to be listed.
+3. **The Kubernetes SIG's maturity.** Incubation versus graduated changes who is
+   expected to conform and when.
+4. **Whether a free hosted tier can serve the zero-account segment.** If one of
+   the official providers offers a usable free tier with no card, the wedge in
+   10.5 narrows to "no Docker" and stops being structural.
+5. **The fork landscape.** One maintained fork changes the "unmaintained"
+   framing materially. It is the most likely correction to this section.

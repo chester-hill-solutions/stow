@@ -14,10 +14,19 @@ export declare function platformPackageForCurrentPlatform(): string | undefined;
 /**
  * Resolve the stow binary path and report which rule produced it.
  *
- * Precedence: a platform binary installed alongside this package, the STOW_BIN
- * environment variable, `bin/stow-s3` relative to a monorepo root, then `stow-s3` on
- * PATH. A plain `npm install` on a supported platform therefore works with no
- * setup, while an explicit STOW_BIN still wins for development and testing.
+ * Precedence: a platform binary installed alongside this package, then the
+ * STOW_BIN environment variable, then `bin/stow-s3` relative to a monorepo
+ * root, then `stow-s3` on PATH. A plain `npm install` on a supported platform
+ * therefore works with no setup.
+ *
+ * The platform package deliberately outranks STOW_BIN, and this comment used to
+ * claim the opposite. It matters: a caller who upgrades the package and still
+ * exports a STOW_BIN pointing at a binary from an older release should get the
+ * binary that shipped with the version they installed, not the stale one their
+ * shell happens to carry. A pinned install outranks a floating environment
+ * variable. To exercise a specific build, point STOW_BIN at it in a tree with
+ * no platform package installed, which is what this repository's own dev
+ * install does by omitting optional dependencies.
  */
 export declare function resolveStowBinaryDetailed(): ResolvedStowBinary;
 export declare function resolveStowBinary(): string;

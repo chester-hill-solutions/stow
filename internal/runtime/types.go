@@ -2,6 +2,7 @@ package runtime
 
 import (
 	"errors"
+	"fmt"
 	"time"
 )
 
@@ -10,6 +11,13 @@ type Backend string
 const (
 	BackendMemory     Backend = "memory"
 	BackendFilesystem Backend = "filesystem"
+	// BackendWorkspace is a directory a caller is working in, whose objects are
+	// real files. Like the filesystem backend it is persistent, and like the
+	// filesystem backend it requires a store to be supplied by the caller: a
+	// workspace needs a directory, which Options does not carry. It is reached
+	// through stow.OpenWorkspace rather than through Open, so there is no way to
+	// ask for a workspace without saying where it is.
+	BackendWorkspace Backend = "workspace"
 
 	DefaultMaxBytes   int64 = 64 << 20
 	DefaultMaxObjects int64 = 10_000
@@ -30,6 +38,51 @@ var (
 	ErrExternalResetUnsupported = errors.New("runtime reset is unsupported for an externally managed store")
 	ErrMultipartUnsupported     = errors.New("runtime multipart operations are unsupported")
 )
+
+// isKnownBackend reports whether the runtime understands a backend name. An
+// unrecognised one is refused rather than treated as memory, because a caller
+// who asked for durable bytes must not be handed volatile ones.
+func isKnownBackend(backend Backend) bool {
+	switch backend {
+	case BackendMemory, BackendFilesystem, BackendWorkspace:
+		return true
+	default:
+		return false
+	}
+}
+
+// isPersistentBackend reports whether a backend keeps objects across a reopen.
+// It is the capability a host asks about, and it is why the two persistent
+// backends need a store supplied rather than constructed from Options.
+func isPersistentBackend(backend Backend) bool {
+	return backend == BackendFilesystem || backend == BackendWorkspace
+}
+
+// normalizeOptions validates a backend choice and applies the quota defaults.
+// Memory needs no store; the two persistent backends do, which is why they are
+// reachable only from OpenWithStore. See isKnownBackend in types.go.
+func normalizeOptions(options Options, boundStore bool) (Options, error) {
+	if options.Backend == "" {
+		options.Backend = BackendMemory
+	}
+	if boundStore {
+		if !isKnownBackend(options.Backend) {
+			return Options{}, ErrUnsupportedBackend
+		}
+	} else if options.Backend != BackendMemory {
+		return Options{}, ErrUnsupportedBackend
+	}
+	if options.MaxBytes < 0 || options.MaxObjects < 0 {
+		return Options{}, fmt.Errorf("runtime quotas must not be negative")
+	}
+	if options.MaxBytes == 0 {
+		options.MaxBytes = DefaultMaxBytes
+	}
+	if options.MaxObjects == 0 {
+		options.MaxObjects = DefaultMaxObjects
+	}
+	return options, nil
+}
 
 type Options struct {
 	Backend    Backend
