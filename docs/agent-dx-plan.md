@@ -720,7 +720,13 @@ Work:
    benchmark baseline.
 2. Add multipart staging and concurrency limits, if Phase 0 did not record them
    as accepted non-goals.
-3. Add a streaming or single-copy write path for large objects.
+3. Add a streaming write path for large objects, so the body is not resident in
+   full. **Do not estimate this item until the precondition is answered:** can
+   SigV4 payload signing and `Content-MD5` be computed incrementally over a
+   streaming body? Scored 0.46, so it is genuinely open. The "single-copy"
+   variant that previously shared this item is withdrawn; it was built and
+   measured to *raise* peak RSS, because the copy it removed was what kept the
+   collector running.
 4. Verify filesystem key-length handling against the documented limit.
 5. Add stale-lock recovery or a clear operator recovery command.
 6. Add tests for concurrent writes, cancellation, and resource cleanup.
@@ -733,7 +739,11 @@ Exit criteria:
 
 - oversized input fails before storage allocation exceeds the configured limit;
 - 128-byte and maximum-length object keys behave according to the documented contract;
-- no request can cause unbounded memory growth in the default session;
+- no request can cause unbounded memory growth in the default session. This is
+  already enforced by the 16 MiB byte quota, the 1,000 object quota and the 8 MiB
+  per-request body cap, all wired to the native runtime and covered by
+  end-to-end tests, so it is a regression assertion here rather than outstanding
+  work; what remains unproven is the bounded per-session figure in section 11;
 - no temporary file remains after failed or cancelled operations.
 
 ### Phase 3 — Ship the TypeScript agent API
@@ -1054,19 +1064,42 @@ A baseline now exists: `docs/benchmarks/session-baseline.md`, measured on a
 4-core Intel i5-7600K with 15 GB RAM, Node 24, memory backend, over 30
 sequential sessions. It measured 15.4 ms p50 time to ready, 41 ms p50 to first
 operation, 35.5 ms p50 shutdown, 11.6 MB fixed process RSS, and 4.59 MB of peak
-RSS per MiB of object data.
+RSS per MiB of object data. The 4.59 figure is the starting point, not the
+current one: it is 4.22 after two redundant live copies were removed, and 3.27
+for a session, which now runs `GOGC=50`. The baseline document is kept current;
+this paragraph records where the plan began.
 
-Two findings changed this plan:
+Findings that changed this plan, in the order they were established. The first is
+narrowed by the second, which supersedes the copy-count reasoning it was based
+on:
 
 - The proposed "peak memory overshoot < 20%" target is unreachable as written.
-  The measured multiplier is 4.59x, so a byte quota is not a memory bound while
-  the write path buffers the body. Phase 2 must reduce that multiplier, and the
-  target is restated as a reduction in multiplier rather than a percentage of
-  the limit.
+  A byte quota is not a memory bound while the write path buffers the body, so
+  the target is restated as a bounded per-session peak RSS rather than a
+  percentage of the quota.
+- **The multiplier is set by the Go collector's headroom over the live set, not
+  by how many copies of the body exist.** This was measured three times and the
+  copy-count account was wrong each time. Collapsing four transient copies inside
+  `s3api` into one moved the number less than the run-to-run spread. Removing two
+  *simultaneously live* redundant copies moved it from 4.59 to 4.22. Letting the
+  store adopt the caller's buffer, which removes the last live pair, made it
+  **worse at every collector target** (4.24 to 4.65 at `GOGC=100`), because the
+  copy it removed was the allocation pressure that kept the collector running
+  often enough to hold the heap below its ceiling. The original "reduce 4.59x
+  toward 1.5x once the write path is single-copy" is therefore withdrawn:
+  single-copy cannot reach it, and going further in that direction moves the
+  wrong way. `docs/benchmarks/session-baseline.md` sections 1a-1c have the
+  measurements.
+- **The lever that works is the collector target, and it is now shipped.** A
+  session's own server runs `GOGC=50`, which measures 3.27 MB per MiB against
+  4.19 at the Go default; `GOGC=20` reaches 2.96. The setting is on the session's
+  child process only, so it cannot affect a long-lived server, and a `GOGC` the
+  caller set wins over the default. Both clients are held to the same value by
+  `scripts/check-version.mjs`.
 - The 64 MiB default in section 5.2 implies roughly 300 MB of peak RSS per
   session at the measured multiplier, so 100 parallel sessions would need about
   30 GB. The recommended default is 16 MiB and 1,000 objects, keeping the 8 MiB
-  per-request cap, which implies about 85 MB peak RSS per session.
+  per-request cap.
 
 Initial targets, ratified against that baseline where noted:
 
@@ -1077,8 +1110,9 @@ Initial targets, ratified against that baseline where noted:
 | Session shutdown, p95 | < 1 s under normal load (measured 49 ms) |
 | Orphan processes after 1,000 cancellations | 0 |
 | Leaked session directories after 1,000 cancellations | 0 |
-| 100 parallel default sessions | All acquire and release successfully, **on a host with at least 16 GB free**. At 16 MiB per session the measured profile needs roughly 8.5 GB. Not yet measured. |
-| Peak RSS per MiB of stored object data | Reduce the measured 4.59x toward 1.5x once the write path is single-copy. A percentage of the quota is not a meaningful target while the body is buffered. |
+| 100 parallel default sessions | All acquire and release successfully, **on a host with at least 16 GB free**. At 16 MiB per session and the shipped `GOGC=50` the derived figure is roughly 6.5 GB. Not yet measured. |
+| Peak RSS per session, default session | **≤ 65 MB**: 11.6 MB fixed process RSS plus a 16 MiB quota at the measured 3.27 MB per MiB for the shipped `GOGC=50`. Derived from measurements, not yet measured end to end on a session; to be asserted. |
+| Peak RSS per MiB of stored object data | **No copy-count target.** The multiplier is set by collector headroom over the live set, and removing the last redundant copy was measured to make it worse. Near 1x requires not holding the body resident, which is unresolved. See `docs/benchmarks/session-baseline.md` §1c. |
 | Required conformance scenarios skipped | 0 |
 
 Targets are measured on a documented benchmark environment. They are not claims about every host.
@@ -1288,8 +1322,11 @@ The project becomes a strong agent and DX library when a new user can write one 
 - [ ] How is the binary distributed with each package? (A0.5 answer: platform
   optional packages. Measured in `docs/distribution-spike.md`.)
 - [x] What are the default quotas? — **16 MiB / 1,000 objects / 8 MiB per
-  request**, derived from the measured 4.59 MB peak-RSS-per-MiB profile in
-  `docs/benchmarks/session-baseline.md`. About 85 MB peak RSS per session.
+  request.** The byte and object counts are enforced natively. The memory figure
+  that came with them has been restated: sessions now run `GOGC=50`, which
+  measures 3.27 MB peak RSS per MiB rather than 4.59, so a 16 MiB session implies
+  roughly 65 MB including fixed process RSS, not 85 MB. See section 11 and
+  `docs/benchmarks/session-baseline.md`.
 - [ ] Which capabilities must be present for an agent adapter?
 - [ ] How are child-agent credentials handed off?
 - [ ] How are cleanup errors reported without hiding the primary error?
