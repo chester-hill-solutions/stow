@@ -47,17 +47,18 @@ emit() {
   fi
 }
 
-emit_result() {
-  local active=$1
-  local configured=$2
-  local provider=$3
-  local reason=$4
-  local missing=${5:-}
-  emit active "$active"
-  emit configured "$configured"
-  emit provider "$provider"
-  emit reason "$reason"
-  emit missing "$missing"
+# Only active/provider/reason are consumed by the workflow, so a profile is
+# reported either as skipped or as the single profile that will run.
+skip_profile() {
+  emit active false
+  emit provider none
+  emit reason "$1"
+}
+
+run_profile() {
+  emit active true
+  emit provider "$1"
+  emit reason "$2"
 }
 
 classify_endpoint() {
@@ -82,10 +83,31 @@ classify_endpoint() {
   fi
 }
 
+# profile_provider is the endpoint class a profile reports during a dry run,
+# before a real endpoint is known.
+profile_provider() {
+  if [[ $1 == aws-s3 ]]; then
+    printf 'aws-s3'
+  else
+    printf 'cloudflare-r2'
+  fi
+}
+
+# profile_accepts keeps the profile-to-endpoint mapping in one place: the AWS
+# profile only runs against AWS, and the R2/custom profile runs against
+# anything that is not AWS.
+profile_accepts() {
+  if [[ $1 == aws-s3 ]]; then
+    [[ $2 == aws-s3 ]]
+  else
+    [[ $2 != aws-s3 ]]
+  fi
+}
+
 resolve() {
   local profile=${STOW_LIVE_PROFILE:-}
   local requested=${STOW_CONFORMANCE_REQUESTED_PROVIDER:-auto}
-  local dry_run require_configured actual missing_csv=''
+  local dry_run require_configured actual
   local missing=()
 
   case "$profile" in
@@ -100,15 +122,11 @@ resolve() {
   require_configured=$(parse_bool STOW_CONFORMANCE_REQUIRE_CONFIGURED false)
 
   if [[ $requested != auto && $requested != "$profile" ]]; then
-    emit_result false false none profile-not-selected
+    skip_profile profile-not-selected
     return 0
   fi
   if [[ $dry_run == true ]]; then
-    local dry_provider=custom
-    if [[ $profile == aws-s3 ]]; then
-      dry_provider=aws-s3
-    fi
-    emit_result true false "$dry_provider" dry-run
+    run_profile "$(profile_provider "$profile")" dry-run
     return 0
   fi
 
@@ -118,8 +136,9 @@ resolve() {
     fi
   done
   if ((${#missing[@]} > 0)); then
+    local missing_csv
     missing_csv=$(IFS=,; printf '%s' "${missing[*]}")
-    emit_result false false none missing-configuration "$missing_csv"
+    skip_profile missing-configuration
     if [[ $require_configured == true ]]; then
       fail "live provider configuration is required (missing: $missing_csv)"
     fi
@@ -127,22 +146,15 @@ resolve() {
   fi
 
   actual=$(classify_endpoint "$STOW_ENDPOINT")
-  if [[ $profile == aws-s3 && $actual != aws-s3 ]]; then
-    emit_result false true none endpoint-does-not-match-profile
+  if ! profile_accepts "$profile" "$actual"; then
+    skip_profile endpoint-does-not-match-profile
     if [[ $requested != auto ]]; then
-      fail "the configured endpoint is $actual, not aws-s3"
-    fi
-    return 0
-  fi
-  if [[ $profile == cloudflare-r2-custom && $actual == aws-s3 ]]; then
-    emit_result false true none endpoint-does-not-match-profile
-    if [[ $requested != auto ]]; then
-      fail "the configured endpoint is aws-s3, not cloudflare-r2/custom"
+      fail "the configured endpoint is $actual, which does not match the $profile profile"
     fi
     return 0
   fi
 
-  emit_result true true "$actual" configured
+  run_profile "$actual" configured
 }
 
 run_test() {

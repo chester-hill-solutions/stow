@@ -67,8 +67,8 @@ func TestUpstreamRunThrough(t *testing.T) {
 		t.Fatalf("outbox after successful mirror: pending=%d terminal=%d", pending, terminal)
 	}
 	expectation := liveObjectExpectation{bucket: upstreamConfig.Bucket, key: key, body: body, etag: meta.ETag}
-	assertLiveUpstreamObject(t, ctx, upstream, expectation)
-	assertLiveAdapterObject(t, ctx, adapter, expectation)
+	assertLiveObject(t, ctx, upstream, expectation)
+	assertLiveObject(t, ctx, adapter, expectation)
 }
 
 func liveEnvEnabled(name string) bool {
@@ -187,45 +187,41 @@ type liveObjectCleaner interface {
 }
 
 func removeAndVerifyLiveObject(ctx context.Context, upstream liveObjectCleaner, bucket, key string) error {
-	deleteErr := upstream.DeleteObject(ctx, bucket, key)
-	if errors.Is(deleteErr, storage.ErrObjectNotFound) {
-		deleteErr = nil
+	if err := upstream.DeleteObject(ctx, bucket, key); err != nil && !errors.Is(err, storage.ErrObjectNotFound) {
+		return fmt.Errorf("delete %q: %w", key, err)
 	}
-	if deleteErr != nil {
-		return fmt.Errorf("delete %q: %w", key, deleteErr)
-	}
-
-	var verifyErr error
 	for {
-		_, verifyErr = upstream.HeadObject(ctx, bucket, key)
-		switch {
-		case errors.Is(verifyErr, storage.ErrObjectNotFound):
-			verifyErr = nil
-		case verifyErr != nil:
-			verifyErr = fmt.Errorf("head %q after delete: %w", key, verifyErr)
-		default:
-			verifyErr = fmt.Errorf("head %q still exists after delete", key)
-		}
-		if verifyErr == nil {
+		_, err := upstream.HeadObject(ctx, bucket, key)
+		if errors.Is(err, storage.ErrObjectNotFound) {
 			break
+		}
+		if err != nil {
+			return fmt.Errorf("head %q after delete: %w", key, err)
 		}
 		select {
 		case <-ctx.Done():
-			return errors.Join(deleteErr, verifyErr)
+			return fmt.Errorf("head %q still exists after delete: %w", key, ctx.Err())
 		case <-time.After(200 * time.Millisecond):
 		}
 	}
 
 	listed, err := upstream.ListObjectsV2(ctx, bucket, storage.ListOptions{Prefix: key})
 	if err != nil {
-		return errors.Join(deleteErr, fmt.Errorf("list cleanup prefix %q: %w", key, err))
+		return fmt.Errorf("list cleanup prefix %q: %w", key, err)
 	}
 	for _, object := range listed.Objects {
 		if object.Key == key {
-			return errors.Join(deleteErr, fmt.Errorf("cleanup listing still contains %q", key))
+			return fmt.Errorf("cleanup listing still contains %q", key)
 		}
 	}
-	return deleteErr
+	return nil
+}
+
+// liveObjectSource is the one shape both the raw provider client and the
+// run-through adapter expose, so a single assertion covers the whole mirror
+// path instead of one near-identical helper per side.
+type liveObjectSource interface {
+	GetObject(context.Context, string, string) (io.ReadCloser, *storage.ObjectMeta, error)
 }
 
 type liveObjectExpectation struct {
@@ -235,40 +231,22 @@ type liveObjectExpectation struct {
 	etag   string
 }
 
-func assertLiveUpstreamObject(t *testing.T, ctx context.Context, upstream *runthrough.S3Client, expected liveObjectExpectation) {
+func assertLiveObject(t *testing.T, ctx context.Context, source liveObjectSource, expected liveObjectExpectation) {
 	t.Helper()
-	reader, meta, err := upstream.GetObject(ctx, expected.bucket, expected.key)
+	reader, meta, err := source.GetObject(ctx, expected.bucket, expected.key)
 	if err != nil {
-		t.Fatalf("upstream GetObject: %v", err)
+		t.Fatalf("GetObject: %v", err)
 	}
 	defer reader.Close()
 	body, err := io.ReadAll(reader)
 	if err != nil {
-		t.Fatalf("read upstream body: %v", err)
-	}
-	if !bytes.Equal(body, expected.body) {
-		t.Fatalf("upstream body = %q, want %q", body, expected.body)
-	}
-	if meta.ContentType != "text/plain" {
-		t.Fatalf("upstream content type = %q", meta.ContentType)
-	}
-	if meta.ETag != expected.etag {
-		t.Fatalf("upstream ETag = %q, want %q", meta.ETag, expected.etag)
-	}
-}
-
-func assertLiveAdapterObject(t *testing.T, ctx context.Context, adapter *runthrough.Adapter, expected liveObjectExpectation) {
-	t.Helper()
-	reader, meta, err := adapter.GetObject(ctx, expected.bucket, expected.key)
-	if err != nil {
-		t.Fatalf("adapter GetObject: %v", err)
-	}
-	body, err := io.ReadAll(reader)
-	reader.Close()
-	if err != nil {
-		t.Fatalf("read adapter body: %v", err)
+		t.Fatalf("read body: %v", err)
 	}
 	if !bytes.Equal(body, expected.body) || meta.ETag != expected.etag {
-		t.Fatalf("adapter object did not retain mirrored record: body=%q etag=%q", body, meta.ETag)
+		t.Fatalf("object lost the mirrored record: body=%q etag=%q, want body=%q etag=%q",
+			body, meta.ETag, expected.body, expected.etag)
+	}
+	if meta.ContentType != "text/plain" {
+		t.Fatalf("content type = %q, want text/plain", meta.ContentType)
 	}
 }
