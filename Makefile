@@ -6,9 +6,13 @@ build:
 	# Match the release build exactly, so a local binary is the binary that ships.
 	go build -trimpath -ldflags "-s -w" -o $(BINARY) ./cmd/stow-s3
 
+# -trimpath matches the native build and is what makes the artifact reproducible
+# across directories. Without it the wasm embeds its source path, so the
+# committed artifact never matches a build from a fresh clone and check-generated
+# fails for a reason unrelated to the source.
 build-wasm:
 	mkdir -p bin
-	GOOS=js GOARCH=wasm go build -buildvcs=false -o bin/stow-runtime.wasm ./cmd/stow-wasm
+	GOOS=js GOARCH=wasm go build -buildvcs=false -trimpath -o bin/stow-runtime.wasm ./cmd/stow-wasm
 
 test:
 	go test ./...
