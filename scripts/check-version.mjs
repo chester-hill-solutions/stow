@@ -23,6 +23,17 @@ const PLATFORM_PACKAGES = [
 ];
 
 const optional = packageJson.optionalDependencies ?? {};
+
+// Outside a git work tree, such as a source export, there is no index to
+// consult and the tracked-file check below is skipped.
+function inGitWorkTree(cwd) {
+  try {
+    execFileSync("git", ["rev-parse", "--is-inside-work-tree"], { cwd, stdio: "ignore" });
+    return true;
+  } catch {
+    return false;
+  }
+}
 for (const platform of PLATFORM_PACKAGES) {
   const manifestPath = resolve(root, "packages", platform.dir, "package.json");
   if (!existsSync(manifestPath)) {
@@ -31,15 +42,18 @@ for (const platform of PLATFORM_PACKAGES) {
   }
   // A manifest that exists in the working tree but is untracked would pass every
   // other check here and still break a fresh clone, which is how these packages
-  // were once left out of a commit while the local gate stayed green.
-  try {
-    execFileSync("git", ["ls-files", "--error-unmatch", `packages/${platform.dir}/package.json`], {
-      cwd: root,
-      stdio: "ignore",
-    });
-  } catch {
-    problems.push(`untracked platform package manifest: packages/${platform.dir}/package.json`);
-    continue;
+  // were once left out of a commit while the local gate stayed green. Skipped
+  // outside a git work tree, where a source export has no index to consult.
+  if (inGitWorkTree(root)) {
+    try {
+      execFileSync("git", ["ls-files", "--error-unmatch", `packages/${platform.dir}/package.json`], {
+        cwd: root,
+        stdio: "ignore",
+      });
+    } catch {
+      problems.push(`untracked platform package manifest: packages/${platform.dir}/package.json`);
+      continue;
+    }
   }
   const manifest = JSON.parse(readFileSync(manifestPath, "utf8"));
   if (manifest.name !== platform.name) {
