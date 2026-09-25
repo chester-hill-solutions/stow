@@ -1,3 +1,4 @@
+export declare const EMBEDDED_PROTOCOL_VERSION = 1;
 export interface EmbeddedHost {
     call(request: string): string;
 }
@@ -40,7 +41,8 @@ export interface EmbeddedListOptions {
     limit?: number;
 }
 export declare class EmbeddedStowError extends Error {
-    constructor(message: string);
+    readonly code: string;
+    constructor(code: string, message: string);
 }
 export declare class EmbeddedStow {
     private readonly host;

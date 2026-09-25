@@ -5,14 +5,19 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"sync"
 	"syscall/js"
 
 	stowruntime "github.com/chester-hill-solutions/stow/internal/runtime"
+	"github.com/chester-hill-solutions/stow/internal/storage"
 )
 
+const protocolVersion = 1
+
 type request struct {
+	Version           int                     `json:"version"`
 	Op                string                  `json:"op"`
 	Handle            int                     `json:"handle"`
 	Options           stowruntime.Options     `json:"options"`
@@ -28,10 +33,16 @@ type request struct {
 	DestinationKey    string                  `json:"destinationKey"`
 }
 
+type errorPayload struct {
+	Code    string `json:"code"`
+	Message string `json:"message"`
+}
+
 type response struct {
-	OK     bool            `json:"ok"`
-	Error  string          `json:"error,omitempty"`
-	Result json.RawMessage `json:"result,omitempty"`
+	Version int             `json:"version"`
+	OK      bool            `json:"ok"`
+	Error   *errorPayload   `json:"error,omitempty"`
+	Result  json.RawMessage `json:"result,omitempty"`
 }
 
 type openResult struct {
@@ -102,17 +113,20 @@ func main() {
 
 func call(_ js.Value, args []js.Value) interface{} {
 	if len(args) != 1 {
-		return encodeResponse(response{Error: "expected one JSON request"})
+		return encodeResponse(failure("invalid_request", "expected one JSON request"))
 	}
 	var req request
 	if err := json.Unmarshal([]byte(args[0].String()), &req); err != nil {
-		return encodeResponse(response{Error: "invalid JSON request: " + err.Error()})
+		return encodeResponse(failure("invalid_request", "invalid JSON request: "+err.Error()))
+	}
+	if req.Version != protocolVersion {
+		return encodeResponse(failure("unsupported_protocol", fmt.Sprintf("unsupported protocol version %d", req.Version)))
 	}
 	result, err := dispatch(req)
 	if err != nil {
-		return encodeResponse(response{Error: err.Error()})
+		return encodeResponse(errorResponse(err))
 	}
-	return encodeResponse(response{OK: true, Result: result})
+	return encodeResponse(response{Version: protocolVersion, OK: true, Result: result})
 }
 
 func dispatch(req request) (json.RawMessage, error) {
@@ -154,10 +168,42 @@ func capabilities(value stowruntime.Capabilities) capabilitiesResult {
 	}
 }
 
+func failure(code, message string) response {
+	return response{Version: protocolVersion, Error: &errorPayload{Code: code, Message: message}}
+}
+
+func errorResponse(err error) response {
+	code := "runtime_error"
+	switch {
+	case errors.Is(err, stowruntime.ErrQuotaExceeded):
+		code = "quota_exceeded"
+	case errors.Is(err, stowruntime.ErrClosed):
+		code = "closed"
+	case errors.Is(err, stowruntime.ErrUnsupportedBackend):
+		code = "unsupported_backend"
+	case errors.Is(err, storage.ErrBucketNotFound):
+		code = "bucket_not_found"
+	case errors.Is(err, storage.ErrBucketExists):
+		code = "bucket_exists"
+	case errors.Is(err, storage.ErrBucketNotEmpty):
+		code = "bucket_not_empty"
+	case errors.Is(err, storage.ErrObjectNotFound):
+		code = "object_not_found"
+	case errors.Is(err, storage.ErrInvalidBucketName):
+		code = "invalid_bucket"
+	case errors.Is(err, storage.ErrInvalidKey):
+		code = "invalid_key"
+	}
+	return failure(code, err.Error())
+}
+
 func encodeResponse(value response) string {
+	if value.Version == 0 {
+		value.Version = protocolVersion
+	}
 	data, err := json.Marshal(value)
 	if err != nil {
-		return `{"ok":false,"error":"response encoding failed"}`
+		return `{"version":1,"ok":false,"error":{"code":"response_encoding","message":"response encoding failed"}}`
 	}
 	return string(data)
 }

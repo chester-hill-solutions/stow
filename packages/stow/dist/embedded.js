@@ -1,8 +1,11 @@
+export const EMBEDDED_PROTOCOL_VERSION = 1;
 const base64Alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
 export class EmbeddedStowError extends Error {
-    constructor(message) {
+    code;
+    constructor(code, message) {
         super(message);
         this.name = "EmbeddedStowError";
+        this.code = code;
     }
 }
 export class EmbeddedStow {
@@ -17,6 +20,7 @@ export class EmbeddedStow {
     }
     static open(host, options = {}) {
         const result = invoke(host, {
+            version: EMBEDDED_PROTOCOL_VERSION,
             op: "open",
             options: {
                 backend: "memory",
@@ -95,27 +99,45 @@ export class EmbeddedStow {
     }
     invoke(request) {
         this.ensureOpen();
-        return invoke(this.host, { ...request, handle: this.runtimeHandle });
+        return invoke(this.host, {
+            version: EMBEDDED_PROTOCOL_VERSION,
+            ...request,
+            handle: this.runtimeHandle,
+        });
     }
     ensureOpen() {
         if (this.closed) {
-            throw new EmbeddedStowError("embedded runtime is closed");
+            throw new EmbeddedStowError("closed", "embedded runtime is closed");
         }
     }
 }
 function invoke(host, request) {
-    let response;
+    let parsed;
     try {
-        response = JSON.parse(host.call(JSON.stringify(request)));
+        parsed = JSON.parse(host.call(JSON.stringify(request)));
     }
     catch (error) {
         const message = error instanceof Error ? error.message : String(error);
-        throw new EmbeddedStowError(`embedded host call failed: ${message}`);
+        throw new EmbeddedStowError("host_error", `embedded host call failed: ${message}`);
     }
-    if (!response.ok) {
-        throw new EmbeddedStowError(response.error ?? "embedded runtime operation failed");
+    if (!isRecord(parsed) || typeof parsed.version !== "number" || typeof parsed.ok !== "boolean") {
+        throw new EmbeddedStowError("protocol", "embedded host returned an invalid response");
     }
-    return response.result;
+    if (parsed.version !== EMBEDDED_PROTOCOL_VERSION) {
+        throw new EmbeddedStowError("protocol_version", `unsupported embedded protocol version ${parsed.version}`);
+    }
+    if (!parsed.ok) {
+        if (!isRecord(parsed.error) ||
+            typeof parsed.error.code !== "string" ||
+            typeof parsed.error.message !== "string") {
+            throw new EmbeddedStowError("protocol", "embedded host returned an invalid error response");
+        }
+        throw new EmbeddedStowError(parsed.error.code, parsed.error.message);
+    }
+    return parsed.result;
+}
+function isRecord(value) {
+    return typeof value === "object" && value !== null;
 }
 function fromBridgeObject(object) {
     return {
@@ -166,7 +188,7 @@ function base64Value(character) {
     }
     const value = base64Alphabet.indexOf(character);
     if (value < 0) {
-        throw new EmbeddedStowError("invalid base64 object data");
+        throw new EmbeddedStowError("invalid_data", "invalid base64 object data");
     }
     return value;
 }

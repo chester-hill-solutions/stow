@@ -55,8 +55,8 @@ class FakeHost implements EmbeddedHost {
   }
 }
 
-function response(result: unknown): string {
-  return JSON.stringify({ ok: true, result });
+function response(result: unknown, version = 1): string {
+  return JSON.stringify({ version, ok: true, result });
 }
 
 describe("EmbeddedStow", () => {
@@ -67,6 +67,8 @@ describe("EmbeddedStow", () => {
     assert.equal(stow.handle, 7);
     assert.equal(stow.capabilities().backend, "memory");
     stow.createBucket("assets");
+    assert.equal(host.requests[0]?.version, 1);
+    assert.equal(host.requests[1]?.handle, 7);
     stow.putObject("assets", "hello.txt", new TextEncoder().encode("hello"), {
       contentType: "text/plain",
       metadata: { owner: "test" },
@@ -83,4 +85,39 @@ describe("EmbeddedStow", () => {
     stow.close();
     assert.throws(() => stow.getObject("assets", "hello.txt"), EmbeddedStowError);
   });
+
+  it("rejects protocol version mismatches", () => {
+    const host: EmbeddedHost = {
+      call: () => response({ handle: 7, capabilities: {} }, 2),
+    };
+    assert.throws(
+      () => EmbeddedStow.open(host),
+      (error: unknown) => hasCode(error, "protocol_version"),
+    );
+  });
+
+  it("preserves structured bridge error codes", () => {
+    const host: EmbeddedHost = {
+      call: (request) => {
+        const parsed = JSON.parse(request) as { op?: string };
+        if (parsed.op === "open") {
+          return response({ handle: 7, capabilities: {} });
+        }
+        return JSON.stringify({
+          version: 1,
+          ok: false,
+          error: { code: "quota_exceeded", message: "quota exceeded" },
+        });
+      },
+    };
+    const stow = EmbeddedStow.open(host);
+    assert.throws(
+      () => stow.createBucket("assets"),
+      (error: unknown) => hasCode(error, "quota_exceeded"),
+    );
+  });
 });
+
+function hasCode(error: unknown, code: string): boolean {
+  return error instanceof EmbeddedStowError && Reflect.get(error, "code") === code;
+}

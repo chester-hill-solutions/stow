@@ -12,6 +12,7 @@ import type {
 import { upstreamFromEnv } from "./upstream.js";
 
 export {
+  EMBEDDED_PROTOCOL_VERSION,
   EmbeddedStow,
   EmbeddedStowError,
 } from "./embedded.js";
