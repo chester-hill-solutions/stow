@@ -27,7 +27,13 @@ test-conformance:
 	STOW_CONFORMANCE_BACKEND=runtime STOW_CONFORMANCE_RUNTIME_BACKEND=filesystem go test ./conformance/... -count=1 -v
 
 test-node: build build-wasm
-	cd packages/stow-s3 && npm ci && npm test
+	# --omit=optional skips the four platform carrier packages, which are the
+	# only optionalDependencies. They are installed for a consumer, never in this
+	# tree: the release packs them from build artifacts, and a dev tree that
+	# installed them would resolve a bundled binary from node_modules in
+	# preference to the monorepo build and STOW_BIN, which is the opposite of
+	# what a developer is trying to test.
+	cd packages/stow-s3 && npm ci --omit=optional && npm test
 
 # The Python client speaks the same ready protocol as the TypeScript one, so its
 # tests run against a binary built from this tree. The venv is created outside
