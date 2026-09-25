@@ -135,6 +135,7 @@ describe("external connections", () => {
       });
       assert.equal(connection.endpoint, instance.endpoint);
       assert.equal(connection.awsSdkV3Config().forcePathStyle, true);
+      assert.equal(typeof connection.client.destroy, "function");
       connection.disconnect();
     } finally {
       await instance.stop();

@@ -24,13 +24,15 @@ export const DEFAULT_REGION = "us-east-1";
 export function buildAwsSdkV3Config(
   options: AwsSdkV3ConfigOptions,
 ): S3ClientConfig {
-  const credentials = options.provider ?? {
-    accessKeyId: options.accessKeyId,
-    secretAccessKey: options.secretAccessKey,
-    ...(options.sessionToken === undefined
-      ? {}
-      : { sessionToken: options.sessionToken }),
-  };
+  const credentials = "provider" in options && options.provider
+    ? options.provider
+    : {
+        accessKeyId: options.accessKeyId,
+        secretAccessKey: options.secretAccessKey,
+        ...(options.sessionToken === undefined
+          ? {}
+          : { sessionToken: options.sessionToken }),
+      };
 
   return {
     endpoint: options.endpoint,
@@ -173,13 +175,14 @@ export function createStowConnection(options: ConnectOptions): StowConnection {
   let disconnected = false;
   return {
     endpoint: options.endpoint,
-    accessKeyId: options.accessKeyId,
-    secretAccessKey: options.secretAccessKey,
-    ...(options.sessionToken === undefined
+    accessKeyId: "provider" in options ? undefined : options.accessKeyId,
+    secretAccessKey: "provider" in options ? undefined : options.secretAccessKey,
+    ...("provider" in options || options.sessionToken === undefined
       ? {}
       : { sessionToken: options.sessionToken }),
-    ...(options.provider === undefined ? {} : { provider: options.provider }),
+    ...("provider" in options ? { provider: options.provider } : {}),
     region,
+    client,
     awsSdkV3Config: () => config,
     disconnect: () => {
       if (!disconnected) {

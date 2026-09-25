@@ -1,4 +1,4 @@
-import type { S3ClientConfig } from "@aws-sdk/client-s3";
+import type { S3Client, S3ClientConfig } from "@aws-sdk/client-s3";
 import type { AwsCredentialIdentityProvider } from "@smithy/types";
 export type StowMode = "local" | "run-through";
 export interface UpstreamConfig {
@@ -27,23 +27,31 @@ export interface StartOptions {
     cacheMaxObjects?: number;
     allowLiveWrites?: boolean;
 }
-export interface AwsSdkV3ConfigOptions {
+type AwsSdkV3ConfigBase = {
     endpoint: string;
+    region?: string;
+    forcePathStyle?: boolean;
+};
+export type AwsSdkV3ConfigOptions = (AwsSdkV3ConfigBase & {
     accessKeyId: string;
     secretAccessKey: string;
     sessionToken?: string;
-    provider?: AwsCredentialIdentityProvider;
-    region?: string;
-    forcePathStyle?: boolean;
-}
+    provider?: never;
+}) | (AwsSdkV3ConfigBase & {
+    provider: AwsCredentialIdentityProvider;
+    accessKeyId?: never;
+    secretAccessKey?: never;
+    sessionToken?: never;
+});
 export type ConnectOptions = AwsSdkV3ConfigOptions;
 export interface StowConnection {
     endpoint: string;
-    accessKeyId: string;
-    secretAccessKey: string;
+    accessKeyId?: string;
+    secretAccessKey?: string;
     sessionToken?: string;
     provider?: AwsCredentialIdentityProvider;
     region: string;
+    client: S3Client;
     awsSdkV3Config(): S3ClientConfig;
     disconnect(): void;
 }
@@ -71,4 +79,5 @@ export interface StowInstance {
     putFixture(bucket: string, key: string, body: string | Uint8Array | Buffer, options?: PutFixtureOptions): Promise<void>;
     snapshotObjects(bucket: string, prefix?: string): Promise<ObjectSnapshot[]>;
 }
+export {};
 //# sourceMappingURL=types.d.ts.map
