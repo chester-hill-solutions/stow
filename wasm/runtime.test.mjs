@@ -9,6 +9,10 @@ import vm from "node:vm";
 const goroot = execFileSync("go", ["env", "GOROOT"], { encoding: "utf8" }).trim();
 vm.runInThisContext(await readFile(join(goroot, "lib/wasm/wasm_exec.js"), "utf8"));
 
+const { EmbeddedStow, EmbeddedStowError } = await import(
+  new URL("../packages/stow/dist/embedded.js", import.meta.url)
+);
+
 const go = new Go();
 const wasmBytes = await readFile(new URL("../bin/stow-runtime.wasm", import.meta.url));
 const { instance } = await WebAssembly.instantiate(wasmBytes, go.importObject);
@@ -18,56 +22,46 @@ for (let attempt = 0; attempt < 100 && !globalThis.stow; attempt += 1) {
 }
 assert.ok(globalThis.stow, "WASM runtime did not initialize");
 
-function call(request) {
-  const response = JSON.parse(globalThis.stow.call(JSON.stringify(request)));
-  assert.equal(response.ok, true, response.error);
-  return response;
-}
-
-test("memory runtime is callable from the WASM host", async () => {
+test("EmbeddedStow drives the real memory runtime", async () => {
+  const host = { call: (request) => globalThis.stow.call(request) };
+  let embedded;
   try {
-  const opened = call({ op: "open", options: { maxBytes: 10, maxObjects: 2 } });
-  const handle = opened.result.handle;
-  call({ op: "createBucket", handle, bucket: "assets" });
-  const put = call({
-    op: "putObject",
-    handle,
-    bucket: "assets",
-    key: "hello.txt",
-    data: Buffer.from("hello").toString("base64"),
-  });
-  assert.equal(put.result.size, 5);
+    embedded = EmbeddedStow.open(host, { maxBytes: 10, maxObjects: 2 });
+    embedded.createBucket("assets");
+    const put = embedded.putObject(
+      "assets",
+      "hello.txt",
+      new TextEncoder().encode("hello"),
+    );
+    assert.equal(put.size, 5);
 
-  const got = call({ op: "getObject", handle, bucket: "assets", key: "hello.txt" });
-  assert.equal(Buffer.from(got.result.data, "base64").toString(), "hello");
-  const listed = call({ op: "listObjects", handle, bucket: "assets", options: {} });
-  assert.deepEqual(listed.result.objects.map((object) => object.key), ["hello.txt"]);
-  const buckets = call({ op: "listBuckets", handle });
-  assert.deepEqual(buckets.result.buckets.map((bucket) => bucket.name), ["assets"]);
-  call({
-    op: "copyObject",
-    handle,
-    sourceBucket: "assets",
-    sourceKey: "hello.txt",
-    destinationBucket: "assets",
-    destinationKey: "copy.txt",
-  });
+    const got = embedded.getObject("assets", "hello.txt");
+    assert.deepEqual(got.data, new TextEncoder().encode("hello"));
+    assert.deepEqual(
+      embedded.listObjects("assets").map((object) => object.key),
+      ["hello.txt"],
+    );
+    assert.deepEqual(
+      embedded.listBuckets().map((bucket) => bucket.name),
+      ["assets"],
+    );
+    embedded.copyObject("assets", "hello.txt", "assets", "copy.txt");
 
-  const quota = JSON.parse(globalThis.stow.call(JSON.stringify({
-    op: "putObject",
-    handle,
-    bucket: "assets",
-    key: "too-large",
-    data: Buffer.from("123456").toString("base64"),
-  })));
-  assert.equal(quota.ok, false);
-  assert.match(quota.error, /quota/i);
-
-  call({ op: "reset", handle });
-  const resetUsage = call({ op: "usage", handle });
-  assert.deepEqual(resetUsage.result, { bytes: 0, objects: 0 });
-  call({ op: "close", handle });
+    assert.throws(
+      () => embedded.putObject("assets", "too-large", new TextEncoder().encode("123456")),
+      /quota/i,
+    );
+    assert.deepEqual(embedded.usage(), { bytes: 10, objects: 2 });
+    embedded.reset();
+    assert.deepEqual(embedded.usage(), { bytes: 0, objects: 0 });
+    embedded.close();
+    assert.throws(() => embedded.usage(), EmbeddedStowError);
   } finally {
+    try {
+      embedded?.close();
+    } catch {
+      // The test may fail before the public close operation is reached.
+    }
     globalThis.stow.exit();
     await runPromise;
   }

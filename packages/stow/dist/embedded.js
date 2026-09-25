@@ -95,7 +95,7 @@ export class EmbeddedStow {
     }
     invoke(request) {
         this.ensureOpen();
-        return invoke(this.host, request);
+        return invoke(this.host, { ...request, handle: this.runtimeHandle });
     }
     ensureOpen() {
         if (this.closed) {

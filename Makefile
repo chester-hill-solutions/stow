@@ -23,6 +23,7 @@ test-node: build
 	cd packages/stow && npm ci && npm test
 
 test-wasm: build-wasm
+	cd packages/stow && npm ci --ignore-scripts && npm run build
 	node --test wasm/runtime.test.mjs
 
 test-all: build test test-race test-conformance test-node test-wasm

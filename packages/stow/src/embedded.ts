@@ -191,7 +191,7 @@ export class EmbeddedStow {
 
   private invoke<T>(request: Record<string, unknown>): T {
     this.ensureOpen();
-    return invoke<T>(this.host, request);
+    return invoke<T>(this.host, { ...request, handle: this.runtimeHandle });
   }
 
   private ensureOpen(): void {
