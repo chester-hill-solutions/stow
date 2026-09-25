@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { execFileSync } from "node:child_process";
 import { existsSync, readFileSync } from "node:fs";
 import { resolve } from "node:path";
 
@@ -26,6 +27,18 @@ for (const platform of PLATFORM_PACKAGES) {
   const manifestPath = resolve(root, "packages", platform.dir, "package.json");
   if (!existsSync(manifestPath)) {
     problems.push(`missing platform package manifest: packages/${platform.dir}/package.json`);
+    continue;
+  }
+  // A manifest that exists in the working tree but is untracked would pass every
+  // other check here and still break a fresh clone, which is how these packages
+  // were once left out of a commit while the local gate stayed green.
+  try {
+    execFileSync("git", ["ls-files", "--error-unmatch", `packages/${platform.dir}/package.json`], {
+      cwd: root,
+      stdio: "ignore",
+    });
+  } catch {
+    problems.push(`untracked platform package manifest: packages/${platform.dir}/package.json`);
     continue;
   }
   const manifest = JSON.parse(readFileSync(manifestPath, "utf8"));

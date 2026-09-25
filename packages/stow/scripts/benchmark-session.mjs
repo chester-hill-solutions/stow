@@ -14,7 +14,7 @@ import { dirname, resolve } from "node:path";
 import { performance } from "node:perf_hooks";
 
 const root = resolve(import.meta.dirname, "..");
-const repoRoot = resolve(root, "..");
+const repoRoot = resolve(root, "..", "..");
 
 function argument(name, fallback) {
   const index = process.argv.indexOf(`--${name}`);
