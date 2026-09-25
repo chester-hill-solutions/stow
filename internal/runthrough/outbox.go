@@ -52,8 +52,7 @@ type OutboxEntry struct {
 	ClaimOwner      string          `json:"claim_owner,omitempty"`
 	ClaimUntil      time.Time       `json:"claim_until,omitempty"`
 	ClaimToken      uint64          `json:"claim_token,omitempty"`
-	AttemptedAt     time.Time       `json:"attempted_at,omitempty"`
-	NeedsReconcile  bool            `json:"needs_reconcile,omitempty"`
+	Attempted       bool            `json:"attempted,omitempty"`
 	PreparedOwner   string          `json:"prepared_owner,omitempty"`
 	PreparedUntil   time.Time       `json:"prepared_until,omitempty"`
 	PreparedToken   uint64          `json:"prepared_token,omitempty"`

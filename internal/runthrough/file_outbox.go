@@ -84,17 +84,14 @@ func decodeOutboxState(data []byte) (outboxState, error) {
 	return outboxState{entries: persisted.Entries, prepared: persisted.Prepared, seq: persisted.Seq, nextToken: persisted.NextToken}, nil
 }
 
-// migrateOutboxAttempts marks entries recorded by a pre-version writer as
-// needing upstream reconciliation. Those files predate the attempt marker, so
-// a writer cannot tell whether an earlier attempt already committed upstream.
+// migrateOutboxAttempts records that entries from a pre-version writer were
+// already attempted, so the next claim reconciles them against upstream before
+// propagating again. The old format kept an attempt count but no marker saying
+// whether the attempt may have reached upstream.
 func migrateOutboxAttempts(entries map[string]OutboxEntry) {
 	for id, entry := range entries {
-		if entry.AttemptedAt.IsZero() && entry.Attempts > 0 {
-			entry.AttemptedAt = entry.CreatedAt
-			if entry.AttemptedAt.IsZero() {
-				entry.AttemptedAt = time.Now().UTC()
-			}
-			entry.NeedsReconcile = true
+		if !entry.Attempted && entry.Attempts > 0 {
+			entry.Attempted = true
 			entries[id] = entry
 		}
 	}

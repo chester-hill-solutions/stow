@@ -125,19 +125,22 @@ func TestFileOutboxClaimIsExclusiveAndExpires(t *testing.T) {
 func assertClaimLease(t *testing.T, path string, first, second *runthrough.FileOutbox, entry runthrough.OutboxEntry) {
 	t.Helper()
 	claimed, ok, err := first.Claim(entry.ID, "owner-a", time.Minute)
-	if err != nil || !ok || claimed.ClaimOwner != "owner-a" {
+	if err != nil || !ok || claimed.Entry.ClaimOwner != "owner-a" {
 		t.Fatalf("first claim = %+v, ok=%v, err=%v", claimed, ok, err)
+	}
+	if claimed.Reconcile {
+		t.Fatal("first claim asked to reconcile an entry that was never attempted")
 	}
 	if _, ok, err := second.Claim(entry.ID, "owner-b", time.Minute); err != nil || ok {
 		t.Fatalf("competing claim ok=%v err=%v, want refusal", ok, err)
 	}
-	if err := second.MarkClaimedSuccess(entry.ID, "owner-b", claimed.ClaimToken); err == nil {
+	if err := second.MarkClaimedSuccess(entry.ID, "owner-b", claimed.Entry.ClaimToken); err == nil {
 		t.Fatal("stale owner was allowed to mark success")
 	}
-	if err := first.Renew(entry.ID, "owner-a", claimed.ClaimToken, 2*time.Minute); err != nil {
+	if err := first.Renew(entry.ID, "owner-a", claimed.Entry.ClaimToken, 2*time.Minute); err != nil {
 		t.Fatalf("renew claim: %v", err)
 	}
-	if err := first.Release(entry.ID, "owner-a", claimed.ClaimToken); err != nil {
+	if err := first.Release(entry.ID, "owner-a", claimed.Entry.ClaimToken); err != nil {
 		t.Fatalf("release claim: %v", err)
 	}
 	claimed, ok, err = first.Claim(entry.ID, "owner-a", time.Minute)
@@ -247,10 +250,13 @@ func TestClaimTokenFencesStaleOwner(t *testing.T) {
 	if err != nil || !ok {
 		t.Fatalf("takeover claim = %+v, ok=%v, err=%v", current, ok, err)
 	}
-	if err := first.MarkClaimedSuccess(entry.ID, "old-owner", old.ClaimToken); !errors.Is(err, runthrough.ErrOutboxClaimLost) {
+	if !current.Reconcile {
+		t.Fatal("takeover of a previously attempted entry did not ask for reconciliation")
+	}
+	if err := first.MarkClaimedSuccess(entry.ID, "old-owner", old.Entry.ClaimToken); !errors.Is(err, runthrough.ErrOutboxClaimLost) {
 		t.Fatalf("stale completion error = %v", err)
 	}
-	if err := second.MarkClaimedSuccess(entry.ID, "new-owner", current.ClaimToken); err != nil {
+	if err := second.MarkClaimedSuccess(entry.ID, "new-owner", current.Entry.ClaimToken); err != nil {
 		t.Fatalf("current completion: %v", err)
 	}
 }

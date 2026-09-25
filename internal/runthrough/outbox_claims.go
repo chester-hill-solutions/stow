@@ -17,12 +17,23 @@ var (
 
 const defaultOutboxClaimLease = 30 * time.Second
 
+// ClaimedEntry is an outbox entry leased to a single claimant. Reconcile
+// reports that an earlier attempt may already have reached upstream, so the
+// claimant must compare upstream state against the immutable local version
+// before propagating again. It is a property of this claim, not durable entry
+// state: a worker that dies mid-flight is recovered by the next claimant, which
+// sees the persisted Attempted marker and is told to reconcile.
+type ClaimedEntry struct {
+	Entry     OutboxEntry
+	Reconcile bool
+}
+
 // ClaimableOutbox adds expiring ownership around propagation attempts. A
 // claimant must finish with MarkClaimedSuccess or MarkClaimedFailure; an
 // abandoned claim becomes available after ClaimUntil.
 type ClaimableOutbox interface {
 	Outbox
-	Claim(id, owner string, lease time.Duration) (OutboxEntry, bool, error)
+	Claim(id, owner string, lease time.Duration) (ClaimedEntry, bool, error)
 	Renew(id, owner string, token uint64, lease time.Duration) error
 	Release(id, owner string, token uint64) error
 	MarkClaimedSuccess(id, owner string, token uint64) error
@@ -48,28 +59,28 @@ func newOutboxOwner() string {
 	return fmt.Sprintf("stow-%d", os.Getpid())
 }
 
-func (s *outboxState) claim(id, owner string, lease time.Duration) (OutboxEntry, bool, error) {
+func (s *outboxState) claim(id, owner string, lease time.Duration) (ClaimedEntry, bool, error) {
 	if owner == "" || lease <= 0 {
-		return OutboxEntry{}, false, ErrOutboxClaimLease
+		return ClaimedEntry{}, false, ErrOutboxClaimLease
 	}
 	entry, ok := s.entries[id]
 	if !ok || entry.Terminal || !outboxEntryDue(entry, time.Now()) || !s.firstForKey(entry) {
-		return OutboxEntry{}, false, nil
+		return ClaimedEntry{}, false, nil
 	}
 	now := time.Now().UTC()
 	if entry.ClaimOwner != "" {
 		if entry.ClaimUntil.After(now) || outboxOwnerAlive(entry.ClaimOwner) {
-			return OutboxEntry{}, false, nil
+			return ClaimedEntry{}, false, nil
 		}
 	}
-	needsReconcile := !entry.AttemptedAt.IsZero()
+	claimed := ClaimedEntry{Entry: entry, Reconcile: entry.Attempted}
 	entry.ClaimOwner = owner
 	entry.ClaimUntil = now.Add(lease)
 	entry.ClaimToken = s.assignToken()
-	entry.AttemptedAt = now
-	entry.NeedsReconcile = needsReconcile
+	entry.Attempted = true
 	s.entries[id] = entry
-	return entry, true, nil
+	claimed.Entry = entry
+	return claimed, true, nil
 }
 
 func (s *outboxState) firstForKey(target OutboxEntry) bool {
@@ -186,8 +197,8 @@ func (o *FileOutbox) DiscardPreparedOwned(id, owner string, token uint64) error 
 	})
 }
 
-func (o *FileOutbox) Claim(id, owner string, lease time.Duration) (OutboxEntry, bool, error) {
-	var claimed OutboxEntry
+func (o *FileOutbox) Claim(id, owner string, lease time.Duration) (ClaimedEntry, bool, error) {
+	var claimed ClaimedEntry
 	var ok bool
 	err := o.withState(func(state *outboxState) error {
 		var err error
@@ -195,7 +206,7 @@ func (o *FileOutbox) Claim(id, owner string, lease time.Duration) (OutboxEntry, 
 		return err
 	})
 	if err != nil {
-		return OutboxEntry{}, false, err
+		return ClaimedEntry{}, false, err
 	}
 	return claimed, ok, nil
 }

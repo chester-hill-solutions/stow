@@ -73,12 +73,23 @@ func TestFileOutboxUpgradesLegacyAttemptedEntries(t *testing.T) {
 	if len(pending) != 1 {
 		t.Fatalf("pending = %+v, want one entry", pending)
 	}
-	if pending[0].AttemptedAt.IsZero() || !pending[0].NeedsReconcile {
-		t.Fatalf("legacy entry was not marked for reconciliation: %+v", pending[0])
+	if !pending[0].Attempted {
+		t.Fatalf("legacy entry was not recorded as attempted: %+v", pending[0])
 	}
 
-	if err := outbox.MarkFailure(pending[0].ID, errors.New("still failing"), time.Now().Add(time.Hour)); err != nil {
-		t.Fatalf("mark failure: %v", err)
+	claimed, ok, err := outbox.Claim(pending[0].ID, "owner", time.Minute)
+	if err != nil || !ok {
+		t.Fatalf("claim = %+v, ok=%v, err=%v", claimed, ok, err)
+	}
+	if !claimed.Reconcile {
+		t.Fatal("legacy attempted entry was claimed without reconciliation")
+	}
+	if err := outbox.MarkClaimedSuccess(pending[0].ID, "owner", claimed.Entry.ClaimToken); err != nil {
+		t.Fatalf("mark success: %v", err)
+	}
+
+	if _, err := outbox.Enqueue(runthrough.OutboxEntry{Operation: runthrough.OutboxPut, Bucket: "bucket", Key: "later"}); err != nil {
+		t.Fatalf("enqueue after upgrade: %v", err)
 	}
 	data, err := os.ReadFile(path)
 	if err != nil {

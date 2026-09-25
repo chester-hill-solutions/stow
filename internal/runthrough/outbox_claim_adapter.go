@@ -6,9 +6,10 @@ import (
 )
 
 type propagationClaim struct {
-	provider ClaimableOutbox
-	entry    OutboxEntry
-	acquired bool
+	provider  ClaimableOutbox
+	entry     OutboxEntry
+	acquired  bool
+	reconcile bool
 }
 
 func (a *Adapter) claimPropagation(entry OutboxEntry) (propagationClaim, error) {
@@ -23,7 +24,7 @@ func (a *Adapter) claimPropagation(entry OutboxEntry) (propagationClaim, error) 
 	if !acquired {
 		return propagationClaim{}, nil
 	}
-	return propagationClaim{provider: provider, entry: claimed, acquired: true}, nil
+	return propagationClaim{provider: provider, entry: claimed.Entry, acquired: true, reconcile: claimed.Reconcile}, nil
 }
 
 func (claim propagationClaim) success() error {
@@ -42,7 +43,7 @@ func (claim propagationClaim) failure(cause error, retryAt time.Time) error {
 
 func (claim propagationClaim) propagate(ctx context.Context, a *Adapter) error {
 	if claim.provider == nil || a.claimLease <= 0 {
-		return a.propagateEntry(ctx, claim.entry)
+		return a.propagateEntry(ctx, claim.entry, claim.reconcile)
 	}
 	claimCtx, cancel := context.WithCancel(ctx)
 	renewed := make(chan error, 1)
@@ -71,7 +72,7 @@ func (claim propagationClaim) propagate(ctx context.Context, a *Adapter) error {
 			}
 		}
 	}()
-	err := a.propagateEntry(claimCtx, claim.entry)
+	err := a.propagateEntry(claimCtx, claim.entry, claim.reconcile)
 	cancel()
 	<-done
 	if err != nil {

@@ -106,68 +106,70 @@ func (a *Adapter) enqueuePreparedIntentLocked(operation OutboxOperation, bucket,
 	return a.prepareIntent(operation, bucket, key, previousVersion, source...)
 }
 
-func (a *Adapter) reconcileUpstreamAttempt(ctx context.Context, entry OutboxEntry) (bool, error) {
+// propagateEntry sends one entry upstream. When reconcile is set, the entry was
+// attempted before and an earlier call may have committed without being
+// acknowledged, so each effect checks upstream against the immutable local
+// version before repeating the mutation.
+func (a *Adapter) propagateEntry(ctx context.Context, entry OutboxEntry, reconcile bool) error {
 	switch entry.Operation {
 	case OutboxPut, OutboxCopy, OutboxMultipart:
-		local, err := a.local.HeadObject(ctx, entry.Bucket, entry.Key)
-		if err != nil {
-			return false, err
-		}
-		remote, err := a.upstream.HeadObject(ctx, entry.Bucket, entry.Key)
-		if err == nil {
-			return storage.ETagEqual(remote.ETag, local.ETag), nil
-		}
-		if errors.Is(err, storage.ErrObjectNotFound) {
-			return false, nil
-		}
-		return false, err
+		return a.propagateWrite(ctx, entry, reconcile)
 	case OutboxDelete:
-		_, err := a.upstream.HeadObject(ctx, entry.Bucket, entry.Key)
-		if errors.Is(err, storage.ErrObjectNotFound) {
-			return true, nil
-		}
-		return false, err
-	default:
-		return false, nil
-	}
-}
-
-func (a *Adapter) propagateEntry(ctx context.Context, entry OutboxEntry) error {
-	if entry.NeedsReconcile {
-		reconciled, err := a.reconcileUpstreamAttempt(ctx, entry)
-		if err != nil || reconciled {
-			return err
-		}
-	}
-	switch entry.Operation {
-	case OutboxPut, OutboxCopy, OutboxMultipart:
-		rc, meta, err := a.local.GetObject(ctx, entry.Bucket, entry.Key)
-		if err != nil {
-			return err
-		}
-		if entry.Version != "" && entry.Version != objectVersion(meta) {
-			_ = rc.Close()
-			return ErrOutboxVersionConflict
-		}
-		defer rc.Close()
-		return a.upstream.PutObject(ctx, entry.Bucket, entry.Key, rc, storage.PutOptions{
-			ContentType: meta.ContentType,
-			Metadata:    meta.Metadata,
-		})
-	case OutboxDelete:
-		if entry.Version != "" {
-			current, err := a.local.HeadObject(ctx, entry.Bucket, entry.Key)
-			if err == nil && objectVersion(current) != entry.Version {
-				return ErrOutboxVersionConflict
-			}
-			if err != nil && !errors.Is(err, storage.ErrObjectNotFound) {
-				return err
-			}
-		}
-		return a.upstream.DeleteObject(ctx, entry.Bucket, entry.Key)
+		return a.propagateDelete(ctx, entry, reconcile)
 	default:
 		return NewDeterministicUpstreamError(fmt.Errorf("unsupported outbox operation %q", entry.Operation))
 	}
+}
+
+func (a *Adapter) propagateWrite(ctx context.Context, entry OutboxEntry, reconcile bool) error {
+	rc, meta, err := a.local.GetObject(ctx, entry.Bucket, entry.Key)
+	if err != nil {
+		return err
+	}
+	if entry.Version != "" && entry.Version != objectVersion(meta) {
+		_ = rc.Close()
+		return ErrOutboxVersionConflict
+	}
+	defer rc.Close()
+	if reconcile {
+		remote, err := a.upstream.HeadObject(ctx, entry.Bucket, entry.Key)
+		if err == nil {
+			if remote == nil {
+				return errors.New("upstream head returned no object metadata")
+			}
+			if storage.ETagEqual(remote.ETag, meta.ETag) {
+				return nil
+			}
+		} else if !errors.Is(err, storage.ErrObjectNotFound) {
+			return err
+		}
+	}
+	return a.upstream.PutObject(ctx, entry.Bucket, entry.Key, rc, storage.PutOptions{
+		ContentType: meta.ContentType,
+		Metadata:    meta.Metadata,
+	})
+}
+
+func (a *Adapter) propagateDelete(ctx context.Context, entry OutboxEntry, reconcile bool) error {
+	if entry.Version != "" {
+		current, err := a.local.HeadObject(ctx, entry.Bucket, entry.Key)
+		if err == nil && objectVersion(current) != entry.Version {
+			return ErrOutboxVersionConflict
+		}
+		if err != nil && !errors.Is(err, storage.ErrObjectNotFound) {
+			return err
+		}
+	}
+	if reconcile {
+		_, err := a.upstream.HeadObject(ctx, entry.Bucket, entry.Key)
+		if errors.Is(err, storage.ErrObjectNotFound) {
+			return nil
+		}
+		if err != nil {
+			return err
+		}
+	}
+	return a.upstream.DeleteObject(ctx, entry.Bucket, entry.Key)
 }
 
 func (a *Adapter) completeIntent(ctx context.Context, entry OutboxEntry) error {
