@@ -6,7 +6,7 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/chester-hill-solutions/stow/internal/storage"
+	"github.com/chester-hill-solutions/stow-s3/internal/storage"
 )
 
 func (a *Adapter) localVersion(ctx context.Context, bucket, key string) string {

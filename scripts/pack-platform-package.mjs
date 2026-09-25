@@ -73,8 +73,8 @@ try {
     encoding: "utf8",
   });
   const [{ filename, size, files }] = JSON.parse(packed);
-  if (!files.map((file) => file.path).includes("bin/stow")) {
-    console.error(`${manifest.name} packed without bin/stow; refusing to publish`);
+  if (!files.map((file) => file.path).includes("bin/stow-s3")) {
+    console.error(`${manifest.name} packed without bin/stow-s3; refusing to publish`);
     process.exit(1);
   }
   console.log(`${manifest.name} (${goos}/${goarch}): ${filename} (${(size / 1048576).toFixed(1)} MB)`);

@@ -33,12 +33,12 @@ func StartupBanner(cfg Config, mode Mode) string {
 		fmt.Fprintf(&b, "  cache policy: none\n")
 	}
 
-	writePolicy := "local-only"
-	if cfg.Policy == PolicyMirrorWrites {
-		writePolicy = "mirrorWrites"
+	writePolicy := EffectiveWritePolicy(cfg)
+	switch writePolicy {
+	case WritePolicyMirrorWrites:
 		fmt.Fprintf(&b, "  WARNING: mirrorWrites propagates supported mutations upstream\n")
-	} else if cfg.AllowLiveWrites {
-		writePolicy = "allowLiveWrites"
+	case WritePolicyMirrorWritesDisabled:
+		fmt.Fprintf(&b, "  WARNING: mirrorWrites is configured but propagation is disabled, so writes stay local\n")
 	}
 	fmt.Fprintf(&b, "  write policy: %s\n", writePolicy)
 	fmt.Fprintf(&b, "  override: STOW_MODE=local forces local-only\n")

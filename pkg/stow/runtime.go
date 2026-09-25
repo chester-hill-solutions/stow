@@ -4,8 +4,8 @@ import (
 	"context"
 	"errors"
 
-	stowruntime "github.com/chester-hill-solutions/stow/internal/runtime"
-	"github.com/chester-hill-solutions/stow/internal/storage"
+	stowruntime "github.com/chester-hill-solutions/stow-s3/internal/runtime"
+	"github.com/chester-hill-solutions/stow-s3/internal/storage"
 )
 
 type Runtime struct {

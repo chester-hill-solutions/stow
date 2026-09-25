@@ -54,12 +54,12 @@ close it stops the server and removes the data directory.
 TypeScript:
 
 ```bash
-npm install @chs/stow @aws-sdk/client-s3
+npm install @chs/stow-s3 @aws-sdk/client-s3
 ```
 
 ```ts
 import { GetObjectCommand, PutObjectCommand } from "@aws-sdk/client-s3";
-import { withStow } from "@chs/stow";
+import { withStow } from "@chs/stow-s3";
 
 const body = await withStow(async (session) => {
   await session.s3.send(new PutObjectCommand({
@@ -152,7 +152,7 @@ make build
 Start a filesystem-backed server:
 
 ```bash
-./bin/stow serve --port 0 --data-dir .stow
+./bin/stow-s3 serve --port 0 --data-dir .stow
 ```
 
 The server prints a machine-readable readiness line:
@@ -168,7 +168,7 @@ want. To make it exit when a specific parent process dies instead, pass
 `--parent-pid`:
 
 ```bash
-./bin/stow serve --port 0 --parent-pid 12345
+./bin/stow-s3 serve --port 0 --parent-pid 12345
 ```
 
 This is opt-in for that reason. A session sets it for you; see
@@ -182,7 +182,7 @@ protocol version they do not speak rather than starting a half-working session.
 For a temporary in-memory server:
 
 ```bash
-./bin/stow serve --port 0 --backend memory
+./bin/stow-s3 serve --port 0 --backend memory
 ```
 
 ## Quick start: TypeScript
@@ -190,7 +190,7 @@ For a temporary in-memory server:
 Install the package and start a managed server:
 
 ```bash
-npm install @chs/stow
+npm install @chs/stow-s3
 ```
 
 ```ts
@@ -200,7 +200,7 @@ import {
   PutObjectCommand,
   S3Client,
 } from "@aws-sdk/client-s3";
-import { Stow } from "@chs/stow";
+import { Stow } from "@chs/stow-s3";
 
 const stow = await Stow.start({
   backend: "memory",
@@ -262,7 +262,7 @@ import (
   "context"
   "log"
 
-  stow "github.com/chester-hill-solutions/stow/pkg/stow"
+  stow "github.com/chester-hill-solutions/stow-s3/pkg/stow"
 )
 
 func main() {
@@ -294,8 +294,8 @@ func main() {
 The Node.js WebAssembly profile provides an in-memory object runtime without an HTTP server:
 
 ```ts
-import { EmbeddedStow } from "@chs/stow/embedded";
-import { loadNodeWasmHost } from "@chs/stow/node-wasm";
+import { EmbeddedStow } from "@chs/stow-s3/embedded";
+import { loadNodeWasmHost } from "@chs/stow-s3/node-wasm";
 
 const host = await loadNodeWasmHost();
 const embedded = EmbeddedStow.open(host);
@@ -326,14 +326,34 @@ Live upstream writes require all of the following:
 - explicit live-write opt-in with `--allow-live-writes` or `STOW_ALLOW_LIVE_WRITES=true`;
 - a durable coordinated outbox.
 
+`STOW_POLICY=mirrorWrites` is **not** that opt-in. The policy chooses how reads
+are routed; the flag is the consent to mutate a real provider, and only the flag
+grants it. Setting the policy alone leaves every write local. An explicit
+`STOW_ALLOW_LIVE_WRITES=false` is a refusal that the policy cannot override.
+See [ADR 0005](docs/adr/0005-live-write-requires-explicit-consent.md).
+
 Stow keeps bucket namespace operations local. It does not create upstream buckets automatically.
+
+## Resetting a data directory
+
+`Stow.start({ resetOwnedData: true })` deletes the data directory before starting.
+It deletes only a directory stow created, identified by a `.stow-owner` marker
+the server writes on startup. A directory without that marker is refused, as are
+the filesystem root, your home directory, the working directory, and any ancestor
+of them — so `dataDir: ".."` cannot reach your home. A directory that does not
+exist is not an error, so resetting before a first run is fine.
+
+`cleanSlate` is a deprecated alias with identical checks. A data directory
+created before this check existed has no marker, so its first reset is refused;
+nothing is deleted. See
+[ADR 0006](docs/adr/0006-owned-data-directory-reset.md).
 
 ## Running on another host
 
 The server can bind to a network interface:
 
 ```bash
-./bin/stow serve --host 0.0.0.0 --port 9000
+./bin/stow-s3 serve --host 0.0.0.0 --port 9000
 ```
 
 Clients on the same network can then connect to the host's port and use S3 operations. Keep the server behind a firewall or private network boundary. Put it behind a TLS-terminating proxy before sending traffic over an untrusted network.
@@ -361,7 +381,7 @@ Measure session memory with the benchmark. It is deliberately not part of
 
 ```bash
 make build
-node packages/stow/scripts/benchmark-session.mjs --sweep
+node packages/stow-s3/scripts/benchmark-session.mjs --sweep
 ```
 
 Rebuild before measuring. A benchmark run against a stale binary reports the

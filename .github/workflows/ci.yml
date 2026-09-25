@@ -88,17 +88,17 @@ jobs:
         with:
           node-version: ${{ matrix.node }}
           cache: npm
-          cache-dependency-path: packages/stow/package-lock.json
+          cache-dependency-path: packages/stow-s3/package-lock.json
       - name: Build binary and WASM artifact
         run: make build build-wasm
       - name: Install package dependencies
         run: npm ci
-        working-directory: packages/stow
+        working-directory: packages/stow-s3
       - name: Build and test package
         run: npm test
-        working-directory: packages/stow
+        working-directory: packages/stow-s3
       - name: Check generated output
-        run: git diff --exit-code -- packages/stow/dist
+        run: git diff --exit-code -- packages/stow-s3/dist
 
   wasm:
     name: WASM memory profile
@@ -138,7 +138,7 @@ jobs:
         with:
           node-version: 24
           cache: npm
-          cache-dependency-path: packages/stow/package-lock.json
+          cache-dependency-path: packages/stow-s3/package-lock.json
       - name: Run standards gate
         run: make standards
 

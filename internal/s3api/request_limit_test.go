@@ -10,8 +10,8 @@ import (
 	"net/http/httptest"
 	"testing"
 
-	"github.com/chester-hill-solutions/stow/internal/s3api"
-	"github.com/chester-hill-solutions/stow/internal/storage"
+	"github.com/chester-hill-solutions/stow-s3/internal/s3api"
+	"github.com/chester-hill-solutions/stow-s3/internal/storage"
 )
 
 func newLimitedServer(t *testing.T, limit int64) *httptest.Server {

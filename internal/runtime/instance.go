@@ -8,7 +8,7 @@ import (
 	"io"
 	"sync"
 
-	"github.com/chester-hill-solutions/stow/internal/storage"
+	"github.com/chester-hill-solutions/stow-s3/internal/storage"
 )
 
 type Instance struct {

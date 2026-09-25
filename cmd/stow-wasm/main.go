@@ -10,7 +10,7 @@ import (
 	"sync"
 	"syscall/js"
 
-	stow "github.com/chester-hill-solutions/stow/pkg/stow"
+	stow "github.com/chester-hill-solutions/stow-s3/pkg/stow"
 )
 
 const protocolVersion = 1

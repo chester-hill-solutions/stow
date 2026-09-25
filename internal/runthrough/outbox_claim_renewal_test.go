@@ -10,7 +10,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/chester-hill-solutions/stow/internal/storage"
+	"github.com/chester-hill-solutions/stow-s3/internal/storage"
 )
 
 // countingClaimOutbox records the claim lifecycle calls a propagation makes, so

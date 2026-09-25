@@ -22,7 +22,7 @@ func TestRuntimeDependencyBoundary(t *testing.T) {
 	// The filesystem backend and its filesystem-only standard packages must not
 	// be linked into the embedded runtime.
 	for _, dep := range deps {
-		if dep == "github.com/chester-hill-solutions/stow/internal/storage/fs" || dep == "path/filepath" || dep == "log" {
+		if dep == "github.com/chester-hill-solutions/stow-s3/internal/storage/fs" || dep == "path/filepath" || dep == "log" {
 			t.Fatalf("runtime dependency closure includes %q:\n%s", dep, strings.Join(deps, "\n"))
 		}
 	}

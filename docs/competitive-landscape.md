@@ -29,13 +29,13 @@ Derived from source, in this repository.
 ### Facts
 
 **Deployment model.** A single Go binary with one subcommand, `stow serve`
-(`cmd/stow/main.go:29-36`, `cmd/stow/main.go:100-118`). No container, daemon supervisor, config
+(`cmd/stow-s3/main.go:29-36`, `cmd/stow-s3/main.go:100-118`). No container, daemon supervisor, config
 file, or license check is required to start it. It binds `127.0.0.1` by default and accepts
-`--port 0` for an OS-assigned ephemeral port (`cmd/stow/main.go:102`, `cmd/stow/main.go:264`).
+`--port 0` for an OS-assigned ephemeral port (`cmd/stow-s3/main.go:102`, `cmd/stow-s3/main.go:264`).
 
 **Machine-readable readiness.** On successful bind, startup prints a single parseable line:
 `STOW_READY endpoint=<host:port> access_key=<id> secret_key=<key> mode=<mode>`
-(`cmd/stow/main.go:273`). A supervising test harness or agent can block on readiness without
+(`cmd/stow-s3/main.go:273`). A supervising test harness or agent can block on readiness without
 polling or scraping logs, and learns the endpoint *and* the generated credentials in one read.
 
 **API surface.** Implemented S3 operations are exactly the methods on the `storage.Store`
@@ -55,26 +55,26 @@ served. Bucket-policy-style subresources return `NotImplemented` explicitly
 
 **Auth.** SigV4 for header-signed and presigned-query requests, enforced unconditionally
 (`internal/auth/sigv4.go:16`, `internal/auth/sigv4.go:92-131`). The CLI always installs a SigV4
-verifier (`cmd/stow/main.go:224`, `cmd/stow/main.go:237-250`); there is no flag to disable
+verifier (`cmd/stow-s3/main.go:224`, `cmd/stow-s3/main.go:237-250`); there is no flag to disable
 signature checking. Exactly one credential pair is active per process
-(`cmd/stow/main.go:212-222`) — supplied via `--access-key`/`--secret-key`, via
-`STOW_LOCAL_ACCESS_KEY_ID`/`STOW_LOCAL_SECRET_ACCESS_KEY` (`cmd/stow/main.go:42-50`), or generated
+(`cmd/stow-s3/main.go:212-222`) — supplied via `--access-key`/`--secret-key`, via
+`STOW_LOCAL_ACCESS_KEY_ID`/`STOW_LOCAL_SECRET_ACCESS_KEY` (`cmd/stow-s3/main.go:42-50`), or generated
 at startup.
 
 **Addressing.** Path-style by default; virtual-hosted-style available by passing `--base-host`,
-which enables `bucket.<base-host>` host routing (`cmd/stow/main.go:108`,
+which enables `bucket.<base-host>` host routing (`cmd/stow-s3/main.go:108`,
 `internal/s3api/router.go:26-45`).
 
 **Persistence.** Two selectable storage backends, `filesystem` (default) and `memory`
-(`cmd/stow/main.go:103-104`, `cmd/stow/main.go:163-170`). The filesystem backend is a plain
+(`cmd/stow-s3/main.go:103-104`, `cmd/stow-s3/main.go:163-170`). The filesystem backend is a plain
 directory, so a test's data is inspectable with ordinary filesystem tools.
 
 **Resource bounds.** `--max-bytes` and `--max-objects` are enforced on every native S3 request
-(`cmd/stow/main.go:116-117`).
+(`cmd/stow-s3/main.go:116-117`).
 
 **Run-through mode.** A second operational mode, selected automatically when upstream endpoint and
 credentials are present in the environment, or forced with `--mode run-through`
-(`internal/runthrough/config.go:213-223`, `cmd/stow/main.go:128-136`). It provides:
+(`internal/runthrough/config.go:213-223`, `cmd/stow-s3/main.go:128-136`). It provides:
 - read-through caching of upstream objects into a local store, with optional revalidation and
   eviction when the upstream object disappears (`internal/runthrough/config.go:38-45`,
   `internal/runthrough/config.go:105-110`);
@@ -82,15 +82,15 @@ credentials are present in the environment, or forced with `--mode run-through`
   (`internal/runthrough/config.go:38-45`, `internal/runthrough/config.go:165-201`);
 - a write policy that is local-only by default, with `mirrorWrites` and opt-in live writes via
   `--allow-live-writes` / `STOW_ALLOW_LIVE_WRITES` (`internal/runthrough/config.go:20-25`,
-  `cmd/stow/main.go:68-73`, `cmd/stow/main.go:224-230`);
+  `cmd/stow-s3/main.go:68-73`, `cmd/stow-s3/main.go:224-230`);
 - a durable file-backed outbox with prepared/terminal states, cross-process claims, and a
   background retry worker (`internal/runthrough/file_outbox.go`, `internal/runthrough/outbox.go`,
-  `cmd/stow/main.go:75-98`);
+  `cmd/stow-s3/main.go:75-98`);
 - upstream credential discovery with `STOW_*` > `S3_*` > `AWS_*` precedence
   (`internal/runthrough/config.go:60-99`).
 
 **Admin and observability surface.** Loopback-restricted unless `--allow-public-admin` is set
-(`cmd/stow/main.go:109`, `cmd/stow/main.go:138-140`). Endpoints: `/_stow/health`,
+(`cmd/stow-s3/main.go:109`, `cmd/stow-s3/main.go:138-140`). Endpoints: `/_stow/health`,
 `/_stow/status`, `/_stow/inspect`, `/_stow/metrics` (Prometheus text exposition),
 `/_stow/outbox/retry`, `/_stow/outbox/discard` (`internal/s3api/admin.go:50-94`). Metrics cover
 cache hits/misses/evictions, active multipart uploads, and outbox depth and retry counts
@@ -103,13 +103,13 @@ configuration (`internal/s3api/cors.go:7-28`).
 - a Go in-process library at `pkg/stow` exposing `Open`, bucket/object operations, `Reset`,
   `Usage`, and `Capabilities` over an in-memory backend only (`pkg/stow/types.go:9-11`,
   `pkg/stow/runtime.go:15-128`);
-- a Go→WASM build (`cmd/stow-wasm/main.go:1-3`) shipped in the npm package `@chs/stow`, exposing an
+- a Go→WASM build (`cmd/stow-wasm/main.go:1-3`) shipped in the npm package `@chs/stow-s3`, exposing an
   `embedded` in-process entrypoint plus `node-wasm` and `browser` hosts
-  (`packages/stow/package.json`).
+  (`packages/stow-s3/package.json`).
 
 **Session ergonomics.** The npm client spawns the binary itself, defaults to port `0`, parses the
 `STOW_READY` line with a dedicated parser, and creates a temporary data directory it cleans up
-(`packages/stow/src/start.ts:8-17`, `packages/stow/src/start.ts:291-315`). No container runtime is
+(`packages/stow-s3/src/start.ts:8-17`, `packages/stow-s3/src/start.ts:291-315`). No container runtime is
 involved at any point.
 
 ### Assessment
@@ -515,7 +515,7 @@ sources and against Stow's own code.
 
 | Tool | Container required to obtain a usable S3 endpoint? | Source |
 | --- | --- | --- |
-| **Stow** | **No.** One binary, `stow serve`. The npm client spawns it directly. | `cmd/stow/main.go:29-36`; `packages/stow/src/start.ts:315` |
+| **Stow** | **No.** One binary, `stow serve`. The npm client spawns it directly. | `cmd/stow-s3/main.go:29-36`; `packages/stow-s3/src/start.ts:315` |
 | LocalStack | **Yes.** Docker is a stated requirement for the `lstk` path; all paths are container-based. | `https://docs.localstack.cloud/aws/getting-started/installation/` |
 | S3Mock | Docker *or* JVM. The README's recommended usage is Docker. | `https://github.com/adobe/S3Mock` |
 | moto | **No** for Python in-process; Docker only for the standalone server. | `https://docs.getmoto.org/en/latest/docs/server_mode.html` |
@@ -574,18 +574,18 @@ source build of an AGPL server they now have to compile.
 Supported by Stow's code, and each item is verifiable:
 
 - Machine-readable readiness carrying endpoint *and* credentials on stdout
-  (`cmd/stow/main.go:273`), parsed by a dedicated client-side parser
-  (`packages/stow/src/start.ts:8-17`).
-- Ephemeral ports by default in the shipped client (`packages/stow/src/start.ts:300`), so parallel
+  (`cmd/stow-s3/main.go:273`), parsed by a dedicated client-side parser
+  (`packages/stow-s3/src/start.ts:8-17`).
+- Ephemeral ports by default in the shipped client (`packages/stow-s3/src/start.ts:300`), so parallel
   workers never collide.
-- Bounded sessions: memory backend (`cmd/stow/main.go:167`), `Reset()` in the Go library
+- Bounded sessions: memory backend (`cmd/stow-s3/main.go:167`), `Reset()` in the Go library
   (`pkg/stow/runtime.go:106-108`), temp-directory cleanup in the npm client
-  (`packages/stow/src/start.ts:1`), and per-instance storage quotas
-  (`cmd/stow/main.go:116-117`).
+  (`packages/stow-s3/src/start.ts:1`), and per-instance storage quotas
+  (`cmd/stow-s3/main.go:116-117`).
 - Server-side state inspectable for assertions: `/_stow/inspect`, `/_stow/status`, `/_stow/metrics`
   (`internal/s3api/admin.go:50-94`).
 - Three consumption shapes from one implementation: subprocess, Go in-process library, and WASM
-  embedded in Node or a browser (`cmd/stow-wasm/main.go:1-3`, `packages/stow/package.json`).
+  embedded in Node or a browser (`cmd/stow-wasm/main.go:1-3`, `packages/stow-s3/package.json`).
 
 Where the claim does **not** hold, and the document should not imply otherwise:
 
@@ -595,7 +595,7 @@ Where the claim does **not** hold, and the document should not imply otherwise:
   wide margin. "Modern DX" here means *how you start and tear it down*, not *what it can do*.
 - **It is not a claim about auth realism.** Stow's SigV4 is real and always on, but it is a single
   credential pair with no users, roles, policies, or STS
-  (`cmd/stow/main.go:212-222`). LocalStack, SeaweedFS, and AIStor all model multi-principal
+  (`cmd/stow-s3/main.go:212-222`). LocalStack, SeaweedFS, and AIStor all model multi-principal
   authorization. Stow can prove a client *signs* correctly; it cannot prove a client is
   *authorized* correctly.
 
@@ -702,7 +702,7 @@ The ordering deserves its qualifiers, because a single ranking hides two differe
 tool by tool:
 
 - **It is not a MinIO replacement, and cannot be.** Stow stores objects in a local directory or in
-  memory (`cmd/stow/main.go:163-170`). It has no versioning, no lifecycle, no encryption, no
+  memory (`cmd/stow-s3/main.go:163-170`). It has no versioning, no lifecycle, no encryption, no
   replication, no erasure coding, no healing, no multi-tenancy, no admin UI, and one credential
   pair. A team with a self-hosted MinIO deployment has a durability, availability, and data-growth
   problem; Stow has none of the machinery for any of those, and never claimed to. The right
@@ -779,7 +779,7 @@ uploads, or lifecycle will break.
    wall-clock, and local memory — for MinIO-in-Docker and for Stow, on the same suite. Without
    numbers this is a preference, not a claim.
 5. **Concurrency evidence**: N parallel workers, showing no port or state collisions
-   (`packages/stow/src/start.ts:300` implies this; nothing published demonstrates it).
+   (`packages/stow-s3/src/start.ts:300` implies this; nothing published demonstrates it).
 6. **Migration guidance for the vhost-style addressing difference**, since MinIO and LocalStack
    default to vhost-style and Stow defaults to path-style with `--base-host` opt-in
    (`internal/s3api/router.go:26-45`).
@@ -790,9 +790,9 @@ uploads, or lifecycle will break.
 ### Claim 2 — "Stow is the MinIO-compatible S3 layer for your pipeline"
 
 *Currently supported?* No. This is a production-storage claim and Stow fails it outright: local
-filesystem or in-memory only (`cmd/stow/main.go:163-170`), no versioning, no lifecycle, no
+filesystem or in-memory only (`cmd/stow-s3/main.go:163-170`), no versioning, no lifecycle, no
 encryption, no replication, no healing, no multi-tenancy, no HA, no admin UI
-(`internal/s3api/dispatch.go:121-128`, `cmd/stow/main.go:212-222`).
+(`internal/s3api/dispatch.go:121-128`, `cmd/stow-s3/main.go:212-222`).
 
 *Evidence required:* everything in Claim 1, **plus** durability guarantees under process and
 machine failure, a documented storage-growth story, backup and restore, an access-control model

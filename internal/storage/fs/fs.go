@@ -14,7 +14,7 @@ import (
 	"sync"
 	"time"
 
-	storage "github.com/chester-hill-solutions/stow/internal/storage"
+	storage "github.com/chester-hill-solutions/stow-s3/internal/storage"
 )
 
 const legacyMetaSuffix = ".stowmeta"
@@ -50,6 +50,9 @@ func NewFilesystemStore(dataDir string) (*FilesystemStore, error) {
 		return nil, fmt.Errorf("clean staging files: %w", err)
 	}
 	warnLegacyLayout(dataDir)
+	// Recorded last: the marker asserts stow has finished initializing the
+	// directory, so a client that sees it may treat the directory as resettable.
+	writeOwnerMarker(dataDir)
 	return &FilesystemStore{dataDir: dataDir, lockPath: lockPath, lockID: lockID}, nil
 }
 

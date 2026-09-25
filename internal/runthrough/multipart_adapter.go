@@ -3,7 +3,7 @@ package runthrough
 import (
 	"context"
 
-	"github.com/chester-hill-solutions/stow/internal/storage"
+	"github.com/chester-hill-solutions/stow-s3/internal/storage"
 )
 
 func (a *Adapter) AbortMultipartUpload(ctx context.Context, uploadID string) error {

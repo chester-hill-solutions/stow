@@ -11,10 +11,10 @@ const roots = [
   "conformance",
   "pkg",
   "wasm",
-  "packages/stow/src",
-  "packages/stow/test",
-  "packages/stow-py/src",
-  "packages/stow-py/tests",
+  "packages/stow-s3/src",
+  "packages/stow-s3/test",
+  "packages/stow-s3-py/src",
+  "packages/stow-s3-py/tests",
 ];
 const maximum = 500;
 const violations = [];

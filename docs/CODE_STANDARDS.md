@@ -25,7 +25,7 @@ make check-version
 make check-generated
 ```
 
-The TypeScript wrapper also exposes the equivalent package-local commands through `packages/stow`:
+The TypeScript wrapper also exposes the equivalent package-local commands through `packages/stow-s3`:
 
 ```sh
 npm run lint
@@ -55,7 +55,7 @@ The Go gate combines hard correctness checks with ratcheted structural checks:
 
 - `gofmt -l` and `go vet ./...` are hard failures.
 - `go test ./...` is a hard correctness gate.
-- `packages/stow/go.mod` is an intentional nested-module boundary so Go package discovery never walks TypeScript `node_modules` after an npm install.
+- `packages/stow-s3/go.mod` is an intentional nested-module boundary so Go package discovery never walks TypeScript `node_modules` after an npm install.
 - `tools/quality` reports functions over 200 lines, cyclomatic complexity over 15, and functions with more than five parameters.
 - `any` and `panic` use are tracked as type/safety escape hatches.
 - The shared storage, S3, and run-through tests are part of the same release gate; backend-specific exemptions are not allowed without a written reason.
@@ -84,7 +84,7 @@ The TypeScript escape ratchet additionally records `as any`, double casts, expli
 
 `jscpd` tracks duplicated TypeScript structure. The Go quality and file-size gates track Go structural metrics and file size. Cross-language Go clone detection is not yet part of the gate and must not be implied by this document; it is a follow-up before claiming full cross-language DRY coverage. Each implemented dimension is ratcheted independently.
 
-Generated `packages/stow/dist` is checked into the repository for release reproducibility, but it is excluded from lint and duplication scans. The build is cleaned and regenerated, and CI fails if the checked-in output differs.
+Generated `packages/stow-s3/dist` is checked into the repository for release reproducibility, but it is excluded from lint and duplication scans. The build is cleaned and regenerated, and CI fails if the checked-in output differs.
 
 ## CI
 

@@ -5,7 +5,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/chester-hill-solutions/stow/internal/runthrough"
+	"github.com/chester-hill-solutions/stow-s3/internal/runthrough"
 )
 
 func TestRetryClassification(t *testing.T) {

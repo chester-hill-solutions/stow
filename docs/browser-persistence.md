@@ -1,8 +1,8 @@
 # Browser persistence profile
 
-`@chs/stow/browser` adds a browser-facing persistence coordinator around the
+`@chs/stow-s3/browser` adds a browser-facing persistence coordinator around the
 memory-only `EmbeddedStow` WASM profile. It is a separate entry point;
-`EmbeddedStow` and `@chs/stow/node-wasm` keep their existing synchronous
+`EmbeddedStow` and `@chs/stow-s3/node-wasm` keep their existing synchronous
 contracts.
 
 The coordinator never treats a successful in-memory mutation as durable until
@@ -17,7 +17,7 @@ divergent state.
 import {
   IndexedDbPersistenceAdapter,
   openBrowserEmbeddedStow,
-} from "@chs/stow/browser";
+} from "@chs/stow-s3/browser";
 
 const persistence = new IndexedDbPersistenceAdapter({
   databaseName: "my-app-stow",

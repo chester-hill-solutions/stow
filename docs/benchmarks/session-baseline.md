@@ -9,8 +9,8 @@ Reproduce with:
 
 ```sh
 make build
-node packages/stow/scripts/benchmark-session.mjs --sessions 30 --payload-bytes 1048576
-node packages/stow/scripts/benchmark-session.mjs --sweep
+node packages/stow-s3/scripts/benchmark-session.mjs --sessions 30 --payload-bytes 1048576
+node packages/stow-s3/scripts/benchmark-session.mjs --sweep
 ```
 
 Results are written to `docs/benchmarks/session-baseline.json`. The harness is a

@@ -10,8 +10,8 @@ import (
 	"net/http"
 	"time"
 
-	"github.com/chester-hill-solutions/stow/internal/runtime"
-	"github.com/chester-hill-solutions/stow/internal/storage"
+	"github.com/chester-hill-solutions/stow-s3/internal/runtime"
+	"github.com/chester-hill-solutions/stow-s3/internal/storage"
 )
 
 const xmlNS = "http://s3.amazonaws.com/doc/2006-03-01/"

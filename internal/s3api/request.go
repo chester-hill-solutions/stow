@@ -10,7 +10,7 @@ import (
 	"net/http"
 	"strings"
 
-	"github.com/chester-hill-solutions/stow/internal/storage"
+	"github.com/chester-hill-solutions/stow-s3/internal/storage"
 )
 
 // bodyCacheKey carries a per-request holder for the materialised body.

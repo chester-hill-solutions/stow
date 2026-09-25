@@ -7,7 +7,7 @@ import (
 	"sort"
 	"strings"
 
-	storage "github.com/chester-hill-solutions/stow/internal/storage"
+	storage "github.com/chester-hill-solutions/stow-s3/internal/storage"
 )
 
 func (s *FilesystemStore) ListObjectsV2(_ context.Context, bucket string, opts storage.ListOptions) (*storage.ListResult, error) {

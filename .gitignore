@@ -34,11 +34,11 @@ venv/
 .mypy_cache/
 .ruff_cache/
 # Scoped to the Python package. A bare dist/ or build/ would be wrong here, since
-# packages/stow/dist is generated but deliberately tracked.
-packages/stow-py/dist/
-packages/stow-py/build/
-packages/stow-py/*.egg-info/
-packages/stow-py/src/*.egg-info/
+# packages/stow-s3/dist is generated but deliberately tracked.
+packages/stow-s3-py/dist/
+packages/stow-s3-py/build/
+packages/stow-s3-py/*.egg-info/
+packages/stow-s3-py/src/*.egg-info/
 
 # Local data
 .stow/

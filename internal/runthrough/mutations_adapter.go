@@ -5,7 +5,7 @@ import (
 	"errors"
 	"io"
 
-	"github.com/chester-hill-solutions/stow/internal/storage"
+	"github.com/chester-hill-solutions/stow-s3/internal/storage"
 )
 
 func (a *Adapter) DeleteObject(ctx context.Context, bucket, key string) error {

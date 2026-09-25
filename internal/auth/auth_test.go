@@ -15,7 +15,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/chester-hill-solutions/stow/internal/auth"
+	"github.com/chester-hill-solutions/stow-s3/internal/auth"
 )
 
 func TestGenerateCredentials(t *testing.T) {

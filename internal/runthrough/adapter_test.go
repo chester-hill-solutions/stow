@@ -13,8 +13,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/chester-hill-solutions/stow/internal/runthrough"
-	"github.com/chester-hill-solutions/stow/internal/storage"
+	"github.com/chester-hill-solutions/stow-s3/internal/runthrough"
+	"github.com/chester-hill-solutions/stow-s3/internal/storage"
 )
 
 type mockUpstream struct {

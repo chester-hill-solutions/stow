@@ -4,7 +4,7 @@ import (
 	"errors"
 	"net/http"
 
-	"github.com/chester-hill-solutions/stow/internal/auth"
+	"github.com/chester-hill-solutions/stow-s3/internal/auth"
 )
 
 // AuthFunc validates an incoming request. Return nil to allow.

@@ -31,7 +31,7 @@ part.
 
 1. Add a uniquely named case with declarative setup and expectations.
 2. Add or reuse an operation adapter in both
-   `conformance/corpus_*.go` and `packages/stow/test/shared-corpus.ts`.
+   `conformance/corpus_*.go` and `packages/stow-s3/test/shared-corpus.ts`.
 3. Run `make test-conformance` and the Node package test. A case that only
    works in one runner is not a shared contract case.
 

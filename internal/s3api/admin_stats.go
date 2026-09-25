@@ -4,7 +4,7 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/chester-hill-solutions/stow/internal/storage"
+	"github.com/chester-hill-solutions/stow-s3/internal/storage"
 )
 
 func listAllAdminObjects(ctx context.Context, store storage.Store, bucket string) ([]storage.ObjectMeta, error) {

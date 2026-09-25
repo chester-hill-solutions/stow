@@ -1,6 +1,6 @@
 # Stow v1 S3 Compatibility Contract
 
-This document is the authoritative contract for `@chs/stow` v1. Implementers and test authors MUST treat it as the acceptance spec. Behavior not listed here as supported is unsupported unless explicitly noted as provider-tolerant (SDKs may send headers stow ignores).
+This document is the authoritative contract for `@chs/stow-s3` v1. Implementers and test authors MUST treat it as the acceptance spec. Behavior not listed here as supported is unsupported unless explicitly noted as provider-tolerant (SDKs may send headers stow ignores).
 
 **Scope:** Docker-free local S3-compatible dev bucket service (PGLite-inspired). Greenfield Go core + TypeScript npm wrapper.
 
@@ -434,6 +434,6 @@ Non-S3 HTTP routes for observability and debugging. **No SigV4 required** (local
 
 ## Appendix B — Versioning This Contract
 
-- The 0.2.0 pre-1.0 release may contain documented breaking behavior as specified by ADR 0002; the stable `@chs/stow` 1.x boundary is reserved for the first non-breaking stable contract.
+- The 0.2.0 pre-1.0 release may contain documented breaking behavior as specified by ADR 0002; the stable `@chs/stow-s3` 1.x boundary is reserved for the first non-breaking stable contract.
 - New operations may be added in minor versions if marked **experimental** in changelog first.
 - Conformance test suite in repo MUST reference this file by path and commit SHA in CI logs.

@@ -16,14 +16,16 @@ below are reordered accordingly.
 
 | Area | Status | Where |
 |---|---|---|
-| Native S3 through one runtime facade | Done. Every native S3 request passes through a single runtime instance, so the server has a real quota and accounting choke point. | `internal/runtime/adapter.go`, `cmd/stow/runtime_store.go` |
+| Native S3 through one runtime facade | Done. Every native S3 request passes through a single runtime instance, so the server has a real quota and accounting choke point. | `internal/runtime/adapter.go`, `cmd/stow-s3/runtime_store.go` |
 | In-process S3 compatibility adapter | Done, through multipart, conditionals, checksums, and pagination. | `internal/runtime/adapter.go`, `internal/runtime/multipart.go` |
 | Durable outbox | Done. Cross-process claims, lease renewal, fencing, prepared-owner recovery, crash reconciliation against upstream, and a schema-version guard. | `internal/runthrough/file_outbox.go`, `outbox_claims.go`, `outbox_adapter.go` |
-| Shared conformance corpus | Done. `conformance/corpus/cases.json` is the single source of truth for both the Go and Node runners. | `conformance/`, `packages/stow/test/shared-corpus.ts` |
+| Shared conformance corpus | Done. `conformance/corpus/cases.json` is the single source of truth for both the Go and Node runners. | `conformance/`, `packages/stow-s3/test/shared-corpus.ts` |
 | Live provider matrix | Done. Disposable-resource live run-through with provider classification and a release gate. | `.github/workflows/live.yml`, `conformance/live-provider.sh` |
-| Embedded profiles | Done, including the IndexedDB browser persistence profile. | `packages/stow/src/embedded.ts`, `packages/stow/src/browser.ts` |
+| Embedded profiles | Done, including the IndexedDB browser persistence profile. | `packages/stow-s3/src/embedded.ts`, `packages/stow-s3/src/browser.ts` |
 | One version source | Done and enforced in CI. | `scripts/check-version.mjs` |
 | Missing-bucket consistency | Done. Both backends return `ErrBucketNotFound` and the shared contract suite asserts it. | `internal/storage/backend_contract_test.go` |
+| Data-directory reset is ownership-checked | Done. A reset requires a `.stow-owner` marker the server writes on open, and refuses root, home, the working directory, and their ancestors. `cleanSlate` remains as a deprecated alias with identical checks. | `internal/storage/fs/owner.go`, `packages/stow-s3/src/ownership.ts`, `docs/adr/0006-owned-data-directory-reset.md` |
+| Live writes require explicit consent | Done. A policy no longer grants consent; only `STOW_ALLOW_LIVE_WRITES` or `--allow-live-writes` does, and local mode is proven to make zero upstream requests. | `internal/runthrough/writepolicy.go`, `cmd/stow-s3/store.go`, `docs/adr/0005-live-write-requires-explicit-consent.md` |
 
 ### 0.2 Real gaps this plan must now carry
 
@@ -33,18 +35,18 @@ Verified open items in the current tree:
    `io.ReadAll(r.Body)` with no cap, and there is no `http.MaxBytesReader`
    anywhere. The `maxRequestBytes` capability in section 5.2 does not exist.
    This is a live denial-of-service surface, not a later enhancement.
-2. **Native quotas are effectively unlimited.** `cmd/stow/runtime_store.go`
+2. **Native quotas are effectively unlimited.** `cmd/stow-s3/runtime_store.go`
    passes `MaxInt64` for bytes and objects. The enforcement machinery exists;
    only the configured values are missing.
 3. **No read or write timeouts.** Only `IdleTimeout` is set, in
    `internal/s3api/server.go`.
-4. **A clean install cannot start a session.** `packages/stow/src/bin.ts`
+4. **A clean install cannot start a session.** `packages/stow-s3/src/bin.ts`
    resolves the binary from `STOW_BIN`, the monorepo, or finally the bare
    string `"stow"` on `PATH`. The npm package ships the WASM artifact but no
    native binary. This is the largest risk in the plan and it gates the entire
    session stack.
 5. **The ready protocol is still a text line.** `STOW_READY` on stdout, parsed
-   by a regex in `packages/stow/src/start.ts`, with credentials on stdout. No
+   by a regex in `packages/stow-s3/src/start.ts`, with credentials on stdout. No
    `--ready-fd` exists.
 
 ### 0.3 Consequences for this plan
@@ -56,6 +58,59 @@ Verified open items in the current tree:
   targets, and the distribution model are empirical unknowns.
 - The first TypeScript session is the probe for those unknowns, not the last
   step of a long pre-work phase.
+
+### 0.4 Verified open items, checked against the tree
+
+An audit of the code rather than of these documents produced the list below.
+It is recorded because both this plan and `docs/agentic-dx-10-plan.md` had
+started marking phases complete on the strength of prose, and two shipped
+data-loss defects were found underneath a phase that read as done. Each item
+names the evidence, so the next reader can re-check it rather than trust it.
+
+Closed since this section was written:
+
+1. **Live writes were granted implicitly.** `STOW_POLICY=mirrorWrites` set
+   `AllowLiveWrites` whenever `STOW_ALLOW_LIVE_WRITES` was *unset*, so the
+   absence of a variable was the enabling condition. With ADR 0001's auto-detect
+   default, a staging `.env` was enough to propagate mutations to a shared
+   bucket. Fixed; `docs/adr/0005-live-write-requires-explicit-consent.md`.
+2. **`cleanSlate` was an unguarded recursive delete** of any caller-supplied
+   path, including the home directory, in the published `dist/`. Fixed;
+   `docs/adr/0006-owned-data-directory-reset.md`.
+
+Still open, in descending order of harm:
+
+3. **The admin surface has no credential.** `--allow-public-admin` is a bare
+   boolean, and the routes it exposes include the destructive outbox
+   `retry` and `discard` actions. There is no admin token, so
+   `--allow-public-admin` means *unauthenticated* rather than *authenticated*.
+   `internal/s3api/server.go`.
+4. **CORS reflects any origin.** `internal/s3api/cors.go` echoes the request's
+   `Origin` and, when absent, sends `*`. There is no allowlist and no
+   `Vary: Origin`. `Config.CORSOrigins` is declared and never read anywhere, so
+   the allowlist was designed and never wired.
+5. **The macOS parent-death watch is a no-op.** `internal/parentwatch` opens a
+   kqueue descriptor and `defer`-closes it the instant `Watch` returns; no
+   goroutine ever services the registered `NOTE_EXIT` event. macOS arm64 is a
+   first-class release platform by the decision in section 17, so sessions can
+   orphan there. Windows is `ErrUnsupported`, and `parentwatch_test.go` has no
+   build tag, so it does not even compile on that platform. There is no macOS or
+   Windows CI job.
+6. **The filesystem key limit is ~127 bytes, not the documented 1024.**
+   `storage.ValidateKey` accepts 1024, but keys become
+   `hex.EncodeToString` filenames and `NAME_MAX` is 255, so a 128-byte key fails
+   `ENAMETOOLONG` on every supported filesystem. The Phase 2 exit criterion names
+   128-byte keys, and no test anywhere covers a long key.
+7. **The TypeScript client ignores two of its own options.** `timeoutMs` and
+   `signal` are declared on `EphemeralStowOptions` and never forwarded; startup
+   is bounded by a hardcoded 10 s. The ready-descriptor parser also treats a
+   partial record as complete, and a parse failure inside a stream handler
+   rejects nothing, so a truncated record hangs until the timeout. The server's
+   reported region is parsed and then overwritten with `us-east-1`.
+
+Item 6 is the one that invalidates a stated exit criterion rather than merely
+adding work, and it is also the prerequisite for the storage format v3 in the
+10-plan: that change is a hash-filename scheme, which is the same fix.
 
 ## 1. Product outcome
 
@@ -185,7 +240,7 @@ The direct Go/WASM runtime remains valuable for callers that:
 `EmbeddedStow` should not pretend to be an S3 server. The in-process S3
 compatibility adapter now exists for the native path as `runtime.StoreAdapter`,
 which is what gives the HTTP server a single choke point for quotas and
-accounting. The public `EmbeddedStow`/`@chs/stow/browser` profiles remain
+accounting. The public `EmbeddedStow`/`@chs/stow-s3/browser` profiles remain
 direct object interfaces with no S3 wire surface, and that split is intentional.
 
 ### 4.3 Do not start with a shared daemon
@@ -265,7 +320,7 @@ The exact defaults are a decision for Phase 0. The important rule is that limits
 
 ### 5.3 TypeScript interface
 
-Add an additive high-level interface to `packages/stow/src`:
+Add an additive high-level interface to `packages/stow-s3/src`:
 
 ```ts
 import type { S3Client } from "@aws-sdk/client-s3";
@@ -319,7 +374,7 @@ EmbeddedStow.open(host, options): EmbeddedStow;
 
 ### 5.4 Python interface
 
-Create a Python package under `packages/stow-py/` with a `pyproject.toml` and a `src/stow/` import package. The PyPI distribution name is a decision for Phase 0; do not assume that `stow` is available.
+Create a Python package under `packages/stow-s3-py/` with a `pyproject.toml` and a `src/stow/` import package. The PyPI distribution name is a decision for Phase 0; do not assume that `stow` is available.
 
 Proposed public interface:
 
@@ -686,7 +741,7 @@ Work:
 
 1. Add a versioned ready JSON channel behind `--ready-fd`, while preserving
    `STOW_READY` text output for existing consumers. Move credentials off stdout.
-2. Extend the existing child-process handling in `packages/stow/src/start.ts`
+2. Extend the existing child-process handling in `packages/stow-s3/src/start.ts`
    with the JSON ready path rather than building a parallel spawner.
 3. Add a session-owned temporary directory implementation.
 4. Add context, timeout, and cancellation support.
@@ -781,7 +836,7 @@ Exit criteria:
 
 Work:
 
-1. Create `packages/stow-py/` with a standard `src/` layout and `pyproject.toml`.
+1. Create `packages/stow-s3-py/` with a standard `src/` layout and `pyproject.toml`.
 2. Implement the standard-library process and protocol client.
 3. Implement `session()` and `open_session()`.
 4. Return a configured `boto3` client from the `boto3` extra.
@@ -1186,7 +1241,7 @@ criteria for the spike's outcome:
 - install success rate on each supported platform, measured rather than assumed;
 - artifact size and install time cost of shipping the binary in every install;
 - whether checksums and provenance can be verified before execution;
-- whether the resolution order in `packages/stow/src/bin.ts` can report a
+- whether the resolution order in `packages/stow-s3/src/bin.ts` can report a
   precise, actionable diagnostic when the binary is absent;
 - what the fallback experience is on an unsupported platform.
 

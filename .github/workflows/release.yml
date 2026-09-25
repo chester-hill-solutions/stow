@@ -28,7 +28,7 @@ jobs:
         with:
           node-version: 24
           cache: npm
-          cache-dependency-path: packages/stow/package-lock.json
+          cache-dependency-path: packages/stow-s3/package-lock.json
       - name: Verify tests
         run: make test-all
       - name: Verify build and standards
@@ -38,7 +38,7 @@ jobs:
       - name: Verify generated output
         run: make check-generated
       - name: Pack verified npm package
-        working-directory: packages/stow
+        working-directory: packages/stow-s3
         run: |
           mkdir -p "$RUNNER_TEMP/npm-package"
           npm pack --ignore-scripts --pack-destination "$RUNNER_TEMP/npm-package"
@@ -79,7 +79,7 @@ jobs:
           GOOS: ${{ matrix.os }}
           GOARCH: ${{ matrix.arch }}
           CGO_ENABLED: "0"
-        run: go build -trimpath -ldflags "-s -w" -o stow ./cmd/stow
+        run: go build -trimpath -ldflags "-s -w" -o stow-s3 ./cmd/stow-s3
 
       - name: Package
         run: tar -czf stow-${{ matrix.os }}-${{ matrix.arch }}.tar.gz stow LICENSE README.md
@@ -143,7 +143,7 @@ jobs:
           node -e '
             const metadata = JSON.parse(process.argv[1]);
             const expectedVersion = process.argv[2];
-            if (metadata.name !== "@chs/stow" || metadata.version !== expectedVersion) {
+            if (metadata.name !== "@chs/stow-s3" || metadata.version !== expectedVersion) {
               throw new Error(`Unexpected npm package metadata: ${metadata.name}@${metadata.version}`);
             }
           ' "$package_metadata" "${GITHUB_REF_NAME#v}"
@@ -161,7 +161,7 @@ jobs:
           set -euo pipefail
           shopt -s nullglob
           expected_version="${GITHUB_REF_NAME#v}"
-          for archive in dist/stow-*.tar.gz; do
+          for archive in dist/stow-s3-*.tar.gz; do
             node scripts/pack-platform-package.mjs "$archive" dist/npm-platform
           done
           mapfile -t platform_tarballs < <(ls dist/npm-platform/*.tgz)
@@ -178,7 +178,7 @@ jobs:
                 throw new Error(`Platform package version skew: ${metadata.name}@${metadata.version}`);
               }
             ' "$metadata" "$expected_version"
-            tar -tzf "$tarball" | grep -Fxq package/bin/stow
+            tar -tzf "$tarball" | grep -Fxq package/bin/stow-s3
           done
           ls -l dist/npm-platform
 
@@ -197,7 +197,7 @@ jobs:
         uses: softprops/action-gh-release@da05d552573ad5aba039eaac05058a918a7bf631 # v2.2.2
         with:
           files: |
-            dist/stow-*.tar.gz
+            dist/stow-s3-*.tar.gz
             dist/SHA256SUMS.txt
           body: |
             ## stow ${{ github.ref_name }}

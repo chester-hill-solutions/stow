@@ -14,7 +14,7 @@ Ship a Docker-free local S3-compatible service whose externally observable behav
 - the local and run-through modes defined by the amended compatibility contract;
 - safe mirror-write propagation with a durable, retryable outbox;
 - the complete supported S3 operation set, including multipart listing and SDK-observable conditional/checksum behavior;
-- the TypeScript `@chs/stow` wrapper with explicit backend selection and a separately typed `connect()` lifecycle;
+- the TypeScript `@chs/stow-s3` wrapper with explicit backend selection and a separately typed `connect()` lifecycle;
 - accurate admin status/inspection and Prometheus metrics;
 - a full local CI gate, protected live-provider tests, binary artifacts, and npm artifacts.
 
@@ -35,15 +35,15 @@ The existing `docs/compat-contract.md` remains the acceptance document, but the 
 9. **Package lifecycle:** Node 20+ is supported. `Stow.start()` owns a spawned process; `Stow.connect()` returns a distinct external-connection type and requires explicit endpoint/credential inputs. Remove the reserved unused `upstream` start option.
 10. **Storage format:** 0.2.0 uses a clean-break atomic record format. Old data is not migrated; startup emits a warning and continues with the new format.
 11. **Operations:** the amended contract includes ListMultipartUploads, full conditional CopyObject, single-range support, SDK-supported conditional writes, and the common checksum set (`Content-MD5`, CRC32, CRC32C, SHA-1, SHA-256).
-12. **Release identity:** `0.2.0` is the first release targeting the amended v1 contract. Publish both the Go binary and `@chs/stow` after the full gate passes.
+12. **Release identity:** `0.2.0` is the first release targeting the amended v1 contract. Publish both the Go binary and `@chs/stow-s3` after the full gate passes.
 
-Update `docs/adr/0001-auto-detect-run-through.md` through a new amendment ADR rather than rewriting accepted history. Update `docs/compat-contract.md`, `CONTEXT.md`, `README.md`, `packages/stow/README.md`, and a new changelog/release-note document.
+Update `docs/adr/0001-auto-detect-run-through.md` through a new amendment ADR rather than rewriting accepted history. Update `docs/compat-contract.md`, `CONTEXT.md`, `README.md`, `packages/stow-s3/README.md`, and a new changelog/release-note document.
 
 ### Normative contract tables required in R0
 
 R0 is not complete until the amended documents contain explicit tables for the following; implementation must not infer these rules from current handler code:
 
-- **Versioning:** amend the existing “major bump for §1/§6 changes” rule. `0.2.0` is a pre-1.0 release with documented breaking behavior; the stable `@chs/stow` 1.x boundary is reserved for the first non-breaking stable contract. Add one version source for npm, the binary, and `/_stow/status`.
+- **Versioning:** amend the existing “major bump for §1/§6 changes” rule. `0.2.0` is a pre-1.0 release with documented breaking behavior; the stable `@chs/stow-s3` 1.x boundary is reserved for the first non-breaking stable contract. Add one version source for npm, the binary, and `/_stow/status`.
 - **Policies:** `local` is a mode, not a policy. `readThroughCache` remains local-only unless the separate live-write flag is set; `mirrorWrites` explicitly enables propagation and emits a warning; `proxy` is rejected/deprecated with a migration error, not silently accepted.
 - **Bucket grammar:** specify the exact accepted alphabet, length, reserved-name/IP rules, and permitted edge characters in the ADR and contract. Use one validator shared by storage and HTTP.
 - **Date fallback:** apply the fallback only to header authentication; the selected date header must be part of `SignedHeaders`; presigned URLs continue to require `X-Amz-Date`.
@@ -80,11 +80,11 @@ The repository adopts the CallCaster/GoCanvass ratchet pattern before further fe
 
 - `docs/CODE_STANDARDS.md` defines the policy and commands.
 - `tools/quality` scans Go function length, complexity, parameter count, `any`, and `panic` identities against `scripts/baselines/go-quality.json`.
-- `packages/stow/eslint.config.mjs` ratchets TypeScript complexity, depth, parameter count, function length, console usage, type escapes, and duplicate imports.
+- `packages/stow-s3/eslint.config.mjs` ratchets TypeScript complexity, depth, parameter count, function length, console usage, type escapes, and duplicate imports.
 - `scripts/check-lint-ratchet.mjs`, `scripts/check-type-escapes.mjs`, `scripts/check-dry.mjs`, `scripts/check-file-size.mjs`, and `scripts/check-coverage.mjs` compare current results with checked-in baselines.
 - `make standards` is the local gate; CI and release verification must run it.
 - Baselines may only shrink after verified debt reduction. A baseline update is a reviewed maintenance action, never an approval mechanism for a regression.
-- The nested `packages/stow/go.mod` boundary prevents Go package discovery from walking npm `node_modules`.
+- The nested `packages/stow-s3/go.mod` boundary prevents Go package discovery from walking npm `node_modules`.
 
 This standards phase is a release blocker: no new remediation PR may increase a debt baseline or lower the coverage floor without an explicitly reviewed, verified change.
 
@@ -101,7 +101,7 @@ This standards phase is a release blocker: no new remediation PR may increase a 
 - new ADR amendment under `docs/adr/`
 - `CONTEXT.md`
 - `README.md`
-- `packages/stow/README.md`
+- `packages/stow-s3/README.md`
 - new changelog/release notes
 
 **Work:**
@@ -122,8 +122,8 @@ This standards phase is a release blocker: no new remediation PR may increase a 
 
 - `Makefile`
 - `conformance/`
-- `packages/stow/test/`
-- `packages/stow/package.json`
+- `packages/stow-s3/test/`
+- `packages/stow-s3/package.json`
 - `.gitignore` (stop ignoring the committed npm lockfile)
 - new `conformance/corpus/` or equivalent language-neutral scenario directory
 - `go.mod`, `go.sum`, npm lockfile
@@ -212,7 +212,7 @@ This standards phase is a release blocker: no new remediation PR may increase a 
 - `internal/s3api/server.go`
 - `internal/s3api/cors.go`
 - new `internal/s3api/dispatch.go` (move S3 dispatch out of `admin.go`)
-- `cmd/stow/main.go` and `packages/stow/src/start.ts` (base-host/exposure plumbing)
+- `cmd/stow-s3/main.go` and `packages/stow-s3/src/start.ts` (base-host/exposure plumbing)
 
 **Work:**
 
@@ -292,7 +292,7 @@ This standards phase is a release blocker: no new remediation PR may increase a 
 - `internal/runthrough/upstream.go`
 - `internal/s3api/errors.go` (shared upstream-error mapping)
 - new outbox/cache modules
-- `cmd/stow/main.go`
+- `cmd/stow-s3/main.go`
 - run-through conformance scenarios
 
 **Work:**
@@ -328,8 +328,8 @@ This standards phase is a release blocker: no new remediation PR may increase a 
 - `internal/runthrough/adapter.go` and outbox state
 - `internal/s3api/admin.go`
 - `internal/s3api/server.go`
-- `cmd/stow/main.go`
-- `packages/stow/src/start.ts` (public exposure/readiness plumbing)
+- `cmd/stow-s3/main.go`
+- `packages/stow-s3/src/start.ts` (public exposure/readiness plumbing)
 - new metrics/outbox instrumentation
 - `docs/compat-contract.md`
 
@@ -347,20 +347,20 @@ This standards phase is a release blocker: no new remediation PR may increase a 
 
 ### R9 — TypeScript package and lifecycle (depends on R7–R8)
 
-**Purpose:** make `@chs/stow` reflect the new backend and lifecycle contracts without speculative API.
+**Purpose:** make `@chs/stow-s3` reflect the new backend and lifecycle contracts without speculative API.
 
 **Touchpoints:**
 
-- `packages/stow/src/types.ts`
-- `packages/stow/src/start.ts`
-- `packages/stow/src/instance.ts`
-- `packages/stow/src/index.ts`
-- `packages/stow/src/bin.ts`
-- `packages/stow/src/s3-client.ts`
-- `packages/stow/test/`
-- `cmd/stow/main.go` (backend/public-exposure flags)
-- `packages/stow/package.json`, lockfile, `tsconfig.json`
-- generated `packages/stow/dist/`
+- `packages/stow-s3/src/types.ts`
+- `packages/stow-s3/src/start.ts`
+- `packages/stow-s3/src/instance.ts`
+- `packages/stow-s3/src/index.ts`
+- `packages/stow-s3/src/bin.ts`
+- `packages/stow-s3/src/s3-client.ts`
+- `packages/stow-s3/test/`
+- `cmd/stow-s3/main.go` (backend/public-exposure flags)
+- `packages/stow-s3/package.json`, lockfile, `tsconfig.json`
+- generated `packages/stow-s3/dist/`
 
 **Work:**
 
@@ -384,7 +384,7 @@ This standards phase is a release blocker: no new remediation PR may increase a 
 - `.github/workflows/ci.yml`
 - `.github/workflows/release.yml`
 - `.gitignore` (allow the lockfile)
-- `packages/stow/package-lock.json`
+- `packages/stow-s3/package-lock.json`
 - release documentation
 
 **Work:**
@@ -393,7 +393,7 @@ This standards phase is a release blocker: no new remediation PR may increase a 
 2. Add a Node 20-compatible test runner, Node 20+ matrix jobs, and exact SDK pins. Commit the npm lockfile (remove the current ignore rule), and use a CI-installed test tool or compiled tests rather than Node’s newer `--experimental-strip-types` flag on Node 20.
 3. Add protected live jobs for AWS S3, R2, and a custom endpoint. Require disposable buckets/prefixes, short-lived credentials/session tokens, cleanup checks, and no application credentials. Make a successful live run for the release commit a release prerequisite even when the job is scheduled/manual rather than run on every PR.
 4. Add branch-protection required checks and make release jobs depend on the complete local gate and the recorded live result. Pin third-party GitHub Actions by commit SHA and use `go-version-file` rather than duplicating version literals.
-5. Update the release workflow to verify tag/package/version consistency, build/test/package the Go binary, publish `@chs/stow` through trusted npm/OIDC publishing from the same tag, generate checksums, verify package contents, and refuse publication on any failed gate.
+5. Update the release workflow to verify tag/package/version consistency, build/test/package the Go binary, publish `@chs/stow-s3` through trusted npm/OIDC publishing from the same tag, generate checksums, verify package contents, and refuse publication on any failed gate.
 6. Ensure CI builds the binary at the path the TypeScript resolver expects and fails the Node integration job if its required binary scenario is skipped.
 7. Update the changelog and release notes with the clean-break format, SDK profile, policy changes, and migration warning.
 

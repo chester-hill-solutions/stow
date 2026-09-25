@@ -8,7 +8,7 @@ import (
 	"encoding/json"
 	"fmt"
 
-	stow "github.com/chester-hill-solutions/stow/pkg/stow"
+	stow "github.com/chester-hill-solutions/stow-s3/pkg/stow"
 )
 
 var operationHandlers = map[string]handler{

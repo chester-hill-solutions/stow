@@ -1,0 +1,18 @@
+{
+  "name": "@chs/stow-s3-linux-arm64",
+  "version": "0.2.0",
+  "description": "Native stow server binary for linux arm64. Installed automatically as an optional dependency of @chs/stow-s3.",
+  "os": [
+    "linux"
+  ],
+  "cpu": [
+    "arm64"
+  ],
+  "files": [
+    "bin/stow-s3"
+  ],
+  "exports": {
+    "./bin/stow-s3": "./bin/stow-s3"
+  },
+  "license": "Apache-2.0"
+}

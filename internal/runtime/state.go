@@ -4,7 +4,7 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/chester-hill-solutions/stow/internal/storage"
+	"github.com/chester-hill-solutions/stow-s3/internal/storage"
 )
 
 func (i *Instance) objectQuotaFits(target string, objectDelta int64) bool {

@@ -6,7 +6,7 @@ import (
 	"errors"
 	"testing"
 
-	"github.com/chester-hill-solutions/stow/pkg/stow"
+	"github.com/chester-hill-solutions/stow-s3/pkg/stow"
 )
 
 func newPublicRuntime(t *testing.T) (context.Context, *stow.Runtime) {

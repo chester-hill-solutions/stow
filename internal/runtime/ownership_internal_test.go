@@ -6,7 +6,7 @@ import (
 	"io"
 	"testing"
 
-	"github.com/chester-hill-solutions/stow/internal/storage"
+	"github.com/chester-hill-solutions/stow-s3/internal/storage"
 )
 
 // recordingStore captures what the runtime hands to the underlying store.

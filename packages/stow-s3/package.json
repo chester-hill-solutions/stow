@@ -1,0 +1,71 @@
+{
+  "name": "@chs/stow-s3",
+  "version": "0.2.0",
+  "description": "TypeScript client for the stow local S3-compatible dev bucket service",
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    },
+    "./embedded": {
+      "types": "./dist/embedded.d.ts",
+      "import": "./dist/embedded.js"
+    },
+    "./node-wasm": {
+      "types": "./dist/node-wasm-host.d.ts",
+      "import": "./dist/node-wasm-host.js"
+    },
+    "./browser": {
+      "types": "./dist/browser.d.ts",
+      "import": "./dist/browser.js"
+    }
+  },
+  "bin": {
+    "stow-doctor": "./bin/stow-doctor.mjs"
+  },
+  "files": [
+    "bin",
+    "dist",
+    "src"
+  ],
+  "scripts": {
+    "clean": "node -e \"require('node:fs').rmSync('dist', { recursive: true, force: true })\"",
+    "build": "npm run clean && tsc && node scripts/copy-wasm-assets.mjs",
+    "test": "npm run build && tsx --test test/integration.test.ts test/lifecycle.test.ts test/embedded.test.ts test/node-wasm-host.test.ts test/browser.test.ts test/ready.test.ts test/session.test.ts test/session-lifecycle.test.ts test/doctor.test.ts",
+    "prepublishOnly": "npm run build",
+    "lint": "eslint .",
+    "check:lint-ratchet": "node ../../scripts/check-lint-ratchet.mjs",
+    "check:type-escapes": "node ../../scripts/check-type-escapes.mjs",
+    "check:dry": "node ../../scripts/check-dry.mjs",
+    "check:standards": "npm run lint && npm run check:lint-ratchet && npm run check:type-escapes && npm run check:dry"
+  },
+  "dependencies": {
+    "@aws-sdk/client-s3": "^3.750.0",
+    "@smithy/signature-v4": "^5.0.2",
+    "@smithy/types": "^4.1.0"
+  },
+  "optionalDependencies": {
+    "@chs/stow-s3-darwin-arm64": "0.2.0",
+    "@chs/stow-s3-darwin-x64": "0.2.0",
+    "@chs/stow-s3-linux-arm64": "0.2.0",
+    "@chs/stow-s3-linux-x64": "0.2.0"
+  },
+  "devDependencies": {
+    "@eslint/js": "^9.39.5",
+    "@types/node": "^22.13.10",
+    "eslint": "^9.39.5",
+    "eslint-plugin-import": "^2.32.0",
+    "globals": "^16.5.0",
+    "jscpd": "^5.0.12",
+    "tsx": "^4.23.15",
+    "typescript": "^5.8.2",
+    "typescript-eslint": "^8.63.0"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "license": "Apache-2.0"
+}

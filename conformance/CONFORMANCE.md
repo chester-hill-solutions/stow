@@ -11,7 +11,7 @@ make test-conformance
 # or
 go test ./conformance/... -count=1 -v
 # Node shared-corpus runner (after the package build)
-cd packages/stow && npx tsx --test test/integration.test.ts
+cd packages/stow-s3 && npx tsx --test test/integration.test.ts
 ```
 
 ## Shared declarative corpus
@@ -22,7 +22,7 @@ executed by both runners:
 
 - the Go runner in `corpus_*.go` uses the AWS SDK for Go v2 and the configured
   conformance store (`STOW_CONFORMANCE_BACKEND`, including the runtime adapter);
-- the Node runner in `packages/stow/test/shared-corpus.ts` uses
+- the Node runner in `packages/stow-s3/test/shared-corpus.ts` uses
   `@aws-sdk/client-s3` against a fresh local instance for each case.
 
 The corpus currently covers put/get round-trips (including opaque and empty
@@ -100,4 +100,4 @@ configuration or network access. With no opt-in variables, a normal
 - **CopyObject** remaining conditional/status combinations (§2.6): cross-bucket copy, `REPLACE` metadata, and `if-none-match` are in the shared corpus; the full date/if-match matrix is pending.
 - **Presigned URL** expiry and OPTIONS preflight (§2.3): happy-path GET/PUT only.
 - **Run-through / upstream** (§6.4): the provider matrix and disposable object lifecycle are implemented, but the live suite still covers one mirror round-trip rather than all six contract scenarios.
-- **Node AWS SDK v3** (`@aws-sdk/client-s3`): the shared corpus runs through the Node runner in `packages/stow/test/shared-corpus.ts`; direct-runtime differential cases remain future work.
+- **Node AWS SDK v3** (`@aws-sdk/client-s3`): the shared corpus runs through the Node runner in `packages/stow-s3/test/shared-corpus.ts`; direct-runtime differential cases remain future work.

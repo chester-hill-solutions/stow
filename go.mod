@@ -1,4 +1,4 @@
-module github.com/chester-hill-solutions/stow
+module github.com/chester-hill-solutions/stow-s3
 
 go 1.24
 

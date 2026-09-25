@@ -122,6 +122,10 @@ func ConfigFromEnv() Config {
 		}
 	}
 
+	// A policy is a routing choice; this flag is the consent to mutate a real
+	// provider. The two are deliberately independent: STOW_POLICY=mirrorWrites
+	// in an inherited .env must not, on its own, start writing to a shared
+	// bucket. See docs/adr/0005-explicit-live-write-consent.md.
 	cfg.AllowLiveWrites = envTruthy("STOW_ALLOW_LIVE_WRITES")
 
 	if cache := strings.ToLower(strings.TrimSpace(os.Getenv("STOW_CACHE"))); cache == "revalidate-never" {
@@ -129,12 +133,6 @@ func ConfigFromEnv() Config {
 	}
 	if value, present, err := parseEnvBool("STOW_REVALIDATE"); present && err == nil {
 		cfg.Revalidate = value
-	}
-
-	if cfg.Policy == PolicyMirrorWrites {
-		if _, ok := os.LookupEnv("STOW_ALLOW_LIVE_WRITES"); !ok {
-			cfg.AllowLiveWrites = true
-		}
 	}
 
 	_ = applyCacheEnv(&cfg)

@@ -10,7 +10,7 @@ const goroot = execFileSync("go", ["env", "GOROOT"], { encoding: "utf8" }).trim(
 vm.runInThisContext(await readFile(join(goroot, "lib/wasm/wasm_exec.js"), "utf8"));
 
 const { EmbeddedStow, EmbeddedStowError } = await import(
-  new URL("../packages/stow/dist/embedded.js", import.meta.url)
+  new URL("../packages/stow-s3/dist/embedded.js", import.meta.url)
 );
 
 const go = new Go();

@@ -3,7 +3,7 @@
   "violations": [
     {
       "rule": "complexity",
-      "identity": "cmd/stow/main.go:serve#1",
+      "identity": "cmd/stow-s3/main.go:serve#1",
       "message": "function serve has complexity 44 (maximum 15)"
     },
     {

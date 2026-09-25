@@ -7,7 +7,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/chester-hill-solutions/stow/internal/storage"
+	"github.com/chester-hill-solutions/stow-s3/internal/storage"
 )
 
 func TestPutObjectChecksumAlgorithms(t *testing.T) {

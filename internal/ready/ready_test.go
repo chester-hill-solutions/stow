@@ -8,7 +8,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/chester-hill-solutions/stow/internal/ready"
+	"github.com/chester-hill-solutions/stow-s3/internal/ready"
 )
 
 func sampleMessage() ready.Message {

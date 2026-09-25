@@ -15,11 +15,11 @@ import (
 	"github.com/aws/aws-sdk-go-v2/service/s3"
 	"github.com/aws/smithy-go/middleware"
 	smithyhttp "github.com/aws/smithy-go/transport/http"
-	"github.com/chester-hill-solutions/stow/internal/auth"
-	"github.com/chester-hill-solutions/stow/internal/runtime"
-	"github.com/chester-hill-solutions/stow/internal/s3api"
-	"github.com/chester-hill-solutions/stow/internal/storage"
-	"github.com/chester-hill-solutions/stow/internal/storage/fs"
+	"github.com/chester-hill-solutions/stow-s3/internal/auth"
+	"github.com/chester-hill-solutions/stow-s3/internal/runtime"
+	"github.com/chester-hill-solutions/stow-s3/internal/s3api"
+	"github.com/chester-hill-solutions/stow-s3/internal/storage"
+	"github.com/chester-hill-solutions/stow-s3/internal/storage/fs"
 )
 
 const testRegion = auth.DefaultRegion

@@ -6,7 +6,7 @@ import (
 	"errors"
 	"io"
 
-	"github.com/chester-hill-solutions/stow/internal/storage"
+	"github.com/chester-hill-solutions/stow-s3/internal/storage"
 )
 
 // StoreAdapter exposes an Instance through the storage.Store compatibility

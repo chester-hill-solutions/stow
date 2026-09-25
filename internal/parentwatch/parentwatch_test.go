@@ -12,7 +12,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/chester-hill-solutions/stow/internal/parentwatch"
+	"github.com/chester-hill-solutions/stow-s3/internal/parentwatch"
 )
 
 func TestValidateRejectsAPidThatIsNotOurParent(t *testing.T) {

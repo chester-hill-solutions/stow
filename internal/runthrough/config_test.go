@@ -5,7 +5,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/chester-hill-solutions/stow/internal/runthrough"
+	"github.com/chester-hill-solutions/stow-s3/internal/runthrough"
 )
 
 func TestUpstreamConfigFromEnv_Precedence(t *testing.T) {

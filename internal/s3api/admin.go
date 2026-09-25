@@ -9,8 +9,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/chester-hill-solutions/stow/internal/runthrough"
-	"github.com/chester-hill-solutions/stow/internal/version"
+	"github.com/chester-hill-solutions/stow-s3/internal/runthrough"
+	"github.com/chester-hill-solutions/stow-s3/internal/version"
 )
 
 type cacheStatsProvider interface {

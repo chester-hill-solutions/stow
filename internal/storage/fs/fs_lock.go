@@ -10,7 +10,7 @@ import (
 	"syscall"
 	"time"
 
-	storage "github.com/chester-hill-solutions/stow/internal/storage"
+	storage "github.com/chester-hill-solutions/stow-s3/internal/storage"
 )
 
 const (

@@ -4,8 +4,8 @@ import (
 	"context"
 	"testing"
 
-	"github.com/chester-hill-solutions/stow/internal/storage"
-	"github.com/chester-hill-solutions/stow/internal/storage/fs"
+	"github.com/chester-hill-solutions/stow-s3/internal/storage"
+	"github.com/chester-hill-solutions/stow-s3/internal/storage/fs"
 )
 
 func runMultipartListContract(t *testing.T, store storage.Store) {

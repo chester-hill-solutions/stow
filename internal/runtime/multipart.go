@@ -5,7 +5,7 @@ import (
 	"context"
 	"io"
 
-	"github.com/chester-hill-solutions/stow/internal/storage"
+	"github.com/chester-hill-solutions/stow-s3/internal/storage"
 )
 
 func (i *Instance) CreateMultipartUpload(ctx context.Context, bucket, key string) (*storage.MultipartUpload, error) {

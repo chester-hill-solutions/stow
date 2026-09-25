@@ -6,20 +6,20 @@ import { resolve } from "node:path";
 const root = resolve(import.meta.dirname, "..");
 const goSource = readFileSync(resolve(root, "internal/version/version.go"), "utf8");
 const goVersion = goSource.match(/const Version = "([^"]+)"/)?.[1];
-const packageJson = JSON.parse(readFileSync(resolve(root, "packages/stow/package.json"), "utf8"));
+const packageJson = JSON.parse(readFileSync(resolve(root, "packages/stow-s3/package.json"), "utf8"));
 const problems = [];
 if (!goVersion || goVersion !== packageJson.version) {
-  problems.push(`version mismatch: internal/version=${goVersion ?? "missing"}, packages/stow=${packageJson.version}`);
+  problems.push(`version mismatch: internal/version=${goVersion ?? "missing"}, packages/stow-s3=${packageJson.version}`);
 }
 
 // The platform packages carry the native binary, so a version skew between them
 // and the main package would publish a tarball whose binary is from a different
 // release than the JavaScript that resolves it.
 const PLATFORM_PACKAGES = [
-  { dir: "stow-linux-x64", name: "@chs/stow-linux-x64", os: "linux", cpu: "x64" },
-  { dir: "stow-linux-arm64", name: "@chs/stow-linux-arm64", os: "linux", cpu: "arm64" },
-  { dir: "stow-darwin-x64", name: "@chs/stow-darwin-x64", os: "darwin", cpu: "x64" },
-  { dir: "stow-darwin-arm64", name: "@chs/stow-darwin-arm64", os: "darwin", cpu: "arm64" },
+  { dir: "stow-s3-linux-x64", name: "@chs/stow-s3-linux-x64", os: "linux", cpu: "x64" },
+  { dir: "stow-s3-linux-arm64", name: "@chs/stow-s3-linux-arm64", os: "linux", cpu: "arm64" },
+  { dir: "stow-s3-darwin-x64", name: "@chs/stow-s3-darwin-x64", os: "darwin", cpu: "x64" },
+  { dir: "stow-s3-darwin-arm64", name: "@chs/stow-s3-darwin-arm64", os: "darwin", cpu: "arm64" },
 ];
 
 const optional = packageJson.optionalDependencies ?? {};
@@ -28,19 +28,19 @@ const optional = packageJson.optionalDependencies ?? {};
 // here would publish a wheel whose binary is from a different release than the
 // Python code that resolves it, which is the same failure the npm platform
 // packages are checked for above.
-const pythonProject = readFileSync(resolve(root, "packages/stow-py/pyproject.toml"), "utf8");
+const pythonProject = readFileSync(resolve(root, "packages/stow-s3-py/pyproject.toml"), "utf8");
 const pythonVersion = pythonProject.match(/^version = "([^"]+)"/m)?.[1];
 if (!pythonVersion) {
-  problems.push("packages/stow-py/pyproject.toml has no top-level version");
+  problems.push("packages/stow-s3-py/pyproject.toml has no top-level version");
 } else if (pythonVersion !== goVersion) {
   problems.push(
-    `version mismatch: internal/version=${goVersion}, packages/stow-py=${pythonVersion}`,
+    `version mismatch: internal/version=${goVersion}, packages/stow-s3-py=${pythonVersion}`,
   );
 }
 
 // The Python package reports its own __version__, and a user comparing it with
 // the binary version needs the two to be the same number.
-const pythonInit = readFileSync(resolve(root, "packages/stow-py/src/stow_s3/__init__.py"), "utf8");
+const pythonInit = readFileSync(resolve(root, "packages/stow-s3-py/src/stow_s3/__init__.py"), "utf8");
 const pythonInitVersion = pythonInit.match(/^__version__ = "([^"]+)"/m)?.[1];
 if (pythonInitVersion !== pythonVersion) {
   problems.push(
@@ -106,10 +106,10 @@ if (declared.length > 0) {
 // Go, in GOOS/GOARCH form, while the manifests use npm's cpu names, so the two
 // are translated rather than compared as strings.
 const NPM_CPU_TO_GOARCH = { x64: "amd64", arm64: "arm64" };
-const doctorSource = readFileSync(resolve(root, "cmd/stow/doctor.go"), "utf8");
+const doctorSource = readFileSync(resolve(root, "cmd/stow-s3/doctor.go"), "utf8");
 const doctorList = doctorSource.match(/var supportedPlatforms = \[\]string\{([^}]*)\}/s)?.[1];
 if (!doctorList) {
-  problems.push("cmd/stow/doctor.go no longer declares supportedPlatforms");
+  problems.push("cmd/stow-s3/doctor.go no longer declares supportedPlatforms");
 } else {
   const declaredPlatforms = [...doctorList.matchAll(/"([a-z0-9]+)\/([a-z0-9]+)"/g)].map((m) => `${m[1]}/${m[2]}`);
   const shippedPlatforms = PLATFORM_PACKAGES.map((p) => `${p.os}/${NPM_CPU_TO_GOARCH[p.cpu] ?? p.cpu}`);
@@ -127,16 +127,31 @@ if (!doctorList) {
 // Go collector target that child runs with. A session's peak memory depends on
 // it, so a silent drift between the two clients would mean the Python and
 // TypeScript sessions behave differently for a reason nobody chose.
-const tsSession = readFileSync(resolve(root, "packages/stow/src/start.ts"), "utf8");
+const tsSession = readFileSync(resolve(root, "packages/stow-s3/src/start.ts"), "utf8");
 const tsGogc = tsSession.match(/^export const SESSION_GOGC = "(\d+)";/m)?.[1];
-const pySession = readFileSync(resolve(root, "packages/stow-py/src/stow_s3/session.py"), "utf8");
+const pySession = readFileSync(resolve(root, "packages/stow-s3-py/src/stow_s3/session.py"), "utf8");
 const pyGogc = pySession.match(/^SESSION_GOGC = "(\d+)"/m)?.[1];
 if (!tsGogc) {
-  problems.push("packages/stow/src/start.ts no longer declares SESSION_GOGC");
+  problems.push("packages/stow-s3/src/start.ts no longer declares SESSION_GOGC");
 } else if (!pyGogc) {
-  problems.push("packages/stow-py/src/stow_s3/session.py no longer declares SESSION_GOGC");
+  problems.push("packages/stow-s3-py/src/stow_s3/session.py no longer declares SESSION_GOGC");
 } else if (tsGogc !== pyGogc) {
   problems.push(`session GOGC differs between clients: TypeScript ${tsGogc}, Python ${pyGogc}`);
+}
+
+// Go writes the data-directory ownership marker; the TypeScript client reads it
+// before deleting anything. If the names drift, every reset silently refuses
+// and a developer is left with data they cannot clear through the package.
+const goOwner = readFileSync(resolve(root, "internal/storage/fs/owner.go"), "utf8");
+const goMarker = goOwner.match(/^const OwnerMarkerName = "([^"]+)"/m)?.[1];
+const tsOwner = readFileSync(resolve(root, "packages/stow-s3/src/ownership.ts"), "utf8");
+const tsMarker = tsOwner.match(/^export const STOW_OWNER_MARKER = "([^"]+)"/m)?.[1];
+if (!goMarker) {
+  problems.push("internal/storage/fs/owner.go no longer declares OwnerMarkerName");
+} else if (!tsMarker) {
+  problems.push("packages/stow-s3/src/ownership.ts no longer declares STOW_OWNER_MARKER");
+} else if (goMarker !== tsMarker) {
+  problems.push(`data directory ownership marker differs between writer and reader: Go ${goMarker}, TypeScript ${tsMarker}`);
 }
 
 if (problems.length > 0) {

@@ -87,7 +87,7 @@ move it behind its own subpath package, which is a separate decision.
   `Iterator[...]` annotations, both of which are 3.10 syntax.
 - **The binary ships inside a platform wheel of the one distribution, decided
   2026-09-25.** `pyproject.toml` force-includes the Go build output at
-  `stow_s3/_bin/stow`, and PyPI selects the matching wheel from its platform tag.
+  `stow_s3/_bin/stow-s3`, and PyPI selects the matching wheel from its platform tag.
   npm optional dependencies have no PyPI equivalent, and a wheel keeps the binary
   in the same distribution and version as the Python code, so the existing
   version skew gate extends to it without adding separately versioned artifacts
@@ -102,7 +102,7 @@ move it behind its own subpath package, which is a separate decision.
 - **The clean-virtualenv experiment passes.** A wheel was built, installed into a
   fresh virtualenv with no `STOW_BIN` and no `stow` on `PATH`, and a session was
   opened and used for a real put/get/list round trip. The binary resolved from
-  `stow_s3/_bin/stow` with source `platform-wheel`, the reported limits were the
+  `stow_s3/_bin/stow-s3` with source `platform-wheel`, the reported limits were the
   session defaults the server was actually enforcing, and the credentials
   appeared on neither the readiness channel's sibling stream nor the logs.
 
@@ -134,16 +134,16 @@ Verified in a clean room after the fix:
 code: binary_not_found
 name: StowBinaryNotFoundError
 message: The stow server binary was not found (resolved to "stow"). It is
-  searched for in this order: the STOW_BIN environment variable, bin/stow
+  searched for in this order: the STOW_BIN environment variable, bin/stow-s3
   relative to a monorepo checkout, then stow on PATH. Install the platform
   binary package for this platform, point STOW_BIN at an existing binary, or
-  use the EmbeddedStow and @chs/stow/browser profiles, which need no server
+  use the EmbeddedStow and @chs/stow-s3/browser profiles, which need no server
   binary.
 ```
 
 ## 7. Next steps
 
-1. ~~Add `@chs/stow-<platform>` optional packages and teach `resolveStowBinary` to
+1. ~~Add `@chs/stow-s3-<platform>` optional packages and teach `resolveStowBinary` to
    prefer a bundled platform binary over `PATH`.~~ Done.
 2. ~~Run the clean-virtualenv Python experiment for the `stow-s3`
    distribution.~~ Done, and passing.

@@ -5,9 +5,9 @@ import { join, relative, resolve } from "node:path";
 import { readPreviousBaseline } from "./baseline-history.mjs";
 
 const require = createRequire(import.meta.url);
-const ts = require("../packages/stow/node_modules/typescript");
+const ts = require("../packages/stow-s3/node_modules/typescript");
 const repoRoot = resolve(import.meta.dirname, "..");
-const packageRoot = resolve(repoRoot, "packages/stow");
+const packageRoot = resolve(repoRoot, "packages/stow-s3");
 const baselinePath = resolve(repoRoot, "scripts/baselines/type-escapes.json");
 const violations = [];
 const forbidden = [];

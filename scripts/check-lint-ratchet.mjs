@@ -5,7 +5,7 @@ import { dirname, join, relative, resolve } from "node:path";
 import { readPreviousBaseline } from "./baseline-history.mjs";
 
 const repoRoot = resolve(import.meta.dirname, "..");
-const packageRoot = resolve(repoRoot, "packages/stow");
+const packageRoot = resolve(repoRoot, "packages/stow-s3");
 const baselinePath = resolve(repoRoot, "scripts/baselines/lint-ratchet.json");
 const rules = [
   "complexity",
