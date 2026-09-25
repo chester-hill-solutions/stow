@@ -660,7 +660,17 @@ Exit criteria:
 - the distribution spike has a written answer and a chosen model;
 - a benchmark baseline exists, so section 11 targets are measurements rather
   than aspirations;
-- the default session cannot inherit upstream configuration accidentally.
+- the default session cannot inherit upstream configuration accidentally;
+- the session contract is recorded in `docs/adr/0004-agent-session-contract.md`,
+  including the default limits, the ready protocol, the error codes, and what is
+  explicitly deferred.
+
+**Status: complete.** The request cap, timeouts, quota flags, distribution
+spike, and baseline have landed. The one item deliberately not implemented is
+multipart staging and request-concurrency limits, recorded as an explicit
+non-goal in the ADR with its reasoning: each request is already bounded and the
+remaining exposure is unbounded request *count*, so a semaphore added now would
+be untested policy rather than a measured safeguard.
 
 ### Phase 1 — Build the shared session module and ready protocol
 
