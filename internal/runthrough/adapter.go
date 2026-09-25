@@ -9,6 +9,7 @@ import (
 	"sort"
 	"sync"
 	"sync/atomic"
+	"time"
 
 	"github.com/chester-hill-solutions/stow/internal/storage"
 )
@@ -39,6 +40,8 @@ type Adapter struct {
 	cacheMu           sync.Mutex
 	cacheEntries      map[string]cacheEntry
 	outboxLocks       outboxKeyLocks
+	claimOwner        string
+	claimLease        time.Duration
 }
 
 // New creates a run-through adapter. upstream may be nil for local-only behavior.
@@ -77,6 +80,8 @@ func NewWithOutbox(cfg Config, local, cache storage.Store, upstream Client, outb
 		separateCache:     cache != local,
 		durableOutbox:     durable,
 		cacheEntries:      make(map[string]cacheEntry),
+		claimOwner:        newOutboxOwner(),
+		claimLease:        defaultOutboxClaimLease,
 	}
 }
 
@@ -477,20 +482,4 @@ func mergeObjectLists(local, upstream []storage.ObjectMeta) []storage.ObjectMeta
 		out = append(out, byKey[k])
 	}
 	return out
-}
-
-func (a *Adapter) AbortMultipartUpload(ctx context.Context, uploadID string) error {
-	return a.local.AbortMultipartUpload(ctx, uploadID)
-}
-
-func (a *Adapter) ListParts(ctx context.Context, uploadID string) ([]storage.PartInfo, error) {
-	return a.local.ListParts(ctx, uploadID)
-}
-
-func (a *Adapter) ValidateMultipartUpload(ctx context.Context, uploadID, bucket, key string) error {
-	return a.local.ValidateMultipartUpload(ctx, uploadID, bucket, key)
-}
-
-func (a *Adapter) ListMultipartUploads(ctx context.Context, bucket string, opts storage.MultipartListOptions) (*storage.MultipartListResult, error) {
-	return a.local.ListMultipartUploads(ctx, bucket, opts)
 }

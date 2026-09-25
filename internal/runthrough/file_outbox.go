@@ -12,9 +12,10 @@ import (
 )
 
 type FileOutbox struct {
-	path  string
-	mu    sync.Mutex
-	state outboxState
+	path     string
+	lockPath string
+	mu       sync.Mutex
+	state    outboxState
 }
 
 type persistedOutbox struct {
@@ -27,23 +28,18 @@ func NewFileOutbox(path string) (*FileOutbox, error) {
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		return nil, err
 	}
-	o := &FileOutbox{path: path, state: newOutboxState()}
-	data, err := os.ReadFile(path)
-	if os.IsNotExist(err) {
-		return o, nil
-	}
+	o := &FileOutbox{path: path, lockPath: path + ".lock", state: newOutboxState()}
+	lock, err := acquireOutboxFileLock(o.lockPath)
 	if err != nil {
 		return nil, err
 	}
-	if len(data) == 0 {
-		return o, nil
-	}
-	state, err := decodeOutboxState(data)
-	if err != nil {
+	if err := o.reloadLocked(); err != nil {
+		_ = lock.release()
 		return nil, err
 	}
-	o.state = state
-	o.updateSequences()
+	if err := lock.release(); err != nil {
+		return nil, err
+	}
 	return o, nil
 }
 
@@ -80,6 +76,28 @@ func decodeOutboxState(data []byte) (outboxState, error) {
 	return outboxState{entries: persisted.Entries, prepared: persisted.Prepared, seq: persisted.Seq}, nil
 }
 
+func (o *FileOutbox) reloadLocked() error {
+	data, err := os.ReadFile(o.path)
+	if os.IsNotExist(err) {
+		o.state = newOutboxState()
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	if len(data) == 0 {
+		o.state = newOutboxState()
+		return nil
+	}
+	state, err := decodeOutboxState(data)
+	if err != nil {
+		return err
+	}
+	o.state = state
+	o.updateSequences()
+	return nil
+}
+
 func (o *FileOutbox) updateSequences() {
 	for id := range o.state.entries {
 		o.updateSequence(id)
@@ -99,123 +117,135 @@ func (o *FileOutbox) updateSequence(id string) {
 	}
 }
 
-func (o *FileOutbox) Enqueue(entry OutboxEntry) (OutboxEntry, error) {
+func (o *FileOutbox) withState(update func(*outboxState) error) (err error) {
 	o.mu.Lock()
 	defer o.mu.Unlock()
+	lock, err := acquireOutboxFileLock(o.lockPath)
+	if err != nil {
+		return err
+	}
+	defer func() {
+		if releaseErr := lock.release(); err == nil {
+			err = releaseErr
+		}
+	}()
+	if err := o.reloadLocked(); err != nil {
+		return err
+	}
 	next := o.state.clone()
-	enqueued := next.enqueue(entry)
+	if err := update(&next); err != nil {
+		return err
+	}
 	if err := o.persistState(next); err != nil {
-		return OutboxEntry{}, err
+		return err
 	}
 	o.state = next
+	return nil
+}
+
+func (o *FileOutbox) readState() (state outboxState, err error) {
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	lock, err := acquireOutboxFileLock(o.lockPath)
+	if err != nil {
+		return outboxState{}, err
+	}
+	defer func() {
+		if releaseErr := lock.release(); err == nil {
+			err = releaseErr
+		}
+	}()
+	if err := o.reloadLocked(); err != nil {
+		return outboxState{}, err
+	}
+	return o.state.clone(), nil
+}
+
+func (o *FileOutbox) Enqueue(entry OutboxEntry) (OutboxEntry, error) {
+	var enqueued OutboxEntry
+	err := o.withState(func(state *outboxState) error {
+		enqueued = state.enqueue(entry)
+		return nil
+	})
+	if err != nil {
+		return OutboxEntry{}, err
+	}
 	return enqueued, nil
 }
 
 func (o *FileOutbox) Prepare(entry OutboxEntry) (OutboxEntry, error) {
-	o.mu.Lock()
-	defer o.mu.Unlock()
-	next := o.state.clone()
-	prepared := next.prepare(entry)
-	if err := o.persistState(next); err != nil {
+	var prepared OutboxEntry
+	err := o.withState(func(state *outboxState) error {
+		prepared = state.prepare(entry)
+		return nil
+	})
+	if err != nil {
 		return OutboxEntry{}, err
 	}
-	o.state = next
 	return prepared, nil
 }
 
 func (o *FileOutbox) Prepared() []OutboxEntry {
-	o.mu.Lock()
-	defer o.mu.Unlock()
-	return o.state.preparedEntries()
+	state, err := o.readState()
+	if err != nil {
+		o.mu.Lock()
+		defer o.mu.Unlock()
+		return o.state.preparedEntries()
+	}
+	return state.preparedEntries()
 }
 
 func (o *FileOutbox) Pending() []OutboxEntry {
-	o.mu.Lock()
-	defer o.mu.Unlock()
-	return o.state.pending()
+	state, err := o.readState()
+	if err != nil {
+		o.mu.Lock()
+		defer o.mu.Unlock()
+		return o.state.pending()
+	}
+	return state.pending()
 }
 
 func (o *FileOutbox) MarkSuccess(id string) error {
-	o.mu.Lock()
-	defer o.mu.Unlock()
-	next := o.state.clone()
-	if err := next.markSuccess(id); err != nil {
-		return err
-	}
-	if err := o.persistState(next); err != nil {
-		return err
-	}
-	o.state = next
-	return nil
+	return o.withState(func(state *outboxState) error {
+		return state.markSuccess(id)
+	})
 }
 
 func (o *FileOutbox) MarkFailure(id string, cause error, retryAt time.Time) error {
-	o.mu.Lock()
-	defer o.mu.Unlock()
-	next := o.state.clone()
-	if err := next.markFailure(id, cause, retryAt); err != nil {
-		return err
-	}
-	if err := o.persistState(next); err != nil {
-		return err
-	}
-	o.state = next
-	return nil
+	return o.withState(func(state *outboxState) error {
+		return state.markFailure(id, cause, retryAt)
+	})
 }
 
 func (o *FileOutbox) Commit(id, version string) (OutboxEntry, error) {
-	o.mu.Lock()
-	defer o.mu.Unlock()
-	next := o.state.clone()
-	committed, err := next.commit(id, version)
+	var committed OutboxEntry
+	err := o.withState(func(state *outboxState) error {
+		var err error
+		committed, err = state.commit(id, version)
+		return err
+	})
 	if err != nil {
 		return OutboxEntry{}, err
 	}
-	if err := o.persistState(next); err != nil {
-		return OutboxEntry{}, err
-	}
-	o.state = next
 	return committed, nil
 }
 
 func (o *FileOutbox) DiscardPrepared(id string) error {
-	o.mu.Lock()
-	defer o.mu.Unlock()
-	next := o.state.clone()
-	if err := next.discardPrepared(id); err != nil {
-		return err
-	}
-	if err := o.persistState(next); err != nil {
-		return err
-	}
-	o.state = next
-	return nil
+	return o.withState(func(state *outboxState) error {
+		return state.discardPrepared(id)
+	})
 }
 
 func (o *FileOutbox) Discard(id string) error {
-	o.mu.Lock()
-	defer o.mu.Unlock()
-	next := o.state.clone()
-	if err := next.discard(id); err != nil {
-		return err
-	}
-	if err := o.persistState(next); err != nil {
-		return err
-	}
-	o.state = next
-	return nil
+	return o.withState(func(state *outboxState) error {
+		return state.discard(id)
+	})
 }
 
 func (o *FileOutbox) Durable() bool { return true }
 
 func (o *FileOutbox) Close() error {
-	o.mu.Lock()
-	defer o.mu.Unlock()
-	return o.persistLocked()
-}
-
-func (o *FileOutbox) persistLocked() error {
-	return o.persistState(o.state)
+	return o.withState(func(*outboxState) error { return nil })
 }
 
 func (o *FileOutbox) persistState(state outboxState) error {

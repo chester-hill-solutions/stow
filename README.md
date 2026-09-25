@@ -110,7 +110,7 @@ The native S3 endpoint and the TypeScript `Stow.start()` / `Stow.connect()` cont
 | `readThroughCache` | Read upstream on local cache misses; local writes remain local unless live writes are explicitly enabled |
 | `mirrorWrites` | Read-through plus durable upstream propagation; emits a loud startup warning |
 
-Live writes to upstream require `--allow-live-writes` / `STOW_ALLOW_LIVE_WRITES=true`, the filesystem backend, and a durable coordinated outbox. A prepared local-mutation intent is persisted before the local record changes; startup/retry reconciliation commits or discards it using the immutable object version. `MemoryOutbox` and other uncoordinated outboxes are rejected before a live mutation touches local storage.
+Live writes to upstream require `--allow-live-writes` / `STOW_ALLOW_LIVE_WRITES=true`, the filesystem backend, and a durable coordinated outbox. A prepared local-mutation intent is persisted before the local record changes; startup/retry reconciliation commits or discards it using the immutable object version. File-backed workers use expiring per-entry claims and a filesystem lock so separate processes do not concurrently propagate the same key; a process crash after an upstream success but before the acknowledgement remains at-least-once. `MemoryOutbox` and other uncoordinated outboxes are rejected before a live mutation touches local storage.
 
 Run-through cache limits can be set with `--cache-max-bytes`, `--cache-max-objects`, and `--cache-ttl`, or with `STOW_CACHE_MAX_BYTES`, `STOW_CACHE_MAX_OBJECTS`, and `STOW_CACHE_TTL`. Cache entries are bounded by LRU and optionally expire after the configured TTL.
 

@@ -144,18 +144,31 @@ func (a *Adapter) completeIntentWithScheduleLocked(ctx context.Context, entry Ou
 	if !ok || current.Terminal || (respectSchedule && !current.NextAttempt.IsZero() && current.NextAttempt.After(time.Now())) || !isFirstPendingForKey(pending, current) {
 		return nil
 	}
-	if err := a.propagateEntry(ctx, current); err != nil {
+	claim, err := a.claimPropagation(current)
+	if err != nil {
+		return err
+	}
+	if !claim.acquired {
+		return nil
+	}
+	if err := claim.propagate(ctx, a); err != nil {
 		retryAt := time.Time{}
 		if IsTransientRetry(err) {
 			retryAt = time.Now().Add(outboxRetryDelay(current.Attempts))
 		}
-		markErr := a.outbox.MarkFailure(current.ID, err, retryAt)
+		markErr := claim.failure(err, retryAt)
+		if claim.provider == nil {
+			markErr = a.outbox.MarkFailure(current.ID, err, retryAt)
+		}
 		if markErr != nil {
 			return errors.Join(err, markErr)
 		}
 		return err
 	}
-	return a.outbox.MarkSuccess(current.ID)
+	if claim.provider == nil {
+		return a.outbox.MarkSuccess(current.ID)
+	}
+	return claim.success()
 }
 
 func outboxRetryDelay(attempts int) time.Duration {

@@ -112,6 +112,8 @@ func outboxInspectEntries(entries []runthrough.OutboxEntry) []map[string]interfa
 			"prepared":      entry.Prepared,
 			"last_error":    outboxErrorClass(entry.LastError),
 			"next_attempt":  entry.NextAttempt,
+			"claim_owner":   entry.ClaimOwner,
+			"claim_until":   entry.ClaimUntil,
 		})
 	}
 	return out

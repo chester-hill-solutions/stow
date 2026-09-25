@@ -39,6 +39,8 @@ type OutboxEntry struct {
 	NextAttempt     time.Time       `json:"next_attempt"`
 	LastError       string          `json:"last_error,omitempty"`
 	Terminal        bool            `json:"terminal,omitempty"`
+	ClaimOwner      string          `json:"claim_owner,omitempty"`
+	ClaimUntil      time.Time       `json:"claim_until,omitempty"`
 }
 
 type Outbox interface {
@@ -143,6 +145,8 @@ func (s *outboxState) markFailure(id string, cause error, retryAt time.Time) err
 	}
 	entry.Attempts++
 	entry.NextAttempt = retryAt
+	entry.ClaimOwner = ""
+	entry.ClaimUntil = time.Time{}
 	if cause != nil {
 		entry.LastError = cause.Error()
 	}
