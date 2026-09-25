@@ -9,6 +9,49 @@ import (
 	"github.com/chester-hill-solutions/stow/internal/storage"
 )
 
+func TestMultipartUploadReservesOneObjectSlotPerTarget(t *testing.T) {
+	ctx := context.Background()
+	// Multipart is a native compatibility capability, so it needs a bound
+	// store rather than the public memory-only profile.
+	instance, err := OpenWithStore(Options{Backend: BackendMemory, MaxBytes: 64, MaxObjects: 1}, storage.NewMemoryStore(), nil)
+	if err != nil {
+		t.Fatalf("open with store: %v", err)
+	}
+	defer instance.Close()
+	if err := instance.CreateBucket(ctx, "bucket"); err != nil {
+		t.Fatalf("create bucket: %v", err)
+	}
+
+	// The first upload for a missing object spends the only object slot.
+	first, err := instance.CreateMultipartUpload(ctx, "bucket", "key")
+	if err != nil {
+		t.Fatalf("first upload: %v", err)
+	}
+	// A second upload for the same target reuses that slot instead of
+	// demanding another one.
+	if _, err := instance.CreateMultipartUpload(ctx, "bucket", "key"); err != nil {
+		t.Fatalf("second upload for the same key: %v", err)
+	}
+	// A different target has no slot left.
+	if _, err := instance.CreateMultipartUpload(ctx, "bucket", "other"); !errors.Is(err, ErrQuotaExceeded) {
+		t.Fatalf("upload for a new key error = %v, want quota exceeded", err)
+	}
+	if usage := instance.Usage(); usage.Objects != 0 || usage.Bytes != 0 {
+		t.Fatalf("in-flight uploads must not count as usage: %+v", usage)
+	}
+
+	part, err := instance.UploadPart(ctx, first.UploadID, 1, bytes.NewBufferString("value"))
+	if err != nil {
+		t.Fatalf("upload part: %v", err)
+	}
+	if _, err := instance.CompleteMultipartUpload(ctx, first.UploadID, []storage.PartInfo{*part}); err != nil {
+		t.Fatalf("complete upload: %v", err)
+	}
+	if usage := instance.Usage(); usage.Objects != 1 || usage.Bytes != 5 {
+		t.Fatalf("usage after completion = %+v, want one five-byte object", usage)
+	}
+}
+
 func TestOpenNormalizesOptions(t *testing.T) {
 	instance, err := Open(Options{})
 	if err != nil {

@@ -17,14 +17,15 @@ func (i *Instance) CreateMultipartUpload(ctx context.Context, bucket, key string
 	if err := i.checkMultipartOpen(); err != nil {
 		return nil, err
 	}
-	target := bucket + "\x00" + key
+	target := objectTarget(bucket, key)
 	_, exists, err := i.objectSize(ctx, bucket, key)
 	if err != nil {
 		return nil, err
 	}
-	_, targetReserved := i.reservedTargets[target]
-	reserveObject := !exists && !targetReserved
-	if reserveObject && i.usage.Objects+i.reservedObjects+1 > i.options.MaxObjects {
+	// A target that already holds a reservation has spent its object slot, so
+	// only a first upload for a missing object needs room for one.
+	needsObjectSlot := !exists && !i.hasTargetReservation(target)
+	if needsObjectSlot && !i.objectQuotaFits(target, 1) {
 		return nil, ErrQuotaExceeded
 	}
 	upload, err := i.store.CreateMultipartUpload(ctx, bucket, key)
@@ -34,9 +35,10 @@ func (i *Instance) CreateMultipartUpload(ctx context.Context, bucket, key string
 	clone := *upload
 	i.multipart[upload.UploadID] = multipartUsage{upload: clone, parts: make(map[int]int64)}
 	i.addMultipartTarget(target)
-	if reserveObject {
-		i.reservedTargets[target] = struct{}{}
-		i.reservedObjects++
+	if needsObjectSlot {
+		// The check above passed under this lock, so the reservation is
+		// guaranteed; declining it here would leave the upload uncounted.
+		i.reserveTarget(target)
 	}
 	return &clone, nil
 }
