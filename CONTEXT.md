@@ -26,7 +26,7 @@ When no explicit operational mode is configured, stow inspects environment varia
 
 ### Read-Through Cache
 
-Isolated local copy of upstream-derived objects populated on cache miss. On cache hit, it can be revalidated against upstream via ETag/Last-Modified before serving. Transient upstream failures may serve stale cached data; local-only writes are never evicted merely because upstream lacks the key. Separate caches may enforce byte and object-count limits with oldest-access eviction.
+Isolated local copy of upstream-derived objects populated on cache miss. On cache hit, it can be revalidated against upstream via ETag/Last-Modified before serving. Transient upstream failures may serve stale cached data; local-only writes are never evicted merely because upstream lacks the key. Separate caches may enforce byte and object-count limits with oldest-access eviction and an optional TTL.
 
 ### Mirror-Writes Policy
 
@@ -34,7 +34,7 @@ An explicit run-through policy that combines read-through behavior with propagat
 
 ### Write Outbox
 
-A durable, per-key ordered record of upstream propagation intents. Each entry references an immutable committed local object version, retries transient failures, and supports loopback-only inspection and retry/discard actions.
+A durable, per-key ordered record of upstream propagation intents. A prepared write-ahead entry is reconciled against the immutable committed local object version before propagation; transient failures are retried, and prepared/active entries support loopback-only inspection and retry/discard actions.
 
 ### Persisted Backend
 
