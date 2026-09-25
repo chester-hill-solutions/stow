@@ -37,6 +37,15 @@ jobs:
           make standards
       - name: Verify generated output
         run: make check-generated
+      - name: Pack verified npm package
+        working-directory: packages/stow
+        run: npm pack --ignore-scripts --pack-destination "$RUNNER_TEMP/npm-package"
+      - name: Upload verified npm package
+        uses: actions/upload-artifact@v4
+        with:
+          name: npm-package
+          path: ${{ runner.temp }}/npm-package/*.tgz
+          if-no-files-found: error
 
   build:
     name: Build (${{ matrix.os }}/${{ matrix.arch }})
@@ -111,28 +120,44 @@ jobs:
     runs-on: ubuntu-latest
     if: startsWith(github.ref, 'refs/tags/v')
     steps:
-      - name: Download all artifacts
+      - name: Download native artifacts
         uses: actions/download-artifact@v4
         with:
+          pattern: "stow-*"
           path: dist
           merge-multiple: true
+      - name: Download verified npm package
+        uses: actions/download-artifact@v4
+        with:
+          name: npm-package
+          path: dist/npm
 
       - name: Set up Node
         uses: actions/setup-node@v4
         with:
           node-version: 24
           registry-url: https://registry.npmjs.org
-          cache: npm
-          cache-dependency-path: packages/stow/package-lock.json
-      - name: Verify package metadata
-        working-directory: packages/stow
+      - name: Verify npm package artifact
+        shell: bash
         run: |
-          test "$(node -p "require('./package.json').version")" = "${GITHUB_REF_NAME#v}"
-          npm ci
-          npm test
+          set -euo pipefail
+          shopt -s nullglob
+          package_files=(dist/npm/*.tgz)
+          if [[ "${#package_files[@]}" -ne 1 ]]; then
+            printf 'Expected exactly one npm package tarball, found %d\n' "${#package_files[@]}" >&2
+            exit 1
+          fi
+          package_file="${package_files[0]}"
+          package_metadata="$(tar -xOf "$package_file" package/package.json)"
+          node -e '
+            const metadata = JSON.parse(process.argv[1]);
+            const expectedVersion = process.argv[2];
+            if (metadata.name !== "@chs/stow" || metadata.version !== expectedVersion) {
+              throw new Error(`Unexpected npm package metadata: ${metadata.name}@${metadata.version}`);
+            }
+          ' "$package_metadata" "${GITHUB_REF_NAME#v}"
       - name: Publish npm package
-        working-directory: packages/stow
-        run: npm publish --access public --provenance
+        run: npm publish --ignore-scripts --access public --provenance ./dist/npm/*.tgz
       - name: Checksums
         run: |
           cd dist
