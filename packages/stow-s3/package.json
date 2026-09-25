@@ -67,5 +67,9 @@
   "engines": {
     "node": ">=20"
   },
-  "license": "Apache-2.0"
+  "license": "Apache-2.0",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/chester-hill-solutions/stow-s3.git"
+  }
 }
