@@ -9,12 +9,15 @@ A **bucket** is a named container. An **object** is a file stored in a bucket, t
 ## What Stow provides
 
 - An S3 HTTP server for local development and tests.
-- A TypeScript package for Node.js and AWS SDK v3.
+- A scoped session API for TypeScript and Python: one call starts a private
+  server, hands back a ready S3 client, and cleans everything up on close.
 - A Go runtime for in-process, memory-backed storage.
 - A WebAssembly runtime for Node.js and browser integrations.
 - Filesystem persistence for data that must survive a process restart.
 - Read-through caching and explicit upstream write propagation for run-through workflows.
 - SigV4 authentication for the S3 endpoint.
+- `stow doctor`, a diagnostic that reports both the client and server sides of an
+  installation.
 
 Stow implements the common S3 operations needed by application and test workloads:
 
@@ -41,6 +44,103 @@ Use Stow when a workload needs S3 behavior without a cloud account or network se
 - browser or Node.js integrations that need an embedded runtime;
 - development against an existing upstream S3-compatible service.
 
+## Quick start: a scoped session
+
+A session is the shortest path from nothing to a working S3 client. It starts a
+private server on an ephemeral port, creates a bucket, waits until the server
+reports itself ready, and hands back a client that is already pointed at it. On
+close it stops the server and removes the data directory.
+
+TypeScript:
+
+```bash
+npm install @chs/stow @aws-sdk/client-s3
+```
+
+```ts
+import { GetObjectCommand, PutObjectCommand } from "@aws-sdk/client-s3";
+import { withStow } from "@chs/stow";
+
+const body = await withStow(async (session) => {
+  await session.s3.send(new PutObjectCommand({
+    Bucket: session.bucket,
+    Key: "input.json",
+    Body: '{"task":"summarize"}',
+  }));
+
+  const fetched = await session.s3.send(new GetObjectCommand({
+    Bucket: session.bucket,
+    Key: "input.json",
+  }));
+  return fetched.Body?.transformToString();
+});
+```
+
+`withStow` closes the session even if the callback throws, and reports both
+errors if the close also fails. Use `openStow` when you need the session to
+outlive a single callback.
+
+Python:
+
+```bash
+pip install "stow-s3[boto3]"
+```
+
+```python
+from stow_s3 import with_session
+
+with with_session() as session:
+    s3 = session.s3_client()
+    bucket = session.new_bucket_name()
+    s3.create_bucket(Bucket=bucket)
+    s3.put_object(Bucket=bucket, Key="input.json", Body=b'{"task":"summarize"}')
+    body = s3.get_object(Bucket=bucket, Key="input.json")["Body"].read()
+```
+
+The two clients differ in one deliberate way. The TypeScript session creates its
+bucket for you and exposes it as `session.bucket`. The Python session performs
+no S3 I/O at all: it hands back a client, and `new_bucket_name()` returns a name
+that is very unlikely to collide with another session. Creating the bucket is
+yours to do, which is what keeps `boto3` a genuinely optional extra.
+
+### What a session guarantees
+
+- **It cannot inherit your cloud configuration.** `STOW_*`, `S3_*`, and `AWS_*`
+  are stripped from the child environment before anything is set, so a stray
+  credential in your shell cannot turn a local session into a run-through one.
+- **It cannot outlive you.** A session passes its parent's process ID, and the
+  server exits if that process dies, including when it is killed rather than
+  closed.
+- **It reports the server's real limits, not assumed ones.** Capabilities and
+  limits come from the readiness message.
+- **It is bounded.** The default session holds at most 16 MiB and 1,000 objects,
+  and a single request body is capped at 8 MiB. The limits are enforced by the
+  server on every request, not by the client.
+- **It is tuned for many-per-machine use.** A session's own server runs with a
+  tighter garbage collector target than a long-lived server, because a session's
+  peak memory matters more than its throughput. Set `GOGC` yourself to override
+  it. A server you start with `stow serve` is never tuned this way.
+
+## Diagnostics: stow doctor
+
+When a session will not start, `stow doctor` reports what each side can see
+rather than a single opaque failure. It checks both the client and the server and
+merges the results into one list:
+
+```bash
+npx stow-doctor
+npx stow-doctor --json
+```
+
+It never prints a credential. Checks that only apply in some setups are reported
+as warnings rather than failures, so a local-only user is not failed for having
+no upstream S3.
+
+`npx stow-doctor` exits 0 when everything passed and 1 when a required check
+failed. The `stow doctor` subcommand on the server side uses a third code, 2, for
+a check that could not be run at all, so a broken installation is
+distinguishable from a healthy one with a failing optional check.
+
 ## Quick start: CLI server
 
 Build the binary:
@@ -62,6 +162,22 @@ STOW_READY endpoint=http://127.0.0.1:43127 access_key=... secret_key=... mode=lo
 ```
 
 Use the printed endpoint and credentials with an S3 client. The server supports path-style requests and uses `us-east-1` as its default region.
+
+A hand-run server keeps running when its shell exits, which is usually what you
+want. To make it exit when a specific parent process dies instead, pass
+`--parent-pid`:
+
+```bash
+./bin/stow serve --port 0 --parent-pid 12345
+```
+
+This is opt-in for that reason. A session sets it for you; see
+[Quick start: a scoped session](#quick-start-a-scoped-session).
+
+The `STOW_READY` line above is the simple channel. Sessions use a stricter,
+versioned channel that carries capabilities and limits as JSON over an inherited
+file descriptor, so credentials never appear on a log. Both clients reject a
+protocol version they do not speak rather than starting a half-working session.
 
 For a temporary in-memory server:
 
@@ -113,6 +229,11 @@ try {
 ```
 
 `Stow.start()` starts the `stow` executable, waits until it is ready, creates the requested buckets, and returns an AWS SDK configuration. When the executable is not in the repository's `bin/` directory, place `stow` on `PATH` or set `STOW_BIN`.
+
+`Stow.start()` is the long-lived form: the server keeps running until you stop
+it, and it uses the server's default collector settings. For a scoped,
+throwaway bucket that cleans up after itself, use
+[`withStow`](#quick-start-a-scoped-session) instead.
 
 Use `Stow.connect()` when an S3 endpoint is already running:
 
@@ -228,7 +349,25 @@ make test-all
 make standards
 ```
 
-The repository contains the Go server, storage backends, runtime packages, WebAssembly bridge, TypeScript package, and shared conformance tests.
+`make test-all` covers the Go server, the shared conformance suite across every
+backend, the TypeScript client, the Python client, and the WebAssembly bridge.
+`make standards` runs the quality ratchets; these are floors, so an improvement is
+reported rather than failed and a regression fails the build.
+
+The repository contains the Go server, storage backends, runtime packages, WebAssembly bridge, TypeScript package, Python package, and shared conformance tests.
+
+Measure session memory with the benchmark. It is deliberately not part of
+`make standards`, because it is a measurement tool rather than a check:
+
+```bash
+make build
+node packages/stow/scripts/benchmark-session.mjs --sweep
+```
+
+Rebuild before measuring. A benchmark run against a stale binary reports the
+previous build's numbers without saying so. The results, including several
+findings that contradicted an earlier theory about what drives session memory,
+are recorded in `docs/benchmarks/session-baseline.md`.
 
 ## License
 
