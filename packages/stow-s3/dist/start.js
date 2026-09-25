@@ -344,6 +344,15 @@ async function createStartupBuckets(instance, buckets, remainingStartupMs) {
 export async function startStow(options = {}) {
     return (await startStowWithReady(options)).instance;
 }
+// Both spellings mean the same thing and are now equally guarded: only a
+// directory stow created is deleted. cleanSlate is kept as an alias because
+// it shipped in 0.2.x, but it is no longer a raw recursive delete of whatever
+// string the caller passed.
+async function resetDataDirIfRequested(options, dataDir) {
+    if (options.resetOwnedData || options.cleanSlate) {
+        await resetOwnedData(dataDir);
+    }
+}
 export async function startStowWithReady(options = {}) {
     const dataDir = options.dataDir ?? ".stow";
     if ((options.cacheMaxBytes ?? 0) < 0 ||
@@ -353,13 +362,7 @@ export async function startStowWithReady(options = {}) {
     }
     const port = options.port ?? 0;
     const host = options.host ?? "127.0.0.1";
-    // Both spellings mean the same thing and are now equally guarded: only a
-    // directory stow created is deleted. cleanSlate is kept as an alias because
-    // it shipped in 0.2.x, but it is no longer a raw recursive delete of whatever
-    // string the caller passed.
-    if (options.resetOwnedData || options.cleanSlate) {
-        await resetOwnedData(dataDir);
-    }
+    await resetDataDirIfRequested(options, dataDir);
     const startupDeadline = Date.now() + STARTUP_TIMEOUT_MS;
     const remainingStartupMs = () => Math.max(1, startupDeadline - Date.now());
     // Fail with an actionable error before spawn turns a missing binary into a

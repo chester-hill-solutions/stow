@@ -428,6 +428,16 @@ export interface StowStartup {
   ready: StowReady;
 }
 
+// Both spellings mean the same thing and are now equally guarded: only a
+// directory stow created is deleted. cleanSlate is kept as an alias because
+// it shipped in 0.2.x, but it is no longer a raw recursive delete of whatever
+// string the caller passed.
+async function resetDataDirIfRequested(options: StartOptions, dataDir: string): Promise<void> {
+  if (options.resetOwnedData || options.cleanSlate) {
+    await resetOwnedData(dataDir);
+  }
+}
+
 export async function startStowWithReady(options: StartOptions = {}): Promise<StowStartup> {
   const dataDir = options.dataDir ?? ".stow";
   if (
@@ -440,13 +450,7 @@ export async function startStowWithReady(options: StartOptions = {}): Promise<St
   const port = options.port ?? 0;
   const host = options.host ?? "127.0.0.1";
 
-  // Both spellings mean the same thing and are now equally guarded: only a
-  // directory stow created is deleted. cleanSlate is kept as an alias because
-  // it shipped in 0.2.x, but it is no longer a raw recursive delete of whatever
-  // string the caller passed.
-  if (options.resetOwnedData || options.cleanSlate) {
-    await resetOwnedData(dataDir);
-  }
+  await resetDataDirIfRequested(options, dataDir);
 
   const startupDeadline = Date.now() + STARTUP_TIMEOUT_MS;
   const remainingStartupMs = (): number => Math.max(1, startupDeadline - Date.now());
