@@ -18,8 +18,10 @@ var (
 )
 
 const (
-	OutboxPut    OutboxOperation = "put"
-	OutboxDelete OutboxOperation = "delete"
+	OutboxPut       OutboxOperation = "put"
+	OutboxDelete    OutboxOperation = "delete"
+	OutboxCopy      OutboxOperation = "copy"
+	OutboxMultipart OutboxOperation = "multipart_complete"
 )
 
 type OutboxEntry struct {
@@ -27,6 +29,8 @@ type OutboxEntry struct {
 	Operation       OutboxOperation `json:"operation"`
 	Bucket          string          `json:"bucket"`
 	Key             string          `json:"key"`
+	SourceBucket    string          `json:"source_bucket,omitempty"`
+	SourceKey       string          `json:"source_key,omitempty"`
 	Version         string          `json:"version,omitempty"`
 	PreviousVersion string          `json:"previous_version,omitempty"`
 	Prepared        bool            `json:"prepared,omitempty"`

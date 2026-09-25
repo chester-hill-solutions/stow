@@ -20,6 +20,22 @@ func TestValidBucketName(t *testing.T) {
 	}
 }
 
+func TestValidateBucketNameRejectsIPAndReservedPrefixes(t *testing.T) {
+	invalid := []string{
+		"192.168.5.4",
+		"127.0.0.1",
+		"xn--bucket",
+		"sthree-bucket",
+		"amzn-s3-demo-bucket",
+		"amzn_s3_demo_bucket",
+	}
+	for _, name := range invalid {
+		if err := ValidateBucketName(name); err != ErrInvalidBucketName {
+			t.Errorf("ValidateBucketName(%q) = %v, want ErrInvalidBucketName", name, err)
+		}
+	}
+}
+
 func TestPaginateObjects_DelimiterAndTruncation(t *testing.T) {
 	now := time.Now().UTC()
 	items := []ObjectMeta{

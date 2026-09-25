@@ -206,7 +206,7 @@ func headOutputToMeta(bucket, key string, out *s3.HeadObjectOutput) *storage.Obj
 		Size:        aws.ToInt64(out.ContentLength),
 		ETag:        normalizeETag(aws.ToString(out.ETag)),
 		ContentType: aws.ToString(out.ContentType),
-		Metadata:    cloneStringMap(out.Metadata),
+		Metadata:    storage.CloneMetadata(out.Metadata),
 	}
 	applyUpstreamChecksum(meta, out.ChecksumCRC32, out.ChecksumCRC32C, out.ChecksumSHA1, out.ChecksumSHA256)
 	if out.LastModified != nil {
@@ -222,7 +222,7 @@ func getOutputToMeta(bucket, key string, out *s3.GetObjectOutput) *storage.Objec
 		Size:        aws.ToInt64(out.ContentLength),
 		ETag:        normalizeETag(aws.ToString(out.ETag)),
 		ContentType: aws.ToString(out.ContentType),
-		Metadata:    cloneStringMap(out.Metadata),
+		Metadata:    storage.CloneMetadata(out.Metadata),
 	}
 	applyUpstreamChecksum(meta, out.ChecksumCRC32, out.ChecksumCRC32C, out.ChecksumSHA1, out.ChecksumSHA256)
 	if out.LastModified != nil {
@@ -253,17 +253,6 @@ func normalizeETag(etag string) string {
 		return etag
 	}
 	return "\"" + strings.Trim(etag, "\"") + "\""
-}
-
-func cloneStringMap(m map[string]string) map[string]string {
-	if len(m) == 0 {
-		return nil
-	}
-	out := make(map[string]string, len(m))
-	for k, v := range m {
-		out[k] = v
-	}
-	return out
 }
 
 func applyUpstreamChecksum(meta *storage.ObjectMeta, crc32Value, crc32cValue, sha1Value, sha256Value *string) {

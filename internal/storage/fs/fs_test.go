@@ -1,4 +1,4 @@
-package storage_test
+package fs_test
 
 import (
 	"context"
@@ -11,21 +11,22 @@ import (
 	"time"
 
 	"github.com/chester-hill-solutions/stow/internal/storage"
+	"github.com/chester-hill-solutions/stow/internal/storage/fs"
 )
 
 func TestFilesystemStoreSingleOwnerLock(t *testing.T) {
 	dir := t.TempDir()
-	first, err := storage.NewFilesystemStore(dir)
+	first, err := fs.NewFilesystemStore(dir)
 	if err != nil {
 		t.Fatalf("first store: %v", err)
 	}
-	if _, err := storage.NewFilesystemStore(dir); err == nil {
+	if _, err := fs.NewFilesystemStore(dir); err == nil {
 		t.Fatal("expected second store to fail while lock is held")
 	}
 	if err := first.Close(); err != nil {
 		t.Fatalf("close first store: %v", err)
 	}
-	second, err := storage.NewFilesystemStore(dir)
+	second, err := fs.NewFilesystemStore(dir)
 	if err != nil {
 		t.Fatalf("second store after close: %v", err)
 	}
@@ -35,7 +36,7 @@ func TestFilesystemStoreSingleOwnerLock(t *testing.T) {
 func TestFilesystemStoreObjectLifecycle(t *testing.T) {
 	ctx := context.Background()
 	dir := t.TempDir()
-	store, err := storage.NewFilesystemStore(dir)
+	store, err := fs.NewFilesystemStore(dir)
 	if err != nil {
 		t.Fatalf("new store: %v", err)
 	}
@@ -100,7 +101,7 @@ func TestFilesystemStoreRemovesStaleAtomicTempsOnOpen(t *testing.T) {
 			t.Fatalf("write temp: %v", err)
 		}
 	}
-	store, err := storage.NewFilesystemStore(dir)
+	store, err := fs.NewFilesystemStore(dir)
 	if err != nil {
 		t.Fatalf("new store: %v", err)
 	}
@@ -114,7 +115,7 @@ func TestFilesystemStoreRemovesStaleAtomicTempsOnOpen(t *testing.T) {
 
 func TestFilesystemStoreDoesNotCleanTempsBeforeOwningLock(t *testing.T) {
 	dir := t.TempDir()
-	first, err := storage.NewFilesystemStore(dir)
+	first, err := fs.NewFilesystemStore(dir)
 	if err != nil {
 		t.Fatalf("first store: %v", err)
 	}
@@ -130,7 +131,7 @@ func TestFilesystemStoreDoesNotCleanTempsBeforeOwningLock(t *testing.T) {
 		t.Fatalf("write temp: %v", err)
 	}
 
-	if _, err := storage.NewFilesystemStore(dir); err == nil {
+	if _, err := fs.NewFilesystemStore(dir); err == nil {
 		_ = first.Close()
 		t.Fatal("expected second store to fail while lock is held")
 	}
@@ -141,7 +142,7 @@ func TestFilesystemStoreDoesNotCleanTempsBeforeOwningLock(t *testing.T) {
 		t.Fatalf("close first store: %v", err)
 	}
 
-	second, err := storage.NewFilesystemStore(dir)
+	second, err := fs.NewFilesystemStore(dir)
 	if err != nil {
 		t.Fatalf("second store after close: %v", err)
 	}
@@ -169,7 +170,7 @@ func TestFilesystemStoreRecoversStaleLockBeforeCleanup(t *testing.T) {
 		t.Fatalf("age stale lock: %v", err)
 	}
 
-	store, err := storage.NewFilesystemStore(dir)
+	store, err := fs.NewFilesystemStore(dir)
 	if err != nil {
 		t.Fatalf("new store should recover stale lock: %v", err)
 	}
@@ -182,7 +183,7 @@ func TestFilesystemStoreRecoversStaleLockBeforeCleanup(t *testing.T) {
 func TestFilesystemStoreMultipartCompletionReportsCleanupFailureAndCanRecover(t *testing.T) {
 	ctx := context.Background()
 	dir := t.TempDir()
-	store, err := storage.NewFilesystemStore(dir)
+	store, err := fs.NewFilesystemStore(dir)
 	if err != nil {
 		t.Fatalf("new store: %v", err)
 	}
@@ -234,7 +235,7 @@ func TestFilesystemStoreMultipartCompletionReportsCleanupFailureAndCanRecover(t 
 func TestFilesystemStoreUsesSingleObjectRecord(t *testing.T) {
 	ctx := context.Background()
 	dir := t.TempDir()
-	store, err := storage.NewFilesystemStore(dir)
+	store, err := fs.NewFilesystemStore(dir)
 	if err != nil {
 		t.Fatalf("new store: %v", err)
 	}
@@ -256,7 +257,7 @@ func TestFilesystemStoreUsesSingleObjectRecord(t *testing.T) {
 		t.Fatalf("close store: %v", err)
 	}
 
-	reopened, err := storage.NewFilesystemStore(dir)
+	reopened, err := fs.NewFilesystemStore(dir)
 	if err != nil {
 		t.Fatalf("reopen store: %v", err)
 	}
@@ -281,7 +282,7 @@ func TestFilesystemStoreUsesSingleObjectRecord(t *testing.T) {
 func TestFilesystemStoreOpaqueKeys(t *testing.T) {
 	ctx := context.Background()
 	dir := t.TempDir()
-	store, err := storage.NewFilesystemStore(dir)
+	store, err := fs.NewFilesystemStore(dir)
 	if err != nil {
 		t.Fatalf("new store: %v", err)
 	}
@@ -313,7 +314,7 @@ func TestFilesystemStoreOpaqueKeys(t *testing.T) {
 func TestFilesystemStoreMultipart(t *testing.T) {
 	ctx := context.Background()
 	dir := t.TempDir()
-	store, err := storage.NewFilesystemStore(dir)
+	store, err := fs.NewFilesystemStore(dir)
 	if err != nil {
 		t.Fatalf("new store: %v", err)
 	}
@@ -359,7 +360,7 @@ func TestFilesystemStoreMultipart(t *testing.T) {
 func TestFilesystemStoreDeleteBucketNotEmpty(t *testing.T) {
 	ctx := context.Background()
 	dir := t.TempDir()
-	store, _ := storage.NewFilesystemStore(dir)
+	store, _ := fs.NewFilesystemStore(dir)
 	_ = store.CreateBucket(ctx, "bucket")
 	_, _ = store.PutObject(ctx, "bucket", "k", strings.NewReader("x"), storage.PutOptions{})
 

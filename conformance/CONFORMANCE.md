@@ -26,12 +26,13 @@ go test ./conformance/... -count=1 -v
 | Presigned GET/PUT | `TestPresignedGetPut` |
 | DeleteObjects batch | `TestDeleteObjects` |
 | SigV4 enforced | `TestSigV4RejectsUnsigned` |
+| Shared corpus + response status | `TestSharedCorpusRoundTrip` (memory/filesystem) |
 
 ## Gaps / not yet covered
 
 - **Virtual-hosted URL style** (§2.8): path-style only in this suite; virtual-hosted smoke test pending.
-- **ListObjectsV2** delimiter, pagination, `encoding-type=url` (§2.4): prefix-only coverage today.
-- **CopyObject** cross-bucket metadata directive / preconditions (§2.6): basic same-bucket copy only.
+- **ListObjectsV2** delimiter, pagination, `encoding-type=url` (§2.4): prefix and direct-runtime cursor coverage exists, but the shared declarative corpus is still round-trip-focused.
+- **CopyObject** cross-bucket metadata directive / preconditions (§2.6): basic same-bucket copy and focused preconditions are covered; the full operation/status matrix is pending.
 - **Presigned URL** expiry and OPTIONS preflight (§2.3): happy-path GET/PUT only.
-- **Run-through / upstream** (§6.4): gated by `STOW_CONFORMANCE_UPSTREAM=1`; not implemented yet.
-- **Node AWS SDK v3** (`@aws-sdk/client-s3`): not in this Go package; add under `packages/stow` if needed.
+- **Run-through / upstream** (§6.4): one disposable endpoint is gated by `STOW_CONFORMANCE_UPSTREAM=1`; the AWS/R2/custom-provider matrix is still future work.
+- **Node AWS SDK v3** (`@aws-sdk/client-s3`): shared corpus and lifecycle coverage live under `packages/stow`; direct-runtime differential cases remain future work.

@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/chester-hill-solutions/stow/internal/storage"
+	"github.com/chester-hill-solutions/stow/internal/storage/fs"
 )
 
 type storeFactory struct {
@@ -28,7 +29,7 @@ func backendFactories(t *testing.T) []storeFactory {
 			name: "filesystem",
 			new: func(t *testing.T) storage.Store {
 				t.Helper()
-				store, err := storage.NewFilesystemStore(t.TempDir())
+				store, err := fs.NewFilesystemStore(t.TempDir())
 				if err != nil {
 					t.Fatalf("new filesystem store: %v", err)
 				}
@@ -214,4 +215,114 @@ func TestStoreRejectsDuplicateMultipartParts(t *testing.T) {
 			t.Fatalf("complete error = %v, want ErrInvalidPart", err)
 		}
 	})
+}
+
+func TestStoreRejectsUnsortedMultipartCompletionParts(t *testing.T) {
+	withStores(t, func(t *testing.T, store storage.Store) {
+		ctx := context.Background()
+		if err := store.CreateBucket(ctx, "uploads"); err != nil {
+			t.Fatalf("create bucket: %v", err)
+		}
+		upload, err := store.CreateMultipartUpload(ctx, "uploads", "object.bin")
+		if err != nil {
+			t.Fatalf("create upload: %v", err)
+		}
+		first, err := store.UploadPart(ctx, upload.UploadID, 1, strings.NewReader("first"))
+		if err != nil {
+			t.Fatalf("upload first part: %v", err)
+		}
+		second, err := store.UploadPart(ctx, upload.UploadID, 2, strings.NewReader("second"))
+		if err != nil {
+			t.Fatalf("upload second part: %v", err)
+		}
+		parts := []storage.PartInfo{*second, *first}
+		if _, err := store.CompleteMultipartUpload(ctx, upload.UploadID, parts); !errors.Is(err, storage.ErrInvalidPart) {
+			t.Fatalf("complete error = %v, want ErrInvalidPart", err)
+		}
+		if parts[0].PartNumber != 2 {
+			t.Fatalf("completion parts were reordered: %+v", parts)
+		}
+	})
+}
+
+type pagedPartLister interface {
+	ListPartsPage(context.Context, string, storage.ListPartsOptions) (*storage.ListPartsResult, error)
+}
+
+func requirePagedPartLister(t *testing.T, store storage.Store) pagedPartLister {
+	t.Helper()
+	lister, ok := store.(pagedPartLister)
+	if !ok {
+		t.Fatal("store does not expose paginated ListParts")
+	}
+	return lister
+}
+
+func seedPartUpload(t *testing.T, store storage.Store) string {
+	t.Helper()
+	ctx := context.Background()
+	if err := store.CreateBucket(ctx, "uploads"); err != nil {
+		t.Fatalf("create bucket: %v", err)
+	}
+	upload, err := store.CreateMultipartUpload(ctx, "uploads", "object.bin")
+	if err != nil {
+		t.Fatalf("create upload: %v", err)
+	}
+	for _, partNumber := range []int{1, 2, 3} {
+		if _, err := store.UploadPart(ctx, upload.UploadID, partNumber, strings.NewReader("part")); err != nil {
+			t.Fatalf("upload part %d: %v", partNumber, err)
+		}
+	}
+	return upload.UploadID
+}
+
+type partPageExpectation struct {
+	part      int
+	marker    int
+	next      int
+	maxParts  int
+	truncated bool
+}
+
+func assertPartPage(t *testing.T, page *storage.ListPartsResult, want partPageExpectation) {
+	t.Helper()
+	if len(page.Parts) != 1 {
+		t.Fatalf("parts = %+v, want one", page.Parts)
+	}
+	if page.Parts[0].PartNumber != want.part {
+		t.Fatalf("part number = %d, want %d", page.Parts[0].PartNumber, want.part)
+	}
+	if page.PartNumberMarker != want.marker {
+		t.Fatalf("part marker = %d, want %d", page.PartNumberMarker, want.marker)
+	}
+	if page.NextPartNumberMarker != want.next {
+		t.Fatalf("next part marker = %d, want %d", page.NextPartNumberMarker, want.next)
+	}
+	if page.MaxParts != want.maxParts {
+		t.Fatalf("max parts = %d, want %d", page.MaxParts, want.maxParts)
+	}
+	if page.IsTruncated != want.truncated {
+		t.Fatalf("truncated = %v, want %v", page.IsTruncated, want.truncated)
+	}
+}
+
+func testListPartsPaginationMarkers(t *testing.T, store storage.Store) {
+	ctx := context.Background()
+	lister := requirePagedPartLister(t, store)
+	uploadID := seedPartUpload(t, store)
+	first, err := lister.ListPartsPage(ctx, uploadID, storage.ListPartsOptions{PartNumberMarker: 1, MaxParts: 1})
+	if err != nil {
+		t.Fatalf("first page: %v", err)
+	}
+	assertPartPage(t, first, partPageExpectation{part: 2, marker: 1, next: 2, maxParts: 1, truncated: true})
+
+	last, err := lister.ListPartsPage(ctx, uploadID, storage.ListPartsOptions{PartNumberMarker: 2, MaxParts: 1})
+	if err != nil {
+		t.Fatalf("last page: %v", err)
+	}
+	assertPartPage(t, last, partPageExpectation{part: 3, marker: 2, maxParts: 1})
+}
+
+func TestStoreListPartsPaginationMarkers(t *testing.T) {
+	withStores(t, testListPartsPaginationMarkers)
 }

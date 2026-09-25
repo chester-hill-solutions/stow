@@ -18,6 +18,7 @@ import (
 	"github.com/chester-hill-solutions/stow/internal/auth"
 	"github.com/chester-hill-solutions/stow/internal/s3api"
 	"github.com/chester-hill-solutions/stow/internal/storage"
+	"github.com/chester-hill-solutions/stow/internal/storage/fs"
 )
 
 const testRegion = auth.DefaultRegion
@@ -72,7 +73,7 @@ func newTestEnv(t *testing.T) *testEnv {
 		store = storage.NewMemoryStore()
 	case "filesystem":
 		var err error
-		store, err = storage.NewFilesystemStore(t.TempDir())
+		store, err = fs.NewFilesystemStore(t.TempDir())
 		if err != nil {
 			t.Fatalf("filesystem store: %v", err)
 		}

@@ -4,7 +4,7 @@
     {
       "rule": "complexity",
       "identity": "cmd/stow/main.go:serve#1",
-      "message": "function serve has complexity 43 (maximum 15)"
+      "message": "function serve has complexity 44 (maximum 15)"
     },
     {
       "rule": "complexity",
@@ -35,11 +35,6 @@
       "rule": "any",
       "identity": "internal/s3api/admin.go#2",
       "message": "use of any"
-    },
-    {
-      "rule": "complexity",
-      "identity": "internal/s3api/admin.go:dispatch#1",
-      "message": "function dispatch has complexity 34 (maximum 15)"
     },
     {
       "rule": "any",
@@ -83,13 +78,13 @@
     },
     {
       "rule": "any",
-      "identity": "internal/storage/fs_atomic.go#1",
+      "identity": "internal/storage/fs/fs_atomic.go#1",
       "message": "use of any"
     }
   ],
   "counts": {
     "any": 5,
-    "complexity": 4,
+    "complexity": 3,
     "max-params": 8
   }
 }

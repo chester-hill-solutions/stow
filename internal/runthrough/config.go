@@ -127,8 +127,8 @@ func ConfigFromEnv() Config {
 	if cache := strings.ToLower(strings.TrimSpace(os.Getenv("STOW_CACHE"))); cache == "revalidate-never" {
 		cfg.Revalidate = false
 	}
-	if v, ok := envBool("STOW_REVALIDATE"); ok {
-		cfg.Revalidate = v
+	if value, present, err := parseEnvBool("STOW_REVALIDATE"); present && err == nil {
+		cfg.Revalidate = value
 	}
 
 	if cfg.Policy == PolicyMirrorWrites {
@@ -148,6 +148,11 @@ func ConfigFromEnvChecked() (Config, error) {
 	cfg := ConfigFromEnv()
 	if err := applyCacheEnv(&cfg); err != nil {
 		return cfg, err
+	}
+	if raw, present := os.LookupEnv("STOW_REVALIDATE"); present && strings.TrimSpace(raw) != "" {
+		if _, _, err := parseEnvBool("STOW_REVALIDATE"); err != nil {
+			return cfg, err
+		}
 	}
 	if raw := strings.TrimSpace(os.Getenv("STOW_POLICY")); raw != "" {
 		if _, ok := ParsePolicy(raw); !ok {
@@ -236,17 +241,17 @@ func envTruthy(key string) bool {
 	}
 }
 
-func envBool(key string) (bool, bool) {
-	v, ok := os.LookupEnv(key)
-	if !ok || strings.TrimSpace(v) == "" {
-		return false, false
+func parseEnvBool(key string) (bool, bool, error) {
+	raw, ok := os.LookupEnv(key)
+	if !ok || strings.TrimSpace(raw) == "" {
+		return false, false, nil
 	}
-	switch strings.ToLower(strings.TrimSpace(v)) {
+	switch strings.ToLower(strings.TrimSpace(raw)) {
 	case "1", "true", "yes", "on":
-		return true, true
+		return true, true, nil
 	case "0", "false", "no", "off":
-		return false, true
+		return false, true, nil
 	default:
-		return false, true
+		return false, true, fmt.Errorf("invalid %s %q: expected a boolean", key, raw)
 	}
 }

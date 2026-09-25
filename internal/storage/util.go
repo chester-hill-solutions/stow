@@ -6,12 +6,22 @@ import (
 	"encoding/hex"
 	"fmt"
 	"io"
+	"net"
 	"sort"
 	"strings"
 	"unicode/utf8"
 )
 
-func validateBucketName(name string) error {
+// Reserved service prefixes must not be used for caller-created buckets.
+var reservedBucketPrefixes = [...]string{
+	"xn--",
+	"sthree-",
+	"amzn-s3-demo-",
+	"amzn_s3_demo_",
+}
+
+// ValidateBucketName validates a bucket name for all storage backends.
+func ValidateBucketName(name string) error {
 	if len(name) < 3 || len(name) > 63 || strings.Contains(name, "..") {
 		return ErrInvalidBucketName
 	}
@@ -21,21 +31,31 @@ func validateBucketName(name string) error {
 		}
 		return ErrInvalidBucketName
 	}
+	if net.ParseIP(name) != nil {
+		return ErrInvalidBucketName
+	}
+	for _, prefix := range reservedBucketPrefixes {
+		if strings.HasPrefix(name, prefix) {
+			return ErrInvalidBucketName
+		}
+	}
 	return nil
 }
 
 func ValidBucketName(name string) bool {
-	return validateBucketName(name) == nil
+	return ValidateBucketName(name) == nil
 }
 
-func validateKey(key string) error {
+// ValidateKey validates an object key for all storage backends.
+func ValidateKey(key string) error {
 	if key == "" || len(key) > 1024 || !utf8.ValidString(key) || strings.IndexByte(key, 0) >= 0 {
 		return ErrInvalidKey
 	}
 	return nil
 }
 
-func newRecordVersion() (string, error) {
+// NewRecordVersion returns an opaque immutable object version identifier.
+func NewRecordVersion() (string, error) {
 	var version [16]byte
 	if _, err := rand.Read(version[:]); err != nil {
 		return "", err
@@ -43,16 +63,28 @@ func newRecordVersion() (string, error) {
 	return hex.EncodeToString(version[:]), nil
 }
 
-func etagForBytes(data []byte) string {
+// NewUploadID returns an opaque multipart upload identifier.
+func NewUploadID() (string, error) {
+	var id [16]byte
+	if _, err := rand.Read(id[:]); err != nil {
+		return "", err
+	}
+	return hex.EncodeToString(id[:]), nil
+}
+
+// ETagForBytes returns the storage ETag for a byte slice.
+func ETagForBytes(data []byte) string {
 	sum := md5.Sum(data)
 	return fmt.Sprintf("\"%s\"", hex.EncodeToString(sum[:]))
 }
 
-func etagEqual(left, right string) bool {
+// ETagEqual compares two storage ETags.
+func ETagEqual(left, right string) bool {
 	return strings.Trim(left, "\"") == strings.Trim(right, "\"")
 }
 
-func compositeETag(partETags []string) string {
+// CompositeETag returns the ETag for a completed multipart upload.
+func CompositeETag(partETags []string) string {
 	h := md5.New()
 	for _, etag := range partETags {
 		raw, err := hex.DecodeString(strings.Trim(etag, "\""))
@@ -63,29 +95,33 @@ func compositeETag(partETags []string) string {
 	return fmt.Sprintf("\"%s-%d\"", hex.EncodeToString(h.Sum(nil)), len(partETags))
 }
 
-func validateMultipartPartNumbers(parts []PartInfo) error {
-	seen := make(map[int]struct{}, len(parts))
+// ValidateMultipartPartNumbers validates that completion parts are in strictly
+// ascending order, with no duplicate part numbers.
+func ValidateMultipartPartNumbers(parts []PartInfo) error {
+	previous := 0
 	for _, part := range parts {
 		if part.PartNumber < 1 || part.PartNumber > 10000 {
 			return ErrInvalidPart
 		}
-		if _, ok := seen[part.PartNumber]; ok {
+		if part.PartNumber <= previous {
 			return ErrInvalidPart
 		}
-		seen[part.PartNumber] = struct{}{}
+		previous = part.PartNumber
 	}
 	return nil
 }
 
-func etagForReader(r io.Reader) (string, []byte, error) {
+// ETagForReader reads an object and returns its ETag and bytes.
+func ETagForReader(r io.Reader) (string, []byte, error) {
 	data, err := io.ReadAll(r)
 	if err != nil {
 		return "", nil, err
 	}
-	return etagForBytes(data), data, nil
+	return ETagForBytes(data), data, nil
 }
 
-func cloneMetadata(m map[string]string) map[string]string {
+// CloneMetadata returns an independent copy of object metadata.
+func CloneMetadata(m map[string]string) map[string]string {
 	if len(m) == 0 {
 		return nil
 	}
@@ -127,6 +163,43 @@ func maxUploadsOrDefault(max int) int {
 		return 1000
 	}
 	return max
+}
+
+func maxPartsOrDefault(max int) int {
+	if max <= 0 {
+		return 1000
+	}
+	return max
+}
+
+// PaginateParts applies ListParts marker and max-parts semantics to parts.
+// The input is sorted on a copy so callers retain their original ordering.
+func PaginateParts(items []PartInfo, opts ListPartsOptions) *ListPartsResult {
+	marker := opts.PartNumberMarker
+	if marker < 0 {
+		marker = 0
+	}
+	result := &ListPartsResult{
+		Parts:            make([]PartInfo, 0),
+		PartNumberMarker: marker,
+		MaxParts:         maxPartsOrDefault(opts.MaxParts),
+	}
+	ordered := append([]PartInfo(nil), items...)
+	sort.SliceStable(ordered, func(i, j int) bool {
+		return ordered[i].PartNumber < ordered[j].PartNumber
+	})
+	for _, part := range ordered {
+		if part.PartNumber <= marker {
+			continue
+		}
+		if len(result.Parts) >= result.MaxParts {
+			result.IsTruncated = true
+			result.NextPartNumberMarker = result.Parts[len(result.Parts)-1].PartNumber
+			break
+		}
+		result.Parts = append(result.Parts, part)
+	}
+	return result
 }
 
 func PaginateMultipartUploads(items []MultipartUpload, opts MultipartListOptions) *MultipartListResult {
@@ -221,19 +294,4 @@ func PaginateObjects(items []ObjectMeta, opts ListOptions) *ListResult {
 	}
 	result.KeyCount = len(result.Objects) + len(result.CommonPrefixes)
 	return result
-}
-
-// objectRelPath returns a reversible, flat filesystem name for an object key.
-// Encoding the complete key avoids path traversal and preserves empty, repeated,
-// and dot path segments.
-func objectRelPath(key string) string {
-	return hex.EncodeToString([]byte(key))
-}
-
-func objectKeyFromFilename(name string) (string, bool) {
-	decoded, err := hex.DecodeString(name)
-	if err != nil {
-		return "", false
-	}
-	return string(decoded), true
 }

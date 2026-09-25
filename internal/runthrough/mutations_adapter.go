@@ -195,7 +195,7 @@ func (a *Adapter) CopyObject(ctx context.Context, srcBucket, srcKey, dstBucket, 
 		if err != nil {
 			return nil, err
 		}
-		prepared, err = a.enqueuePreparedIntentLocked(OutboxPut, dstBucket, dstKey, previousVersion)
+		prepared, err = a.enqueuePreparedIntentLocked(OutboxCopy, dstBucket, dstKey, previousVersion, srcBucket, srcKey)
 		if err != nil {
 			return nil, err
 		}
@@ -256,7 +256,7 @@ func (a *Adapter) CompleteMultipartUpload(ctx context.Context, uploadID string, 
 		if err != nil {
 			return nil, err
 		}
-		prepared, err = a.enqueuePreparedIntentLocked(OutboxPut, bucket, key, previousVersion)
+		prepared, err = a.enqueuePreparedIntentLocked(OutboxMultipart, bucket, key, previousVersion)
 		if err != nil {
 			return nil, err
 		}

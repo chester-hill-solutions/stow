@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"github.com/chester-hill-solutions/stow/internal/storage"
+	"github.com/chester-hill-solutions/stow/internal/storage/fs"
 )
 
 func runMultipartListContract(t *testing.T, store storage.Store) {
@@ -55,9 +56,9 @@ func TestFilesystemStoreMultipartListContract(t *testing.T) {
 	runMultipartListContract(t, mustFilesystemStore(t))
 }
 
-func mustFilesystemStore(t *testing.T) *storage.FilesystemStore {
+func mustFilesystemStore(t *testing.T) *fs.FilesystemStore {
 	t.Helper()
-	store, err := storage.NewFilesystemStore(t.TempDir())
+	store, err := fs.NewFilesystemStore(t.TempDir())
 	if err != nil {
 		t.Fatalf("new filesystem store: %v", err)
 	}

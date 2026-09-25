@@ -1,4 +1,4 @@
-package storage
+package fs
 
 import (
 	"errors"
@@ -9,6 +9,8 @@ import (
 	"strings"
 	"syscall"
 	"time"
+
+	storage "github.com/chester-hill-solutions/stow/internal/storage"
 )
 
 const (
@@ -18,7 +20,7 @@ const (
 
 func acquireStoreLock(lockPath string) (string, error) {
 	for attempt := 0; attempt < 2; attempt++ {
-		nonce, err := newUploadID()
+		nonce, err := storage.NewUploadID()
 		if err != nil {
 			return "", err
 		}

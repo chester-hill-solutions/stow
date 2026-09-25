@@ -1,10 +1,12 @@
-package storage
+package fs
 
 import (
 	"encoding/json"
 	"fmt"
 	"os"
 	"time"
+
+	storage "github.com/chester-hill-solutions/stow/internal/storage"
 )
 
 const objectRecordVersion = 1
@@ -44,12 +46,12 @@ func readObjectRecord(path string) (objectRecord, error) {
 	return record, nil
 }
 
-func (r objectRecord) meta(bucket, key string) ObjectMeta {
+func (r objectRecord) meta(bucket, key string) storage.ObjectMeta {
 	versionID := r.RecordVersion
 	if versionID == "" {
 		versionID = r.ETag
 	}
-	return ObjectMeta{
+	return storage.ObjectMeta{
 		Bucket:            bucket,
 		Key:               key,
 		VersionID:         versionID,
@@ -57,7 +59,7 @@ func (r objectRecord) meta(bucket, key string) ObjectMeta {
 		ETag:              r.ETag,
 		ContentType:       r.ContentType,
 		LastModified:      r.LastModified.UTC(),
-		Metadata:          cloneMetadata(r.Metadata),
+		Metadata:          storage.CloneMetadata(r.Metadata),
 		ChecksumAlgorithm: r.ChecksumAlgorithm,
 		ChecksumValue:     r.ChecksumValue,
 	}

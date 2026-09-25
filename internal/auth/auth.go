@@ -2,7 +2,6 @@
 package auth
 
 import (
-	"io"
 	"net/http"
 	"time"
 )
@@ -55,8 +54,4 @@ func (v *Verifier) AuthenticateAt(r *http.Request, creds Credentials, now time.T
 		maxSkew = DefaultMaxSkew
 	}
 	return verifySignedRequest(r, creds, region, maxSkew, now.UTC())
-}
-
-func copyLimited(dst io.Writer, src io.Reader) (int64, error) {
-	return io.Copy(dst, src)
 }

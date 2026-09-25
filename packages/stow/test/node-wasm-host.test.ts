@@ -9,6 +9,9 @@ test("loadNodeWasmHost starts the packaged memory runtime", async (t) => {
   try {
     await access(new URL("../dist/stow-runtime.wasm", import.meta.url));
   } catch {
+    if (process.env.CI) {
+      throw new Error("packaged WASM asset is missing in CI");
+    }
     t.skip("WASM asset is built by the WASM test target");
     return;
   }

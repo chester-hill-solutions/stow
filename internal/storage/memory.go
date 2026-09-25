@@ -17,7 +17,7 @@ type memObject struct {
 
 // cloneObjectMeta keeps returned metadata independent from the store's state.
 func cloneObjectMeta(meta ObjectMeta) ObjectMeta {
-	meta.Metadata = cloneMetadata(meta.Metadata)
+	meta.Metadata = CloneMetadata(meta.Metadata)
 	return meta
 }
 
@@ -57,7 +57,7 @@ func (s *MemoryStore) bucket(name string) (*memBucket, error) {
 }
 
 func (s *MemoryStore) CreateBucket(_ context.Context, name string) error {
-	if err := validateBucketName(name); err != nil {
+	if err := ValidateBucketName(name); err != nil {
 		return err
 	}
 	s.mu.Lock()
@@ -76,7 +76,7 @@ func (s *MemoryStore) CreateBucket(_ context.Context, name string) error {
 }
 
 func (s *MemoryStore) DeleteBucket(_ context.Context, name string) error {
-	if err := validateBucketName(name); err != nil {
+	if err := ValidateBucketName(name); err != nil {
 		return err
 	}
 	s.mu.Lock()
@@ -94,7 +94,7 @@ func (s *MemoryStore) DeleteBucket(_ context.Context, name string) error {
 }
 
 func (s *MemoryStore) HeadBucket(_ context.Context, name string) (*BucketInfo, error) {
-	if err := validateBucketName(name); err != nil {
+	if err := ValidateBucketName(name); err != nil {
 		return nil, err
 	}
 	s.mu.RLock()
@@ -121,13 +121,13 @@ func (s *MemoryStore) ListBuckets(_ context.Context) ([]BucketInfo, error) {
 }
 
 func (s *MemoryStore) PutObject(_ context.Context, bucket, key string, body io.Reader, opts PutOptions) (*ObjectMeta, error) {
-	if err := validateBucketName(bucket); err != nil {
+	if err := ValidateBucketName(bucket); err != nil {
 		return nil, err
 	}
-	if err := validateKey(key); err != nil {
+	if err := ValidateKey(key); err != nil {
 		return nil, err
 	}
-	etag, data, err := etagForReader(body)
+	etag, data, err := ETagForReader(body)
 	if err != nil {
 		return nil, err
 	}
@@ -144,10 +144,10 @@ func (s *MemoryStore) PutObject(_ context.Context, bucket, key string, body io.R
 		existingMeta := cloneObjectMeta(object.meta)
 		existing = &existingMeta
 	}
-	if err := checkWritePreconditions(opts, existing); err != nil {
+	if err := CheckWritePreconditions(opts, existing); err != nil {
 		return nil, err
 	}
-	versionID, err := newRecordVersion()
+	versionID, err := NewRecordVersion()
 	if err != nil {
 		return nil, err
 	}
@@ -160,7 +160,7 @@ func (s *MemoryStore) PutObject(_ context.Context, bucket, key string, body io.R
 		ETag:              etag,
 		ContentType:       opts.ContentType,
 		LastModified:      now,
-		Metadata:          cloneMetadata(opts.Metadata),
+		Metadata:          CloneMetadata(opts.Metadata),
 		ChecksumAlgorithm: opts.ChecksumAlgorithm,
 		ChecksumValue:     opts.ChecksumValue,
 	}
@@ -170,10 +170,10 @@ func (s *MemoryStore) PutObject(_ context.Context, bucket, key string, body io.R
 }
 
 func (s *MemoryStore) GetObject(_ context.Context, bucket, key string) (io.ReadCloser, *ObjectMeta, error) {
-	if err := validateBucketName(bucket); err != nil {
+	if err := ValidateBucketName(bucket); err != nil {
 		return nil, nil, err
 	}
-	if err := validateKey(key); err != nil {
+	if err := ValidateKey(key); err != nil {
 		return nil, nil, err
 	}
 	s.mu.RLock()
@@ -192,10 +192,10 @@ func (s *MemoryStore) GetObject(_ context.Context, bucket, key string) (io.ReadC
 }
 
 func (s *MemoryStore) HeadObject(_ context.Context, bucket, key string) (*ObjectMeta, error) {
-	if err := validateBucketName(bucket); err != nil {
+	if err := ValidateBucketName(bucket); err != nil {
 		return nil, err
 	}
-	if err := validateKey(key); err != nil {
+	if err := ValidateKey(key); err != nil {
 		return nil, err
 	}
 	s.mu.RLock()
@@ -214,10 +214,10 @@ func (s *MemoryStore) HeadObject(_ context.Context, bucket, key string) (*Object
 }
 
 func (s *MemoryStore) DeleteObject(_ context.Context, bucket, key string) error {
-	if err := validateBucketName(bucket); err != nil {
+	if err := ValidateBucketName(bucket); err != nil {
 		return err
 	}
-	if err := validateKey(key); err != nil {
+	if err := ValidateKey(key); err != nil {
 		return err
 	}
 	s.mu.Lock()
@@ -235,7 +235,7 @@ func (s *MemoryStore) DeleteObject(_ context.Context, bucket, key string) error 
 }
 
 func (s *MemoryStore) DeleteObjects(_ context.Context, bucket string, keys []string) ([]string, error) {
-	if err := validateBucketName(bucket); err != nil {
+	if err := ValidateBucketName(bucket); err != nil {
 		return nil, err
 	}
 	s.mu.Lock()
@@ -247,7 +247,7 @@ func (s *MemoryStore) DeleteObjects(_ context.Context, bucket string, keys []str
 	}
 	var deleted []string
 	for _, key := range keys {
-		if err := validateKey(key); err != nil {
+		if err := ValidateKey(key); err != nil {
 			return deleted, err
 		}
 		if _, ok := b.objects[key]; !ok {
@@ -267,7 +267,7 @@ func (s *MemoryStore) CopyObject(ctx context.Context, srcBucket, srcKey, dstBuck
 	defer rc.Close()
 	return s.PutObject(ctx, dstBucket, dstKey, rc, PutOptions{
 		ContentType:       meta.ContentType,
-		Metadata:          cloneMetadata(meta.Metadata),
+		Metadata:          CloneMetadata(meta.Metadata),
 		ChecksumAlgorithm: meta.ChecksumAlgorithm,
 		ChecksumValue:     meta.ChecksumValue,
 	})
@@ -294,10 +294,10 @@ func (s *MemoryStore) ListObjectsV2(_ context.Context, bucket string, opts ListO
 }
 
 func (s *MemoryStore) CreateMultipartUpload(_ context.Context, bucket, key string) (*MultipartUpload, error) {
-	if err := validateBucketName(bucket); err != nil {
+	if err := ValidateBucketName(bucket); err != nil {
 		return nil, err
 	}
-	if err := validateKey(key); err != nil {
+	if err := ValidateKey(key); err != nil {
 		return nil, err
 	}
 
@@ -308,7 +308,7 @@ func (s *MemoryStore) CreateMultipartUpload(_ context.Context, bucket, key strin
 	if !ok {
 		return nil, ErrBucketNotFound
 	}
-	uploadID, err := newUploadID()
+	uploadID, err := NewUploadID()
 	if err != nil {
 		return nil, err
 	}
@@ -338,7 +338,7 @@ func (s *MemoryStore) UploadPart(_ context.Context, uploadID string, partNumber 
 	if partNumber < 1 || partNumber > 10000 {
 		return nil, ErrInvalidPart
 	}
-	etag, data, err := etagForReader(body)
+	etag, data, err := ETagForReader(body)
 	if err != nil {
 		return nil, err
 	}
@@ -366,7 +366,7 @@ func (s *MemoryStore) CompleteMultipartUpload(_ context.Context, uploadID string
 	if len(parts) == 0 {
 		return nil, ErrInvalidUpload
 	}
-	if err := validateMultipartPartNumbers(parts); err != nil {
+	if err := ValidateMultipartPartNumbers(parts); err != nil {
 		return nil, err
 	}
 
@@ -378,7 +378,6 @@ func (s *MemoryStore) CompleteMultipartUpload(_ context.Context, uploadID string
 		return nil, ErrUploadNotFound
 	}
 
-	sort.Slice(parts, func(i, j int) bool { return parts[i].PartNumber < parts[j].PartNumber })
 	var combined []byte
 	partETags := make([]string, 0, len(parts))
 	for _, p := range parts {
@@ -386,15 +385,15 @@ func (s *MemoryStore) CompleteMultipartUpload(_ context.Context, uploadID string
 		if !ok {
 			return nil, ErrInvalidPart
 		}
-		if p.ETag == "" || !etagEqual(p.ETag, part.info.ETag) {
+		if p.ETag == "" || !ETagEqual(p.ETag, part.info.ETag) {
 			return nil, ErrInvalidPart
 		}
 		partETags = append(partETags, part.info.ETag)
 		combined = append(combined, part.data...)
 	}
 
-	etag := compositeETag(partETags)
-	versionID, err := newRecordVersion()
+	etag := CompositeETag(partETags)
+	versionID, err := NewRecordVersion()
 	if err != nil {
 		return nil, err
 	}
@@ -425,7 +424,7 @@ func (s *MemoryStore) AbortMultipartUpload(_ context.Context, uploadID string) e
 	return nil
 }
 
-func (s *MemoryStore) ListParts(_ context.Context, uploadID string) ([]PartInfo, error) {
+func (s *MemoryStore) listParts(_ context.Context, uploadID string) ([]PartInfo, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
@@ -443,6 +442,19 @@ func (s *MemoryStore) ListParts(_ context.Context, uploadID string) ([]PartInfo,
 		out = append(out, mp.parts[n].info)
 	}
 	return out, nil
+}
+
+// ListPartsPage returns a marker-paginated page of uploaded parts.
+func (s *MemoryStore) ListPartsPage(ctx context.Context, uploadID string, opts ListPartsOptions) (*ListPartsResult, error) {
+	parts, err := s.listParts(ctx, uploadID)
+	if err != nil {
+		return nil, err
+	}
+	return PaginateParts(parts, opts), nil
+}
+
+func (s *MemoryStore) ListParts(ctx context.Context, uploadID string) ([]PartInfo, error) {
+	return s.listParts(ctx, uploadID)
 }
 
 func (s *MemoryStore) ValidateMultipartUpload(_ context.Context, uploadID, bucket, key string) error {

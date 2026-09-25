@@ -81,6 +81,21 @@ type MultipartListResult struct {
 	IsTruncated        bool
 }
 
+// ListPartsOptions configures a page of uploaded parts.
+type ListPartsOptions struct {
+	PartNumberMarker int
+	MaxParts         int
+}
+
+// ListPartsResult describes one page of uploaded parts.
+type ListPartsResult struct {
+	Parts                []PartInfo
+	PartNumberMarker     int
+	NextPartNumberMarker int
+	MaxParts             int
+	IsTruncated          bool
+}
+
 // PartInfo describes a single uploaded part.
 type PartInfo struct {
 	PartNumber   int

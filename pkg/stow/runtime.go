@@ -47,7 +47,7 @@ func (r *Runtime) ListBuckets(ctx context.Context) ([]Bucket, error) {
 func (r *Runtime) PutObject(ctx context.Context, bucket, key string, data []byte, options PutOptions) (Object, error) {
 	object, err := r.inner.PutObject(ctx, bucket, key, data, stowruntime.PutOptions{
 		ContentType: options.ContentType,
-		Metadata:    cloneMetadata(options.Metadata),
+		Metadata:    storage.CloneMetadata(options.Metadata),
 	})
 	if err != nil {
 		return Object{}, mapError(err)
@@ -166,18 +166,7 @@ func objectOf(object stowruntime.Object) Object {
 		Size:         object.Size,
 		ETag:         object.ETag,
 		ContentType:  object.ContentType,
-		Metadata:     cloneMetadata(object.Metadata),
+		Metadata:     storage.CloneMetadata(object.Metadata),
 		LastModified: object.LastModified,
 	}
-}
-
-func cloneMetadata(metadata map[string]string) map[string]string {
-	if len(metadata) == 0 {
-		return nil
-	}
-	out := make(map[string]string, len(metadata))
-	for key, value := range metadata {
-		out[key] = value
-	}
-	return out
 }

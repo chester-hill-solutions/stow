@@ -1,0 +1,52 @@
+package s3api
+
+import (
+	"context"
+	"fmt"
+
+	"github.com/chester-hill-solutions/stow/internal/storage"
+)
+
+func listAllAdminObjects(ctx context.Context, store storage.Store, bucket string) ([]storage.ObjectMeta, error) {
+	var objects []storage.ObjectMeta
+	token := ""
+	for {
+		page, err := store.ListObjectsV2(ctx, bucket, storage.ListOptions{ContinuationToken: token, MaxKeys: 1000})
+		if err != nil {
+			return nil, err
+		}
+		objects = append(objects, page.Objects...)
+		if !page.IsTruncated {
+			return objects, nil
+		}
+		if page.NextContinuationToken == "" {
+			return nil, fmt.Errorf("store returned truncated object listing without a continuation token")
+		}
+		token = page.NextContinuationToken
+	}
+}
+
+func listAllAdminUploads(ctx context.Context, store storage.Store, bucket string) ([]storage.MultipartUpload, error) {
+	var uploads []storage.MultipartUpload
+	keyMarker := ""
+	uploadIDMarker := ""
+	for {
+		page, err := store.ListMultipartUploads(ctx, bucket, storage.MultipartListOptions{
+			KeyMarker:      keyMarker,
+			UploadIDMarker: uploadIDMarker,
+			MaxUploads:     1000,
+		})
+		if err != nil {
+			return nil, err
+		}
+		uploads = append(uploads, page.Uploads...)
+		if !page.IsTruncated {
+			return uploads, nil
+		}
+		if page.NextKeyMarker == "" && page.NextUploadIDMarker == "" {
+			return nil, fmt.Errorf("store returned truncated upload listing without a marker")
+		}
+		keyMarker = page.NextKeyMarker
+		uploadIDMarker = page.NextUploadIDMarker
+	}
+}

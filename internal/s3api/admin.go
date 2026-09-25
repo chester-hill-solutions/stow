@@ -5,12 +5,10 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
-	"net/url"
 	"strings"
 	"time"
 
 	"github.com/chester-hill-solutions/stow/internal/runthrough"
-	"github.com/chester-hill-solutions/stow/internal/storage"
 	"github.com/chester-hill-solutions/stow/internal/version"
 )
 
@@ -28,6 +26,11 @@ type outboxStatsProvider interface {
 
 type outboxPreparedStatsProvider interface {
 	OutboxPreparedStats() int
+}
+
+type outboxHealthProvider interface {
+	OutboxLastError() string
+	OutboxRetryAttempts() uint64
 }
 
 type outboxEntriesProvider interface {
@@ -97,16 +100,18 @@ func outboxInspectEntries(entries []runthrough.OutboxEntry) []map[string]interfa
 	out := make([]map[string]interface{}, 0, len(entries))
 	for _, entry := range entries {
 		out = append(out, map[string]interface{}{
-			"id":           entry.ID,
-			"operation":    entry.Operation,
-			"bucket":       entry.Bucket,
-			"key":          entry.Key,
-			"version":      entry.Version,
-			"attempts":     entry.Attempts,
-			"terminal":     entry.Terminal,
-			"prepared":     entry.Prepared,
-			"last_error":   outboxErrorClass(entry.LastError),
-			"next_attempt": entry.NextAttempt,
+			"id":            entry.ID,
+			"operation":     entry.Operation,
+			"bucket":        entry.Bucket,
+			"key":           entry.Key,
+			"source_bucket": entry.SourceBucket,
+			"source_key":    entry.SourceKey,
+			"version":       entry.Version,
+			"attempts":      entry.Attempts,
+			"terminal":      entry.Terminal,
+			"prepared":      entry.Prepared,
+			"last_error":    outboxErrorClass(entry.LastError),
+			"next_attempt":  entry.NextAttempt,
 		})
 	}
 	return out
@@ -140,12 +145,12 @@ func (s *Server) writeStatus(w http.ResponseWriter, r *http.Request) {
 	}
 	objectCount := 0
 	for _, b := range buckets {
-		list, err := s.store.ListObjectsV2(ctx, b.Name, storage.ListOptions{MaxKeys: 10000})
+		objects, err := listAllAdminObjects(ctx, s.store, b.Name)
 		if err != nil {
 			writeAdminError(w, http.StatusInternalServerError, "status is temporarily unavailable")
 			return
 		}
-		objectCount += len(list.Objects)
+		objectCount += len(objects)
 	}
 	addr := s.Addr()
 	if addr == "" {
@@ -185,6 +190,9 @@ func (s *Server) writeStatus(w http.ResponseWriter, r *http.Request) {
 	if provider, ok := s.store.(outboxPreparedStatsProvider); ok {
 		payload["outbox_prepared"] = provider.OutboxPreparedStats()
 	}
+	if provider, ok := s.store.(outboxHealthProvider); ok {
+		payload["last_upstream_error"] = outboxErrorClass(provider.OutboxLastError())
+	}
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(payload)
 }
@@ -209,18 +217,18 @@ func (s *Server) writeInspect(w http.ResponseWriter, r *http.Request) {
 		if bucketFilter != "" && b.Name != bucketFilter {
 			continue
 		}
-		list, err := s.store.ListObjectsV2(ctx, b.Name, storage.ListOptions{MaxKeys: 10000})
+		objects, err := listAllAdminObjects(ctx, s.store, b.Name)
 		if err != nil {
 			writeAdminError(w, http.StatusInternalServerError, "inspection is temporarily unavailable")
 			return
 		}
-		count := len(list.Objects)
-		uploads, uploadErr := s.store.ListMultipartUploads(ctx, b.Name, storage.MultipartListOptions{MaxUploads: 10000})
+		count := len(objects)
+		uploads, uploadErr := listAllAdminUploads(ctx, s.store, b.Name)
 		if uploadErr != nil {
 			writeAdminError(w, http.StatusInternalServerError, "inspection is temporarily unavailable")
 			return
 		}
-		multipartUploads += len(uploads.Uploads)
+		multipartUploads += len(uploads)
 		snaps = append(snaps, bucketSnap{
 			Name:         b.Name,
 			ObjectCount:  count,
@@ -239,6 +247,12 @@ func (s *Server) writeInspect(w http.ResponseWriter, r *http.Request) {
 	if provider, ok := s.store.(outboxStatsProvider); ok {
 		outboxPending, outboxTerminal = provider.OutboxStats()
 	}
+	lastUpstreamError := ""
+	var retryAttempts uint64
+	if provider, ok := s.store.(outboxHealthProvider); ok {
+		lastUpstreamError = outboxErrorClass(provider.OutboxLastError())
+		retryAttempts = provider.OutboxRetryAttempts()
+	}
 	outboxEntries := make([]map[string]interface{}, 0)
 	if provider, ok := s.store.(outboxEntriesProvider); ok {
 		outboxEntries = outboxInspectEntries(provider.OutboxEntries())
@@ -249,15 +263,17 @@ func (s *Server) writeInspect(w http.ResponseWriter, r *http.Request) {
 	}
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(map[string]any{
-		"buckets":           snaps,
-		"multipart_uploads": multipartUploads,
-		"cache_hits":        cacheHits,
-		"cache_misses":      cacheMisses,
-		"cache_evictions":   cacheEvictions,
-		"outbox_pending":    outboxPending,
-		"outbox_terminal":   outboxTerminal,
-		"outbox_entries":    outboxEntries,
-		"outbox_prepared":   preparedEntries,
+		"buckets":               snaps,
+		"multipart_uploads":     multipartUploads,
+		"cache_hits":            cacheHits,
+		"cache_misses":          cacheMisses,
+		"cache_evictions":       cacheEvictions,
+		"outbox_pending":        outboxPending,
+		"outbox_terminal":       outboxTerminal,
+		"outbox_entries":        outboxEntries,
+		"outbox_prepared":       preparedEntries,
+		"last_upstream_error":   lastUpstreamError,
+		"outbox_retry_attempts": retryAttempts,
 	})
 }
 
@@ -311,6 +327,10 @@ func (s *Server) writeMetrics(w http.ResponseWriter, r *http.Request) {
 	if provider, ok := s.store.(outboxPreparedStatsProvider); ok {
 		prepared = provider.OutboxPreparedStats()
 	}
+	var retryAttempts uint64
+	if provider, ok := s.store.(outboxHealthProvider); ok {
+		retryAttempts = provider.OutboxRetryAttempts()
+	}
 	multipartUploads := 0
 	buckets, err := s.store.ListBuckets(r.Context())
 	if err != nil {
@@ -318,12 +338,12 @@ func (s *Server) writeMetrics(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	for _, bucket := range buckets {
-		uploads, err := s.store.ListMultipartUploads(r.Context(), bucket.Name, storage.MultipartListOptions{MaxUploads: 10000})
+		uploads, err := listAllAdminUploads(r.Context(), s.store, bucket.Name)
 		if err != nil {
 			writeAdminError(w, http.StatusInternalServerError, "metrics are temporarily unavailable")
 			return
 		}
-		multipartUploads += len(uploads.Uploads)
+		multipartUploads += len(uploads)
 	}
 
 	w.Header().Set("Content-Type", "text/plain; version=0.0.4; charset=utf-8")
@@ -334,118 +354,5 @@ func (s *Server) writeMetrics(w http.ResponseWriter, r *http.Request) {
 	_, _ = fmt.Fprintf(w, "# HELP stow_outbox_pending_entries Pending outbox entries.\n# TYPE stow_outbox_pending_entries gauge\nstow_outbox_pending_entries %d\n", pending)
 	_, _ = fmt.Fprintf(w, "# HELP stow_outbox_terminal_entries Terminal outbox entries.\n# TYPE stow_outbox_terminal_entries gauge\nstow_outbox_terminal_entries %d\n", terminal)
 	_, _ = fmt.Fprintf(w, "# HELP stow_outbox_prepared_entries Prepared outbox entries awaiting reconciliation.\n# TYPE stow_outbox_prepared_entries gauge\nstow_outbox_prepared_entries %d\n", prepared)
-}
-
-func (s *Server) dispatch(ctx context.Context, w http.ResponseWriter, r *http.Request, route routeInfo) {
-	q := r.URL.Query()
-	if code, message, ok := unsupportedSemanticMarker(r, q); ok {
-		status := http.StatusNotImplemented
-		if code == "InvalidArgument" {
-			status = http.StatusBadRequest
-		}
-		writeError(w, r, s3Error{Code: code, Message: message, Resource: resourcePath(route.bucket, route.key), StatusCode: status})
-		return
-	}
-
-	if route.bucket == "" {
-		if r.Method == http.MethodGet && r.URL.Path == "/" {
-			s.handleListBuckets(ctx, w, r)
-			return
-		}
-		writeError(w, r, s3Error{Code: "InvalidRequest", Message: "Invalid request", StatusCode: http.StatusBadRequest})
-		return
-	}
-
-	if route.key == "" {
-		switch r.Method {
-		case http.MethodPut:
-			s.handleCreateBucket(ctx, w, r, route.bucket)
-		case http.MethodHead:
-			s.handleHeadBucket(ctx, w, r, route.bucket)
-		case http.MethodDelete:
-			if q.Has("delete") {
-				writeError(w, r, s3Error{Code: "NotImplemented", Message: "Not implemented", StatusCode: http.StatusNotImplemented})
-				return
-			}
-			s.handleDeleteBucket(ctx, w, r, route.bucket)
-		case http.MethodGet:
-			if q.Get("list-type") == "2" {
-				s.handleListObjectsV2(ctx, w, r, route.bucket, q)
-				return
-			}
-			if q.Has("uploads") {
-				s.handleListMultipartUploads(ctx, w, r, route.bucket, q)
-				return
-			}
-			writeError(w, r, s3Error{Code: "InvalidRequest", Message: "Invalid request", StatusCode: http.StatusBadRequest})
-		case http.MethodPost:
-			if q.Has("delete") {
-				s.handleDeleteObjects(ctx, w, r, route.bucket)
-				return
-			}
-			writeError(w, r, s3Error{Code: "InvalidRequest", Message: "Invalid request", StatusCode: http.StatusBadRequest})
-		default:
-			writeError(w, r, s3Error{Code: "MethodNotAllowed", Message: "Method not allowed", StatusCode: http.StatusMethodNotAllowed})
-		}
-		return
-	}
-
-	// Object-level operations
-	if r.Method == http.MethodPost && q.Has("uploads") {
-		s.handleCreateMultipartUpload(ctx, w, r, route.bucket, route.key)
-		return
-	}
-	if r.Method == http.MethodPut && q.Has("partNumber") && q.Has("uploadId") {
-		s.handleUploadPart(ctx, w, r, route.bucket, route.key, q)
-		return
-	}
-	if r.Method == http.MethodPost && q.Has("uploadId") {
-		s.handleCompleteMultipartUpload(ctx, w, r, route.bucket, route.key, q.Get("uploadId"))
-		return
-	}
-	if r.Method == http.MethodDelete && q.Has("uploadId") {
-		s.handleAbortMultipartUpload(ctx, w, r, route.bucket, route.key, q.Get("uploadId"))
-		return
-	}
-	if r.Method == http.MethodGet && q.Has("uploadId") {
-		s.handleListParts(ctx, w, r, route.bucket, route.key, q.Get("uploadId"))
-		return
-	}
-
-	switch r.Method {
-	case http.MethodPut:
-		if copySrc := r.Header.Get("x-amz-copy-source"); copySrc != "" {
-			s.handleCopyObject(ctx, w, r, route.bucket, route.key, copySrc)
-			return
-		}
-		s.handlePutObject(ctx, w, r, route.bucket, route.key)
-	case http.MethodGet:
-		s.handleGetObject(ctx, w, r, route.bucket, route.key)
-	case http.MethodHead:
-		s.handleHeadObject(ctx, w, r, route.bucket, route.key)
-	case http.MethodDelete:
-		s.handleDeleteObject(ctx, w, r, route.bucket, route.key)
-	default:
-		writeError(w, r, s3Error{Code: "MethodNotAllowed", Message: "Method not allowed", StatusCode: http.StatusMethodNotAllowed})
-	}
-}
-
-func unsupportedSemanticMarker(r *http.Request, q url.Values) (code, message string, ok bool) {
-	for _, marker := range []string{
-		"versioning", "acl", "policy", "lifecycle", "replication", "notification",
-		"tagging", "website", "logging", "accelerate", "requestPayment", "encryption",
-		"object-lock", "inventory", "metrics", "analytics", "intelligent-tiering", "select",
-	} {
-		if q.Has(marker) {
-			return "NotImplemented", "operation is not implemented", true
-		}
-	}
-	if q.Has("versionId") {
-		return "InvalidArgument", "versionId is not supported", true
-	}
-	if strings.EqualFold(r.Header.Get("X-Amz-Server-Side-Encryption"), "aws:kms") ||
-		strings.EqualFold(r.Header.Get("X-Amz-Server-Side-Encryption"), "aws:kms:dsse") {
-		return "InvalidArgument", "KMS encryption is not supported", true
-	}
-	return "", "", false
+	_, _ = fmt.Fprintf(w, "# HELP stow_outbox_retry_attempts_total Total upstream propagation attempts.\n# TYPE stow_outbox_retry_attempts_total counter\nstow_outbox_retry_attempts_total %d\n", retryAttempts)
 }

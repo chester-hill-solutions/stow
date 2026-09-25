@@ -49,6 +49,19 @@ func TestResolveLocalCredentials(t *testing.T) {
 	}
 }
 
+func TestValidateLiveWriteBackendRejectsMemoryPropagation(t *testing.T) {
+	config := runthrough.Config{Policy: runthrough.PolicyMirrorWrites, AllowLiveWrites: true}
+	if err := validateLiveWriteBackend(runthrough.ModeRunThrough, "memory", config); err == nil {
+		t.Fatal("expected memory live-write configuration to be rejected")
+	}
+	if err := validateLiveWriteBackend(runthrough.ModeRunThrough, "filesystem", config); err != nil {
+		t.Fatalf("filesystem live-write configuration: %v", err)
+	}
+	if err := validateLiveWriteBackend(runthrough.ModeLocal, "memory", config); err != nil {
+		t.Fatalf("local memory configuration: %v", err)
+	}
+}
+
 func TestApplyCacheLimitsPreservesEnvironmentDefaults(t *testing.T) {
 	config := runthrough.Config{Cache: runthrough.CachePolicy{MaxBytes: 10, MaxObjects: 2, TTL: time.Minute}}
 	if err := applyCacheLimits(&config, -1, -1, -1); err != nil {

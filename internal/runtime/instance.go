@@ -153,7 +153,7 @@ func (i *Instance) PutObject(ctx context.Context, bucket, key string, data []byt
 	copyData := append([]byte(nil), data...)
 	meta, err := i.store.PutObject(ctx, bucket, key, bytes.NewReader(copyData), storage.PutOptions{
 		ContentType: options.ContentType,
-		Metadata:    options.Metadata,
+		Metadata:    storage.CloneMetadata(options.Metadata),
 	})
 	if err != nil {
 		return Object{}, err
@@ -318,20 +318,9 @@ func objectFromMeta(meta *storage.ObjectMeta, data []byte) Object {
 		Size:         meta.Size,
 		ETag:         meta.ETag,
 		ContentType:  meta.ContentType,
-		Metadata:     cloneMetadata(meta.Metadata),
+		Metadata:     storage.CloneMetadata(meta.Metadata),
 		LastModified: meta.LastModified,
 	}
-}
-
-func cloneMetadata(metadata map[string]string) map[string]string {
-	if len(metadata) == 0 {
-		return nil
-	}
-	out := make(map[string]string, len(metadata))
-	for key, value := range metadata {
-		out[key] = value
-	}
-	return out
 }
 
 func (i *Instance) Reset(ctx context.Context) error {

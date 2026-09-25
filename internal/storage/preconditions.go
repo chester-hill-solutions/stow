@@ -2,7 +2,8 @@ package storage
 
 import "strings"
 
-func checkWritePreconditions(opts PutOptions, existing *ObjectMeta) error {
+// CheckWritePreconditions applies the shared object-write preconditions.
+func CheckWritePreconditions(opts PutOptions, existing *ObjectMeta) error {
 	if opts.IfMatch != "" {
 		if existing == nil || !matchesETagHeader(opts.IfMatch, existing.ETag, false) {
 			return ErrPreconditionFailed

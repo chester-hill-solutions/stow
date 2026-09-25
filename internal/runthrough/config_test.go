@@ -182,6 +182,17 @@ func TestConfigFromEnvCheckedRejectsInvalidCacheLimit(t *testing.T) {
 	}
 }
 
+func TestConfigFromEnvCheckedRejectsInvalidRevalidate(t *testing.T) {
+	os.Clearenv()
+	t.Setenv("STOW_REVALIDATE", "garbage")
+	if _, err := runthrough.ConfigFromEnvChecked(); err == nil {
+		t.Fatal("expected invalid STOW_REVALIDATE to be rejected")
+	}
+	if !runthrough.ConfigFromEnv().Revalidate {
+		t.Fatal("invalid direct config should retain the safe default")
+	}
+}
+
 func TestConfigFromEnvPreservesInvalidPolicy(t *testing.T) {
 	os.Clearenv()
 	t.Setenv("STOW_POLICY", "proxy")

@@ -110,7 +110,7 @@ The native S3 endpoint and the TypeScript `Stow.start()` / `Stow.connect()` cont
 | `readThroughCache` | Read upstream on local cache misses; local writes remain local unless live writes are explicitly enabled |
 | `mirrorWrites` | Read-through plus durable upstream propagation; emits a loud startup warning |
 
-Live writes to upstream require `--allow-live-writes` / `STOW_ALLOW_LIVE_WRITES=true` and a durable coordinated outbox. A prepared local-mutation intent is persisted before the local record changes; startup/retry reconciliation commits or discards it using the immutable object version. `MemoryOutbox` and other uncoordinated outboxes are rejected before a live mutation touches local storage.
+Live writes to upstream require `--allow-live-writes` / `STOW_ALLOW_LIVE_WRITES=true`, the filesystem backend, and a durable coordinated outbox. A prepared local-mutation intent is persisted before the local record changes; startup/retry reconciliation commits or discards it using the immutable object version. `MemoryOutbox` and other uncoordinated outboxes are rejected before a live mutation touches local storage.
 
 Run-through cache limits can be set with `--cache-max-bytes`, `--cache-max-objects`, and `--cache-ttl`, or with `STOW_CACHE_MAX_BYTES`, `STOW_CACHE_MAX_OBJECTS`, and `STOW_CACHE_TTL`. Cache entries are bounded by LRU and optionally expire after the configured TTL.
 
@@ -121,7 +121,8 @@ See [docs/adr/0001-auto-detect-run-through.md](docs/adr/0001-auto-detect-run-thr
 ```
 cmd/stow/           CLI
 internal/s3api/     S3 HTTP + admin routes
-internal/storage/   filesystem + memory stores (atomic JSON object records on disk)
+internal/storage/   shared storage contract + memory store
+internal/storage/fs/ filesystem backend (atomic JSON object records on disk)
 internal/auth/      SigV4
 internal/runthrough/ upstream adapter
 pkg/stow/            direct embedded Go runtime

@@ -56,6 +56,61 @@ func (s *commitThenErrorStore) PutObject(ctx context.Context, bucket, key string
 	return meta, errors.New("post-commit cleanup failed")
 }
 
+func TestMultipartIntentRetainsOperationIdentity(t *testing.T) {
+	ctx := context.Background()
+	local := storage.NewMemoryStore()
+	if err := local.CreateBucket(ctx, "bucket"); err != nil {
+		t.Fatalf("create bucket: %v", err)
+	}
+	upload, err := local.CreateMultipartUpload(ctx, "bucket", "multipart-object")
+	if err != nil {
+		t.Fatalf("create multipart: %v", err)
+	}
+	part, err := local.UploadPart(ctx, upload.UploadID, 1, bytes.NewReader([]byte("part")))
+	if err != nil {
+		t.Fatalf("upload part: %v", err)
+	}
+	outbox, err := runthrough.NewFileOutbox(filepath.Join(t.TempDir(), "outbox.json"))
+	if err != nil {
+		t.Fatalf("new outbox: %v", err)
+	}
+	up := newMockUpstream()
+	up.putErr = errors.New("upstream unavailable")
+	adapter := runthrough.NewWithOutbox(runthrough.Config{Policy: runthrough.PolicyMirrorWrites, AllowLiveWrites: true}, local, local, up, outbox)
+	if _, err := adapter.CompleteMultipartUpload(ctx, upload.UploadID, []storage.PartInfo{*part}); err == nil {
+		t.Fatal("expected multipart propagation error")
+	}
+	pending := outbox.Pending()
+	if len(pending) != 1 || pending[0].Operation != runthrough.OutboxMultipart {
+		t.Fatalf("multipart intent = %+v", pending)
+	}
+}
+
+func TestCopyIntentRetainsOperationIdentity(t *testing.T) {
+	ctx := context.Background()
+	local := storage.NewMemoryStore()
+	if err := local.CreateBucket(ctx, "bucket"); err != nil {
+		t.Fatalf("create bucket: %v", err)
+	}
+	if _, err := local.PutObject(ctx, "bucket", "source", bytes.NewReader([]byte("value")), storage.PutOptions{}); err != nil {
+		t.Fatalf("put source: %v", err)
+	}
+	outbox, err := runthrough.NewFileOutbox(filepath.Join(t.TempDir(), "outbox.json"))
+	if err != nil {
+		t.Fatalf("new outbox: %v", err)
+	}
+	up := newMockUpstream()
+	up.putErr = errors.New("upstream unavailable")
+	adapter := runthrough.NewWithOutbox(runthrough.Config{Policy: runthrough.PolicyMirrorWrites, AllowLiveWrites: true}, local, local, up, outbox)
+	if _, err := adapter.CopyObject(ctx, "bucket", "source", "bucket", "destination"); err == nil {
+		t.Fatal("expected copy propagation error")
+	}
+	pending := outbox.Pending()
+	if len(pending) != 1 || pending[0].Operation != runthrough.OutboxCopy || pending[0].SourceBucket != "bucket" || pending[0].SourceKey != "source" {
+		t.Fatalf("copy intent = %+v", pending)
+	}
+}
+
 func TestDeleteObjectsDiscardsPreparedIntentForMissingKey(t *testing.T) {
 	ctx := context.Background()
 	local := storage.NewMemoryStore()

@@ -35,7 +35,7 @@ await bucket.stop();
 
 `Stow.start()` owns the child process it launches. Use `backend: "memory"` for an explicitly ephemeral instance. To use an already-running endpoint, call `Stow.connect({ endpoint, accessKeyId, secretAccessKey, region })`; its `client` is an owned AWS SDK client that the caller can use directly, and `disconnect()` destroys it. The TypeScript entry points remain endpoint-based; the repository's `js/wasm` bridge is a separate additive profile.
 
-Both connection helpers also accept an optional `sessionToken` or credential `provider` for temporary AWS credentials. Run-through starts can set `cacheMaxBytes`, `cacheMaxObjects`, and `cacheTtlSeconds`; the CLI also reads `STOW_CACHE_MAX_BYTES`, `STOW_CACHE_MAX_OBJECTS`, and `STOW_CACHE_TTL`. Live mirror writes require a durable coordinated outbox; the package never treats an in-memory outbox as durable.
+Both connection helpers also accept an optional `sessionToken` or credential `provider` for temporary AWS credentials. Run-through starts can set `cacheMaxBytes`, `cacheMaxObjects`, and `cacheTtlSeconds`; the CLI also reads `STOW_CACHE_MAX_BYTES`, `STOW_CACHE_MAX_OBJECTS`, and `STOW_CACHE_TTL`. Live mirror writes require the filesystem backend and a durable coordinated outbox; the package never treats an in-memory outbox as durable.
 
 ### Embedded host profile
 

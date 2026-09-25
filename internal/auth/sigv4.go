@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
+	"io"
 	"net/http"
 	"net/url"
 	"sort"
@@ -330,7 +331,7 @@ func hashRequestBody(r *http.Request) (string, error) {
 	}
 	defer rc.Close()
 	h := sha256.New()
-	if _, err := copyLimited(h, rc); err != nil {
+	if _, err := io.Copy(h, rc); err != nil {
 		return "", authError("AccessDenied", "cannot read request body")
 	}
 	return hex.EncodeToString(h.Sum(nil)), nil

@@ -205,10 +205,10 @@ func TestRuntimeHelpers(t *testing.T) {
 	if object := objectFromMeta(nil, []byte("data")); !bytes.Equal(object.Data, []byte("data")) {
 		t.Fatalf("nil metadata object = %+v", object)
 	}
-	if metadata := cloneMetadata(map[string]string{"a": "b"}); metadata["a"] != "b" {
+	if metadata := storage.CloneMetadata(map[string]string{"a": "b"}); metadata["a"] != "b" {
 		t.Fatalf("metadata = %+v", metadata)
 	}
-	if metadata := cloneMetadata(nil); metadata != nil {
+	if metadata := storage.CloneMetadata(nil); metadata != nil {
 		t.Fatalf("nil metadata = %+v", metadata)
 	}
 }

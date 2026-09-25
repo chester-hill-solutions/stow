@@ -17,6 +17,7 @@ import (
 	"github.com/chester-hill-solutions/stow/internal/runthrough"
 	"github.com/chester-hill-solutions/stow/internal/s3api"
 	"github.com/chester-hill-solutions/stow/internal/storage"
+	"github.com/chester-hill-solutions/stow/internal/storage/fs"
 )
 
 func main() {
@@ -64,6 +65,13 @@ func applyCacheLimits(config *runthrough.Config, maxBytes, maxObjects int64, ttl
 	return nil
 }
 
+func validateLiveWriteBackend(mode runthrough.Mode, backend string, config runthrough.Config) error {
+	if mode == runthrough.ModeRunThrough && backend == "memory" && (config.Policy == runthrough.PolicyMirrorWrites || config.AllowLiveWrites) {
+		return fmt.Errorf("run-through live writes require the filesystem backend")
+	}
+	return nil
+}
+
 func startOutboxRetryWorker(adapter *runthrough.Adapter) (context.CancelFunc, <-chan struct{}) {
 	if adapter == nil {
 		done := make(chan struct{})
@@ -90,22 +98,22 @@ func startOutboxRetryWorker(adapter *runthrough.Adapter) (context.CancelFunc, <-
 }
 
 func serve(args []string) {
-	fs := flag.NewFlagSet("serve", flag.ExitOnError)
-	port := fs.Int("port", 9000, "HTTP listen port (0 = ephemeral)")
-	dataDir := fs.String("data-dir", ".stow", "Data directory for object storage")
-	backend := fs.String("backend", "filesystem", "Storage backend (filesystem or memory)")
-	accessKey := fs.String("access-key", "", "Access key (generated if omitted)")
-	secretKey := fs.String("secret-key", "", "Secret key (generated if omitted)")
-	host := fs.String("host", "127.0.0.1", "Listen host")
-	baseHost := fs.String("base-host", "", "Host suffix for virtual-hosted-style routing")
-	allowPublicAdmin := fs.Bool("allow-public-admin", false, "Allow unauthenticated admin and metrics routes on non-loopback requests")
-	modeFlag := fs.String("mode", "auto", "Operational mode: local, run-through, or auto (default)")
-	allowLiveWrites := fs.Bool("allow-live-writes", false, "Propagate writes to upstream S3")
-	cacheDir := fs.String("cache-dir", "", "Run-through cache directory (default: <data-dir>/cache)")
-	cacheMaxBytes := fs.Int64("cache-max-bytes", -1, "Maximum separate cache bytes (0 disables the limit; -1 uses environment)")
-	cacheMaxObjects := fs.Int64("cache-max-objects", -1, "Maximum separate cache objects (0 disables the limit; -1 uses environment)")
-	cacheTTL := fs.Duration("cache-ttl", -1, "Separate cache entry lifetime (0 disables expiry; -1 uses environment)")
-	fs.Parse(args)
+	flags := flag.NewFlagSet("serve", flag.ExitOnError)
+	port := flags.Int("port", 9000, "HTTP listen port (0 = ephemeral)")
+	dataDir := flags.String("data-dir", ".stow", "Data directory for object storage")
+	backend := flags.String("backend", "filesystem", "Storage backend (filesystem or memory)")
+	accessKey := flags.String("access-key", "", "Access key (generated if omitted)")
+	secretKey := flags.String("secret-key", "", "Secret key (generated if omitted)")
+	host := flags.String("host", "127.0.0.1", "Listen host")
+	baseHost := flags.String("base-host", "", "Host suffix for virtual-hosted-style routing")
+	allowPublicAdmin := flags.Bool("allow-public-admin", false, "Allow unauthenticated admin and metrics routes on non-loopback requests")
+	modeFlag := flags.String("mode", "auto", "Operational mode: local, run-through, or auto (default)")
+	allowLiveWrites := flags.Bool("allow-live-writes", false, "Propagate writes to upstream S3")
+	cacheDir := flags.String("cache-dir", "", "Run-through cache directory (default: <data-dir>/cache)")
+	cacheMaxBytes := flags.Int64("cache-max-bytes", -1, "Maximum separate cache bytes (0 disables the limit; -1 uses environment)")
+	cacheMaxObjects := flags.Int64("cache-max-objects", -1, "Maximum separate cache objects (0 disables the limit; -1 uses environment)")
+	cacheTTL := flags.Duration("cache-ttl", -1, "Separate cache entry lifetime (0 disables expiry; -1 uses environment)")
+	flags.Parse(args)
 	*accessKey, *secretKey = resolveLocalCredentials(*accessKey, *secretKey)
 	rtCfg, cfgErr := runthrough.ConfigFromEnvChecked()
 	if cfgErr != nil {
@@ -134,6 +142,9 @@ func serve(args []string) {
 	if *cacheDir != "" {
 		rtCfg.CacheDir = *cacheDir
 	}
+	if err := validateLiveWriteBackend(mode, *backend, rtCfg); err != nil {
+		log.Fatal(err)
+	}
 
 	localDataDir := *dataDir
 	if mode == runthrough.ModeRunThrough {
@@ -149,7 +160,7 @@ func serve(args []string) {
 	var err error
 	switch *backend {
 	case "filesystem":
-		localStore, err = storage.NewFilesystemStore(localDataDir)
+		localStore, err = fs.NewFilesystemStore(localDataDir)
 	case "memory":
 		localStore = storage.NewMemoryStore()
 	default:
@@ -164,7 +175,7 @@ func serve(args []string) {
 	if mode == runthrough.ModeRunThrough {
 		var cacheStore storage.Store
 		if *backend == "filesystem" {
-			cacheStore, err = storage.NewFilesystemStore(rtCfg.CacheDir)
+			cacheStore, err = fs.NewFilesystemStore(rtCfg.CacheDir)
 		} else {
 			cacheStore = storage.NewMemoryStore()
 		}

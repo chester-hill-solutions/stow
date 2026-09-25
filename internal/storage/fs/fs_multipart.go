@@ -1,9 +1,7 @@
-package storage
+package fs
 
 import (
 	"context"
-	"crypto/rand"
-	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -12,6 +10,8 @@ import (
 	"sort"
 	"strings"
 	"time"
+
+	storage "github.com/chester-hill-solutions/stow/internal/storage"
 )
 
 type multipartManifest struct {
@@ -20,21 +20,21 @@ type multipartManifest struct {
 	Initiated time.Time `json:"initiated"`
 }
 
-func (s *FilesystemStore) CreateMultipartUpload(_ context.Context, bucket, key string) (*MultipartUpload, error) {
-	if err := validateBucketName(bucket); err != nil {
+func (s *FilesystemStore) CreateMultipartUpload(_ context.Context, bucket, key string) (*storage.MultipartUpload, error) {
+	if err := storage.ValidateBucketName(bucket); err != nil {
 		return nil, err
 	}
-	if err := validateKey(key); err != nil {
+	if err := storage.ValidateKey(key); err != nil {
 		return nil, err
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
 	if _, err := os.Stat(s.bucketDir(bucket)); os.IsNotExist(err) {
-		return nil, ErrBucketNotFound
+		return nil, storage.ErrBucketNotFound
 	}
 
-	uploadID, err := newUploadID()
+	uploadID, err := storage.NewUploadID()
 	if err != nil {
 		return nil, err
 	}
@@ -51,7 +51,7 @@ func (s *FilesystemStore) CreateMultipartUpload(_ context.Context, bucket, key s
 		_ = os.RemoveAll(dir)
 		return nil, err
 	}
-	return &MultipartUpload{
+	return &storage.MultipartUpload{
 		UploadID:  uploadID,
 		Bucket:    bucket,
 		Key:       key,
@@ -59,14 +59,14 @@ func (s *FilesystemStore) CreateMultipartUpload(_ context.Context, bucket, key s
 	}, nil
 }
 
-func (s *FilesystemStore) GetMultipartUpload(_ context.Context, uploadID string) (*MultipartUpload, error) {
+func (s *FilesystemStore) GetMultipartUpload(_ context.Context, uploadID string) (*storage.MultipartUpload, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	manifest, err := readMultipartManifest(s.multipartDir(uploadID))
 	if err != nil {
-		return nil, ErrUploadNotFound
+		return nil, storage.ErrUploadNotFound
 	}
-	return &MultipartUpload{
+	return &storage.MultipartUpload{
 		UploadID:  uploadID,
 		Bucket:    manifest.Bucket,
 		Key:       manifest.Key,
@@ -74,18 +74,18 @@ func (s *FilesystemStore) GetMultipartUpload(_ context.Context, uploadID string)
 	}, nil
 }
 
-func (s *FilesystemStore) UploadPart(_ context.Context, uploadID string, partNumber int, body io.Reader) (*PartInfo, error) {
+func (s *FilesystemStore) UploadPart(_ context.Context, uploadID string, partNumber int, body io.Reader) (*storage.PartInfo, error) {
 	if partNumber < 1 || partNumber > 10000 {
-		return nil, ErrInvalidPart
+		return nil, storage.ErrInvalidPart
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
 	dir := s.multipartDir(uploadID)
 	if _, err := os.Stat(dir); os.IsNotExist(err) {
-		return nil, ErrUploadNotFound
+		return nil, storage.ErrUploadNotFound
 	}
-	etag, data, err := etagForReader(body)
+	etag, data, err := storage.ETagForReader(body)
 	if err != nil {
 		return nil, err
 	}
@@ -94,7 +94,7 @@ func (s *FilesystemStore) UploadPart(_ context.Context, uploadID string, partNum
 		return nil, err
 	}
 	now := time.Now().UTC()
-	return &PartInfo{
+	return &storage.PartInfo{
 		PartNumber:   partNumber,
 		ETag:         etag,
 		Size:         int64(len(data)),
@@ -102,11 +102,11 @@ func (s *FilesystemStore) UploadPart(_ context.Context, uploadID string, partNum
 	}, nil
 }
 
-func (s *FilesystemStore) CompleteMultipartUpload(_ context.Context, uploadID string, parts []PartInfo) (*ObjectMeta, error) {
+func (s *FilesystemStore) CompleteMultipartUpload(_ context.Context, uploadID string, parts []storage.PartInfo) (*storage.ObjectMeta, error) {
 	if len(parts) == 0 {
-		return nil, ErrInvalidUpload
+		return nil, storage.ErrInvalidUpload
 	}
-	if err := validateMultipartPartNumbers(parts); err != nil {
+	if err := storage.ValidateMultipartPartNumbers(parts); err != nil {
 		return nil, err
 	}
 	s.mu.Lock()
@@ -115,27 +115,26 @@ func (s *FilesystemStore) CompleteMultipartUpload(_ context.Context, uploadID st
 	dir := s.multipartDir(uploadID)
 	manifest, err := readMultipartManifest(dir)
 	if err != nil {
-		return nil, ErrUploadNotFound
+		return nil, storage.ErrUploadNotFound
 	}
 
-	sort.Slice(parts, func(i, j int) bool { return parts[i].PartNumber < parts[j].PartNumber })
 	var combined []byte
 	partETags := make([]string, 0, len(parts))
 	for _, p := range parts {
 		partPath := filepath.Join(dir, fmt.Sprintf("part-%05d", p.PartNumber))
 		data, err := os.ReadFile(partPath)
 		if err != nil {
-			return nil, ErrInvalidPart
+			return nil, storage.ErrInvalidPart
 		}
-		storedETag := etagForBytes(data)
-		if p.ETag == "" || !etagEqual(p.ETag, storedETag) {
-			return nil, ErrInvalidPart
+		storedETag := storage.ETagForBytes(data)
+		if p.ETag == "" || !storage.ETagEqual(p.ETag, storedETag) {
+			return nil, storage.ErrInvalidPart
 		}
 		partETags = append(partETags, storedETag)
 		combined = append(combined, data...)
 	}
-	etag := compositeETag(partETags)
-	recordVersion, err := newRecordVersion()
+	etag := storage.CompositeETag(partETags)
+	recordVersion, err := storage.NewRecordVersion()
 	if err != nil {
 		return nil, err
 	}
@@ -157,29 +156,29 @@ func (s *FilesystemStore) CompleteMultipartUpload(_ context.Context, uploadID st
 func (s *FilesystemStore) ValidateMultipartUpload(_ context.Context, uploadID, bucket, key string) error {
 	manifest, err := readMultipartManifest(s.multipartDir(uploadID))
 	if err != nil || manifest.Bucket != bucket || manifest.Key != key {
-		return ErrNoSuchUpload
+		return storage.ErrNoSuchUpload
 	}
 	return nil
 }
 
-func (s *FilesystemStore) ListMultipartUploads(_ context.Context, bucket string, opts MultipartListOptions) (*MultipartListResult, error) {
-	if err := validateBucketName(bucket); err != nil {
+func (s *FilesystemStore) ListMultipartUploads(_ context.Context, bucket string, opts storage.MultipartListOptions) (*storage.MultipartListResult, error) {
+	if err := storage.ValidateBucketName(bucket); err != nil {
 		return nil, err
 	}
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
 	if _, err := os.Stat(s.bucketDir(bucket)); os.IsNotExist(err) {
-		return nil, ErrBucketNotFound
+		return nil, storage.ErrBucketNotFound
 	}
 	entries, err := os.ReadDir(filepath.Join(s.dataDir, ".multipart"))
 	if err != nil {
 		if os.IsNotExist(err) {
-			return PaginateMultipartUploads(nil, opts), nil
+			return storage.PaginateMultipartUploads(nil, opts), nil
 		}
 		return nil, err
 	}
-	uploads := make([]MultipartUpload, 0, len(entries))
+	uploads := make([]storage.MultipartUpload, 0, len(entries))
 	for _, entry := range entries {
 		if !entry.IsDir() {
 			continue
@@ -188,14 +187,14 @@ func (s *FilesystemStore) ListMultipartUploads(_ context.Context, bucket string,
 		if err != nil || manifest.Bucket != bucket {
 			continue
 		}
-		uploads = append(uploads, MultipartUpload{
+		uploads = append(uploads, storage.MultipartUpload{
 			UploadID:  entry.Name(),
 			Bucket:    manifest.Bucket,
 			Key:       manifest.Key,
 			Initiated: manifest.Initiated,
 		})
 	}
-	return PaginateMultipartUploads(uploads, opts), nil
+	return storage.PaginateMultipartUploads(uploads, opts), nil
 }
 
 func (s *FilesystemStore) AbortMultipartUpload(_ context.Context, uploadID string) error {
@@ -204,24 +203,24 @@ func (s *FilesystemStore) AbortMultipartUpload(_ context.Context, uploadID strin
 
 	dir := s.multipartDir(uploadID)
 	if _, err := os.Stat(dir); os.IsNotExist(err) {
-		return ErrUploadNotFound
+		return storage.ErrUploadNotFound
 	}
 	return os.RemoveAll(dir)
 }
 
-func (s *FilesystemStore) ListParts(_ context.Context, uploadID string) ([]PartInfo, error) {
+func (s *FilesystemStore) listParts(_ context.Context, uploadID string) ([]storage.PartInfo, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
 	dir := s.multipartDir(uploadID)
 	if _, err := os.Stat(dir); os.IsNotExist(err) {
-		return nil, ErrUploadNotFound
+		return nil, storage.ErrUploadNotFound
 	}
 	entries, err := os.ReadDir(dir)
 	if err != nil {
 		return nil, err
 	}
-	var parts []PartInfo
+	var parts []storage.PartInfo
 	for _, e := range entries {
 		if !strings.HasPrefix(e.Name(), "part-") {
 			continue
@@ -238,9 +237,9 @@ func (s *FilesystemStore) ListParts(_ context.Context, uploadID string) ([]PartI
 		if err != nil {
 			return nil, err
 		}
-		parts = append(parts, PartInfo{
+		parts = append(parts, storage.PartInfo{
 			PartNumber:   num,
-			ETag:         etagForBytes(data),
+			ETag:         storage.ETagForBytes(data),
 			Size:         st.Size(),
 			LastModified: st.ModTime().UTC(),
 		})
@@ -249,12 +248,17 @@ func (s *FilesystemStore) ListParts(_ context.Context, uploadID string) ([]PartI
 	return parts, nil
 }
 
-func newUploadID() (string, error) {
-	var b [16]byte
-	if _, err := rand.Read(b[:]); err != nil {
-		return "", err
+// ListPartsPage returns a marker-paginated page of uploaded parts.
+func (s *FilesystemStore) ListPartsPage(ctx context.Context, uploadID string, opts storage.ListPartsOptions) (*storage.ListPartsResult, error) {
+	parts, err := s.listParts(ctx, uploadID)
+	if err != nil {
+		return nil, err
 	}
-	return hex.EncodeToString(b[:]), nil
+	return storage.PaginateParts(parts, opts), nil
+}
+
+func (s *FilesystemStore) ListParts(ctx context.Context, uploadID string) ([]storage.PartInfo, error) {
+	return s.listParts(ctx, uploadID)
 }
 
 func readMultipartManifest(dir string) (multipartManifest, error) {

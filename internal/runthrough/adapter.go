@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"sort"
 	"sync"
@@ -116,6 +117,23 @@ func (a *Adapter) OutboxPreparedStats() int {
 	return len(a.preparedEntries())
 }
 
+func (a *Adapter) OutboxLastError() string {
+	for _, entry := range a.orderingEntries() {
+		if entry.LastError != "" {
+			return entry.LastError
+		}
+	}
+	return ""
+}
+
+func (a *Adapter) OutboxRetryAttempts() uint64 {
+	var total uint64
+	for _, entry := range a.orderingEntries() {
+		total += uint64(entry.Attempts)
+	}
+	return total
+}
+
 // OutboxEntries returns a point-in-time copy for administrative inspection.
 func (a *Adapter) OutboxEntries() []OutboxEntry {
 	return a.outbox.Pending()
@@ -134,9 +152,17 @@ func (a *Adapter) DiscardOutboxEntry(id string) error {
 		}
 		unlock := a.outboxLocks.lock(outboxIdentity(entry.Bucket, entry.Key))
 		defer unlock()
-		break
+		return a.outbox.Discard(id)
 	}
-	return a.outbox.Discard(id)
+	for _, entry := range a.preparedEntries() {
+		if entry.ID != id {
+			continue
+		}
+		unlock := a.outboxLocks.lock(outboxIdentity(entry.Bucket, entry.Key))
+		defer unlock()
+		return a.discardPreparedIntent(id)
+	}
+	return fmt.Errorf("outbox entry %q not found", id)
 }
 
 func (a *Adapter) upstreamEnabled(bucket string) bool {

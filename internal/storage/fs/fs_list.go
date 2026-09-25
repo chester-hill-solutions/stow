@@ -1,4 +1,4 @@
-package storage
+package fs
 
 import (
 	"context"
@@ -6,28 +6,30 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+
+	storage "github.com/chester-hill-solutions/stow/internal/storage"
 )
 
-func (s *FilesystemStore) ListObjectsV2(_ context.Context, bucket string, opts ListOptions) (*ListResult, error) {
-	if err := validateBucketName(bucket); err != nil {
+func (s *FilesystemStore) ListObjectsV2(_ context.Context, bucket string, opts storage.ListOptions) (*storage.ListResult, error) {
+	if err := storage.ValidateBucketName(bucket); err != nil {
 		return nil, err
 	}
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
 	if _, err := os.Stat(s.bucketDir(bucket)); os.IsNotExist(err) {
-		return nil, ErrBucketNotFound
+		return nil, storage.ErrBucketNotFound
 	}
 
 	root := s.objectsDir(bucket)
 	entries, err := os.ReadDir(root)
 	if err != nil {
 		if os.IsNotExist(err) {
-			return PaginateObjects(nil, opts), nil
+			return storage.PaginateObjects(nil, opts), nil
 		}
 		return nil, err
 	}
-	items := make([]ObjectMeta, 0, len(entries))
+	items := make([]storage.ObjectMeta, 0, len(entries))
 	for _, entry := range entries {
 		if entry.IsDir() || strings.HasSuffix(entry.Name(), legacyMetaSuffix) {
 			continue
@@ -46,5 +48,5 @@ func (s *FilesystemStore) ListObjectsV2(_ context.Context, bucket string, opts L
 		items = append(items, record.meta(bucket, key))
 	}
 	sort.Slice(items, func(i, j int) bool { return items[i].Key < items[j].Key })
-	return PaginateObjects(items, opts), nil
+	return storage.PaginateObjects(items, opts), nil
 }

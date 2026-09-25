@@ -1,4 +1,4 @@
-package storage
+package fs
 
 import (
 	"bytes"
@@ -13,6 +13,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	storage "github.com/chester-hill-solutions/stow/internal/storage"
 )
 
 const legacyMetaSuffix = ".stowmeta"
@@ -26,6 +28,8 @@ type FilesystemStore struct {
 	mu        sync.RWMutex
 	closeOnce sync.Once
 }
+
+var _ storage.Store = (*FilesystemStore)(nil)
 
 // NewFilesystemStore creates a filesystem-backed store rooted at dataDir.
 func NewFilesystemStore(dataDir string) (*FilesystemStore, error) {
@@ -94,13 +98,13 @@ func (s *FilesystemStore) multipartDir(uploadID string) string {
 func (s *FilesystemStore) requireBucket(bucket string) error {
 	info, err := os.Stat(s.bucketDir(bucket))
 	if os.IsNotExist(err) || (err == nil && !info.IsDir()) {
-		return ErrBucketNotFound
+		return storage.ErrBucketNotFound
 	}
 	return err
 }
 
 func (s *FilesystemStore) CreateBucket(_ context.Context, name string) error {
-	if err := validateBucketName(name); err != nil {
+	if err := storage.ValidateBucketName(name); err != nil {
 		return err
 	}
 	s.mu.Lock()
@@ -108,7 +112,7 @@ func (s *FilesystemStore) CreateBucket(_ context.Context, name string) error {
 
 	dir := s.bucketDir(name)
 	if _, err := os.Stat(dir); err == nil {
-		return ErrBucketExists
+		return storage.ErrBucketExists
 	}
 	if err := os.MkdirAll(s.objectsDir(name), 0o755); err != nil {
 		return err
@@ -118,7 +122,7 @@ func (s *FilesystemStore) CreateBucket(_ context.Context, name string) error {
 }
 
 func (s *FilesystemStore) DeleteBucket(_ context.Context, name string) error {
-	if err := validateBucketName(name); err != nil {
+	if err := storage.ValidateBucketName(name); err != nil {
 		return err
 	}
 	s.mu.Lock()
@@ -126,23 +130,23 @@ func (s *FilesystemStore) DeleteBucket(_ context.Context, name string) error {
 
 	dir := s.bucketDir(name)
 	if _, err := os.Stat(dir); os.IsNotExist(err) {
-		return ErrBucketNotFound
+		return storage.ErrBucketNotFound
 	}
 	if hasObjects, err := bucketHasObjects(s.objectsDir(name)); err != nil {
 		return err
 	} else if hasObjects {
-		return ErrBucketNotEmpty
+		return storage.ErrBucketNotEmpty
 	}
 	if hasUploads, err := s.bucketHasMultipartUploads(name); err != nil {
 		return err
 	} else if hasUploads {
-		return ErrBucketNotEmpty
+		return storage.ErrBucketNotEmpty
 	}
 	return os.RemoveAll(dir)
 }
 
-func (s *FilesystemStore) HeadBucket(_ context.Context, name string) (*BucketInfo, error) {
-	if err := validateBucketName(name); err != nil {
+func (s *FilesystemStore) HeadBucket(_ context.Context, name string) (*storage.BucketInfo, error) {
+	if err := storage.ValidateBucketName(name); err != nil {
 		return nil, err
 	}
 	s.mu.RLock()
@@ -150,16 +154,16 @@ func (s *FilesystemStore) HeadBucket(_ context.Context, name string) (*BucketInf
 
 	dir := s.bucketDir(name)
 	if _, err := os.Stat(dir); os.IsNotExist(err) {
-		return nil, ErrBucketNotFound
+		return nil, storage.ErrBucketNotFound
 	}
 	created, err := readBucketCreated(dir)
 	if err != nil {
 		return nil, err
 	}
-	return &BucketInfo{Name: name, CreationDate: created}, nil
+	return &storage.BucketInfo{Name: name, CreationDate: created}, nil
 }
 
-func (s *FilesystemStore) ListBuckets(_ context.Context) ([]BucketInfo, error) {
+func (s *FilesystemStore) ListBuckets(_ context.Context) ([]storage.BucketInfo, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
@@ -171,7 +175,7 @@ func (s *FilesystemStore) ListBuckets(_ context.Context) ([]BucketInfo, error) {
 		}
 		return nil, err
 	}
-	out := make([]BucketInfo, 0, len(entries))
+	out := make([]storage.BucketInfo, 0, len(entries))
 	for _, e := range entries {
 		if !e.IsDir() {
 			continue
@@ -180,27 +184,27 @@ func (s *FilesystemStore) ListBuckets(_ context.Context) ([]BucketInfo, error) {
 		if err != nil {
 			created = time.Now().UTC()
 		}
-		out = append(out, BucketInfo{Name: e.Name(), CreationDate: created})
+		out = append(out, storage.BucketInfo{Name: e.Name(), CreationDate: created})
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].Name < out[j].Name })
 	return out, nil
 }
 
-func (s *FilesystemStore) PutObject(_ context.Context, bucket, key string, body io.Reader, opts PutOptions) (*ObjectMeta, error) {
-	if err := validateBucketName(bucket); err != nil {
+func (s *FilesystemStore) PutObject(_ context.Context, bucket, key string, body io.Reader, opts storage.PutOptions) (*storage.ObjectMeta, error) {
+	if err := storage.ValidateBucketName(bucket); err != nil {
 		return nil, err
 	}
-	if err := validateKey(key); err != nil {
+	if err := storage.ValidateKey(key); err != nil {
 		return nil, err
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
 	if _, err := os.Stat(s.bucketDir(bucket)); os.IsNotExist(err) {
-		return nil, ErrBucketNotFound
+		return nil, storage.ErrBucketNotFound
 	}
 	objPath := s.objectPath(bucket, key)
-	var existing *ObjectMeta
+	var existing *storage.ObjectMeta
 	if _, statErr := os.Stat(objPath); statErr == nil {
 		record, readErr := readObjectRecord(objPath)
 		if readErr != nil {
@@ -211,15 +215,15 @@ func (s *FilesystemStore) PutObject(_ context.Context, bucket, key string, body 
 	} else if !os.IsNotExist(statErr) {
 		return nil, statErr
 	}
-	if err := checkWritePreconditions(opts, existing); err != nil {
+	if err := storage.CheckWritePreconditions(opts, existing); err != nil {
 		return nil, err
 	}
 
-	etag, data, err := etagForReader(body)
+	etag, data, err := storage.ETagForReader(body)
 	if err != nil {
 		return nil, err
 	}
-	recordVersion, err := newRecordVersion()
+	recordVersion, err := storage.NewRecordVersion()
 	if err != nil {
 		return nil, err
 	}
@@ -228,7 +232,7 @@ func (s *FilesystemStore) PutObject(_ context.Context, bucket, key string, body 
 		RecordVersion:     recordVersion,
 		Data:              data,
 		ContentType:       opts.ContentType,
-		Metadata:          cloneMetadata(opts.Metadata),
+		Metadata:          storage.CloneMetadata(opts.Metadata),
 		ETag:              etag,
 		ChecksumAlgorithm: opts.ChecksumAlgorithm,
 		ChecksumValue:     opts.ChecksumValue,
@@ -241,11 +245,11 @@ func (s *FilesystemStore) PutObject(_ context.Context, bucket, key string, body 
 	return &meta, nil
 }
 
-func (s *FilesystemStore) GetObject(_ context.Context, bucket, key string) (io.ReadCloser, *ObjectMeta, error) {
-	if err := validateBucketName(bucket); err != nil {
+func (s *FilesystemStore) GetObject(_ context.Context, bucket, key string) (io.ReadCloser, *storage.ObjectMeta, error) {
+	if err := storage.ValidateBucketName(bucket); err != nil {
 		return nil, nil, err
 	}
-	if err := validateKey(key); err != nil {
+	if err := storage.ValidateKey(key); err != nil {
 		return nil, nil, err
 	}
 	s.mu.RLock()
@@ -257,7 +261,7 @@ func (s *FilesystemStore) GetObject(_ context.Context, bucket, key string) (io.R
 	record, err := readObjectRecord(s.objectPath(bucket, key))
 	if err != nil {
 		if os.IsNotExist(err) {
-			return nil, nil, ErrObjectNotFound
+			return nil, nil, storage.ErrObjectNotFound
 		}
 		return nil, nil, err
 	}
@@ -265,11 +269,11 @@ func (s *FilesystemStore) GetObject(_ context.Context, bucket, key string) (io.R
 	return io.NopCloser(bytes.NewReader(record.Data)), &meta, nil
 }
 
-func (s *FilesystemStore) HeadObject(_ context.Context, bucket, key string) (*ObjectMeta, error) {
-	if err := validateBucketName(bucket); err != nil {
+func (s *FilesystemStore) HeadObject(_ context.Context, bucket, key string) (*storage.ObjectMeta, error) {
+	if err := storage.ValidateBucketName(bucket); err != nil {
 		return nil, err
 	}
-	if err := validateKey(key); err != nil {
+	if err := storage.ValidateKey(key); err != nil {
 		return nil, err
 	}
 	s.mu.RLock()
@@ -281,7 +285,7 @@ func (s *FilesystemStore) HeadObject(_ context.Context, bucket, key string) (*Ob
 	record, err := readObjectRecord(s.objectPath(bucket, key))
 	if err != nil {
 		if os.IsNotExist(err) {
-			return nil, ErrObjectNotFound
+			return nil, storage.ErrObjectNotFound
 		}
 		return nil, err
 	}
@@ -290,10 +294,10 @@ func (s *FilesystemStore) HeadObject(_ context.Context, bucket, key string) (*Ob
 }
 
 func (s *FilesystemStore) DeleteObject(_ context.Context, bucket, key string) error {
-	if err := validateBucketName(bucket); err != nil {
+	if err := storage.ValidateBucketName(bucket); err != nil {
 		return err
 	}
-	if err := validateKey(key); err != nil {
+	if err := storage.ValidateKey(key); err != nil {
 		return err
 	}
 	s.mu.Lock()
@@ -304,13 +308,13 @@ func (s *FilesystemStore) DeleteObject(_ context.Context, bucket, key string) er
 	}
 	objPath := s.objectPath(bucket, key)
 	if _, err := os.Stat(objPath); os.IsNotExist(err) {
-		return ErrObjectNotFound
+		return storage.ErrObjectNotFound
 	}
 	return os.Remove(objPath)
 }
 
 func (s *FilesystemStore) DeleteObjects(_ context.Context, bucket string, keys []string) ([]string, error) {
-	if err := validateBucketName(bucket); err != nil {
+	if err := storage.ValidateBucketName(bucket); err != nil {
 		return nil, err
 	}
 	s.mu.Lock()
@@ -322,7 +326,7 @@ func (s *FilesystemStore) DeleteObjects(_ context.Context, bucket string, keys [
 
 	var deleted []string
 	for _, key := range keys {
-		if err := validateKey(key); err != nil {
+		if err := storage.ValidateKey(key); err != nil {
 			return deleted, err
 		}
 		objPath := s.objectPath(bucket, key)
@@ -337,15 +341,15 @@ func (s *FilesystemStore) DeleteObjects(_ context.Context, bucket string, keys [
 	return deleted, nil
 }
 
-func (s *FilesystemStore) CopyObject(ctx context.Context, srcBucket, srcKey, dstBucket, dstKey string) (*ObjectMeta, error) {
+func (s *FilesystemStore) CopyObject(ctx context.Context, srcBucket, srcKey, dstBucket, dstKey string) (*storage.ObjectMeta, error) {
 	rc, meta, err := s.GetObject(ctx, srcBucket, srcKey)
 	if err != nil {
 		return nil, err
 	}
 	defer rc.Close()
-	return s.PutObject(ctx, dstBucket, dstKey, rc, PutOptions{
+	return s.PutObject(ctx, dstBucket, dstKey, rc, storage.PutOptions{
 		ContentType:       meta.ContentType,
-		Metadata:          cloneMetadata(meta.Metadata),
+		Metadata:          storage.CloneMetadata(meta.Metadata),
 		ChecksumAlgorithm: meta.ChecksumAlgorithm,
 		ChecksumValue:     meta.ChecksumValue,
 	})

@@ -57,7 +57,7 @@ func (a *Adapter) enqueueIntentLocked(ctx context.Context, operation OutboxOpera
 	return a.outbox.Enqueue(entry)
 }
 
-func (a *Adapter) prepareIntent(operation OutboxOperation, bucket, key, previousVersion string) (OutboxEntry, error) {
+func (a *Adapter) prepareIntent(operation OutboxOperation, bucket, key, previousVersion string, source ...string) (OutboxEntry, error) {
 	if a.coordinatedOutbox == nil {
 		return OutboxEntry{}, ErrDurableOutboxRequired
 	}
@@ -68,6 +68,12 @@ func (a *Adapter) prepareIntent(operation OutboxOperation, bucket, key, previous
 		PreviousVersion: previousVersion,
 		Prepared:        true,
 		CreatedAt:       time.Now().UTC(),
+	}
+	if len(source) > 0 {
+		entry.SourceBucket = source[0]
+	}
+	if len(source) > 1 {
+		entry.SourceKey = source[1]
 	}
 	return a.coordinatedOutbox.Prepare(entry)
 }
@@ -86,13 +92,13 @@ func (a *Adapter) discardPreparedIntent(id string) error {
 	return a.coordinatedOutbox.DiscardPrepared(id)
 }
 
-func (a *Adapter) enqueuePreparedIntentLocked(operation OutboxOperation, bucket, key, previousVersion string) (OutboxEntry, error) {
-	return a.prepareIntent(operation, bucket, key, previousVersion)
+func (a *Adapter) enqueuePreparedIntentLocked(operation OutboxOperation, bucket, key, previousVersion string, source ...string) (OutboxEntry, error) {
+	return a.prepareIntent(operation, bucket, key, previousVersion, source...)
 }
 
 func (a *Adapter) propagateEntry(ctx context.Context, entry OutboxEntry) error {
 	switch entry.Operation {
-	case OutboxPut:
+	case OutboxPut, OutboxCopy, OutboxMultipart:
 		rc, meta, err := a.local.GetObject(ctx, entry.Bucket, entry.Key)
 		if err != nil {
 			return err
@@ -259,7 +265,7 @@ func (a *Adapter) reconcilePreparedAfterError(ctx context.Context, entry OutboxE
 
 func (a *Adapter) reconcilePreparedEntryLocked(ctx context.Context, entry OutboxEntry) (bool, error) {
 	switch entry.Operation {
-	case OutboxPut:
+	case OutboxPut, OutboxCopy, OutboxMultipart:
 		meta, err := a.local.HeadObject(ctx, entry.Bucket, entry.Key)
 		if err != nil {
 			if errors.Is(err, storage.ErrObjectNotFound) {
