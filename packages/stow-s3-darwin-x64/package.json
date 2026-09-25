@@ -1,7 +1,7 @@
 {
-  "name": "@chs/stow-s3-darwin-x64",
+  "name": "@chester-hill-solutions/stow-s3-darwin-x64",
   "version": "0.2.0",
-  "description": "Native stow server binary for darwin x64. Installed automatically as an optional dependency of @chs/stow-s3.",
+  "description": "Native stow server binary for darwin x64. Installed automatically as an optional dependency of @chester-hill-solutions/stow-s3.",
   "os": [
     "darwin"
   ],

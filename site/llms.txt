@@ -19,7 +19,7 @@ deletes itself when it closes.
 
 ## Install
 
-The npm and PyPI packages are **not published yet**: `@chs/stow-s3` and
+The npm and PyPI packages are **not published yet**: `@chester-hill-solutions/stow-s3` and
 `stow-s3` are not on npm or PyPI, so those installs 404. The Go module is
 published.
 

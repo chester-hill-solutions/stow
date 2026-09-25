@@ -16,10 +16,10 @@ if (!goVersion || goVersion !== packageJson.version) {
 // and the main package would publish a tarball whose binary is from a different
 // release than the JavaScript that resolves it.
 const PLATFORM_PACKAGES = [
-  { dir: "stow-s3-linux-x64", name: "@chs/stow-s3-linux-x64", os: "linux", cpu: "x64" },
-  { dir: "stow-s3-linux-arm64", name: "@chs/stow-s3-linux-arm64", os: "linux", cpu: "arm64" },
-  { dir: "stow-s3-darwin-x64", name: "@chs/stow-s3-darwin-x64", os: "darwin", cpu: "x64" },
-  { dir: "stow-s3-darwin-arm64", name: "@chs/stow-s3-darwin-arm64", os: "darwin", cpu: "arm64" },
+  { dir: "stow-s3-linux-x64", name: "@chester-hill-solutions/stow-s3-linux-x64", os: "linux", cpu: "x64" },
+  { dir: "stow-s3-linux-arm64", name: "@chester-hill-solutions/stow-s3-linux-arm64", os: "linux", cpu: "arm64" },
+  { dir: "stow-s3-darwin-x64", name: "@chester-hill-solutions/stow-s3-darwin-x64", os: "darwin", cpu: "x64" },
+  { dir: "stow-s3-darwin-arm64", name: "@chester-hill-solutions/stow-s3-darwin-arm64", os: "darwin", cpu: "arm64" },
 ];
 
 const optional = packageJson.optionalDependencies ?? {};

@@ -30,7 +30,7 @@ reads, error shapes.
 
 ## Install
 
-**npm and PyPI are not published yet.** `@chs/stow-s3` and `stow-s3` are not on
+**npm and PyPI are not published yet.** `@chester-hill-solutions/stow-s3` and `stow-s3` are not on
 npm or PyPI, so those two commands fail with a 404. Do not try them first. The
 Go module is published and is the shortest working path.
 
@@ -66,7 +66,7 @@ TypeScript:
 
 ```ts
 import { GetObjectCommand, PutObjectCommand } from "@aws-sdk/client-s3";
-import { withStow } from "@chs/stow-s3";
+import { withStow } from "@chester-hill-solutions/stow-s3";
 
 const body = await withStow(async ({ s3, bucket }) => {
   await s3.send(new PutObjectCommand({

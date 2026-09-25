@@ -14,7 +14,7 @@ Ship a Docker-free local S3-compatible service whose externally observable behav
 - the local and run-through modes defined by the amended compatibility contract;
 - safe mirror-write propagation with a durable, retryable outbox;
 - the complete supported S3 operation set, including multipart listing and SDK-observable conditional/checksum behavior;
-- the TypeScript `@chs/stow-s3` wrapper with explicit backend selection and a separately typed `connect()` lifecycle;
+- the TypeScript `@chester-hill-solutions/stow-s3` wrapper with explicit backend selection and a separately typed `connect()` lifecycle;
 - accurate admin status/inspection and Prometheus metrics;
 - a full local CI gate, protected live-provider tests, binary artifacts, and npm artifacts.
 
@@ -35,7 +35,7 @@ The existing `docs/compat-contract.md` remains the acceptance document, but the 
 9. **Package lifecycle:** Node 20+ is supported. `Stow.start()` owns a spawned process; `Stow.connect()` returns a distinct external-connection type and requires explicit endpoint/credential inputs. Remove the reserved unused `upstream` start option.
 10. **Storage format:** 0.2.0 uses a clean-break atomic record format. Old data is not migrated; startup emits a warning and continues with the new format.
 11. **Operations:** the amended contract includes ListMultipartUploads, full conditional CopyObject, single-range support, SDK-supported conditional writes, and the common checksum set (`Content-MD5`, CRC32, CRC32C, SHA-1, SHA-256).
-12. **Release identity:** `0.2.0` is the first release targeting the amended v1 contract. Publish both the Go binary and `@chs/stow-s3` after the full gate passes.
+12. **Release identity:** `0.2.0` is the first release targeting the amended v1 contract. Publish both the Go binary and `@chester-hill-solutions/stow-s3` after the full gate passes.
 
 Update `docs/adr/0001-auto-detect-run-through.md` through a new amendment ADR rather than rewriting accepted history. Update `docs/compat-contract.md`, `CONTEXT.md`, `README.md`, `packages/stow-s3/README.md`, and a new changelog/release-note document.
 
@@ -43,7 +43,7 @@ Update `docs/adr/0001-auto-detect-run-through.md` through a new amendment ADR ra
 
 R0 is not complete until the amended documents contain explicit tables for the following; implementation must not infer these rules from current handler code:
 
-- **Versioning:** amend the existing “major bump for §1/§6 changes” rule. `0.2.0` is a pre-1.0 release with documented breaking behavior; the stable `@chs/stow-s3` 1.x boundary is reserved for the first non-breaking stable contract. Add one version source for npm, the binary, and `/_stow/status`.
+- **Versioning:** amend the existing “major bump for §1/§6 changes” rule. `0.2.0` is a pre-1.0 release with documented breaking behavior; the stable `@chester-hill-solutions/stow-s3` 1.x boundary is reserved for the first non-breaking stable contract. Add one version source for npm, the binary, and `/_stow/status`.
 - **Policies:** `local` is a mode, not a policy. `readThroughCache` remains local-only unless the separate live-write flag is set; `mirrorWrites` explicitly enables propagation and emits a warning; `proxy` is rejected/deprecated with a migration error, not silently accepted.
 - **Bucket grammar:** specify the exact accepted alphabet, length, reserved-name/IP rules, and permitted edge characters in the ADR and contract. Use one validator shared by storage and HTTP.
 - **Date fallback:** apply the fallback only to header authentication; the selected date header must be part of `SignedHeaders`; presigned URLs continue to require `X-Amz-Date`.
@@ -347,7 +347,7 @@ This standards phase is a release blocker: no new remediation PR may increase a 
 
 ### R9 — TypeScript package and lifecycle (depends on R7–R8)
 
-**Purpose:** make `@chs/stow-s3` reflect the new backend and lifecycle contracts without speculative API.
+**Purpose:** make `@chester-hill-solutions/stow-s3` reflect the new backend and lifecycle contracts without speculative API.
 
 **Touchpoints:**
 
@@ -393,7 +393,7 @@ This standards phase is a release blocker: no new remediation PR may increase a 
 2. Add a Node 20-compatible test runner, Node 20+ matrix jobs, and exact SDK pins. Commit the npm lockfile (remove the current ignore rule), and use a CI-installed test tool or compiled tests rather than Node’s newer `--experimental-strip-types` flag on Node 20.
 3. Add protected live jobs for AWS S3, R2, and a custom endpoint. Require disposable buckets/prefixes, short-lived credentials/session tokens, cleanup checks, and no application credentials. Make a successful live run for the release commit a release prerequisite even when the job is scheduled/manual rather than run on every PR.
 4. Add branch-protection required checks and make release jobs depend on the complete local gate and the recorded live result. Pin third-party GitHub Actions by commit SHA and use `go-version-file` rather than duplicating version literals.
-5. Update the release workflow to verify tag/package/version consistency, build/test/package the Go binary, publish `@chs/stow-s3` through trusted npm/OIDC publishing from the same tag, generate checksums, verify package contents, and refuse publication on any failed gate.
+5. Update the release workflow to verify tag/package/version consistency, build/test/package the Go binary, publish `@chester-hill-solutions/stow-s3` through trusted npm/OIDC publishing from the same tag, generate checksums, verify package contents, and refuse publication on any failed gate.
 6. Ensure CI builds the binary at the path the TypeScript resolver expects and fails the Node integration job if its required binary scenario is skipped.
 7. Update the changelog and release notes with the clean-break format, SDK profile, policy changes, and migration warning.
 

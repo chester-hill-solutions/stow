@@ -137,13 +137,13 @@ message: The stow server binary was not found (resolved to "stow"). It is
   searched for in this order: the STOW_BIN environment variable, bin/stow-s3
   relative to a monorepo checkout, then stow on PATH. Install the platform
   binary package for this platform, point STOW_BIN at an existing binary, or
-  use the EmbeddedStow and @chs/stow-s3/browser profiles, which need no server
+  use the EmbeddedStow and @chester-hill-solutions/stow-s3/browser profiles, which need no server
   binary.
 ```
 
 ## 7. Next steps
 
-1. ~~Add `@chs/stow-s3-<platform>` optional packages and teach `resolveStowBinary` to
+1. ~~Add `@chester-hill-solutions/stow-s3-<platform>` optional packages and teach `resolveStowBinary` to
    prefer a bundled platform binary over `PATH`.~~ Done.
 2. ~~Run the clean-virtualenv Python experiment for the `stow-s3`
    distribution.~~ Done, and passing.

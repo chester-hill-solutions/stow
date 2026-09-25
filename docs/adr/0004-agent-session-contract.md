@@ -125,7 +125,7 @@ code for the same condition.
 ## 6. Binary distribution
 
 The native binary ships in platform optional packages
-(`@chs/stow-s3-<os>-<arch>`) resolved by the package before `PATH`, so a plain
+(`@chester-hill-solutions/stow-s3-<os>-<arch>`) resolved by the package before `PATH`, so a plain
 install starts a session with no environment setup. The resolution order is:
 bundled platform package, `STOW_BIN`, monorepo `bin/stow-s3`, `stow` on `PATH`.
 
@@ -154,7 +154,7 @@ Recorded as explicit non-goals, not oversights:
   measured cost of the v1 buffered path, and reducing it is phase 2 work. It is
   not hidden, and the quota defaults are sized against it.
 - **Embedded S3 wire compatibility.** The native path has an in-process adapter;
-  the public `EmbeddedStow` and `@chs/stow-s3/browser` profiles stay direct object
+  the public `EmbeddedStow` and `@chester-hill-solutions/stow-s3/browser` profiles stay direct object
   interfaces with no S3 surface.
 
 ## 8. Consequences

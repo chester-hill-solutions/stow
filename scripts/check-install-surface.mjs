@@ -28,10 +28,10 @@ const root = resolve(import.meta.dirname, "..");
 const SURFACE = [
   {
     ecosystem: "npm",
-    name: "@chs/stow-s3",
+    name: "@chester-hill-solutions/stow-s3",
     published: false,
     // The name a reader would put on a command line.
-    command: "npm install @chs/stow-s3",
+    command: "npm install @chester-hill-solutions/stow-s3",
     // The path in this repository that backs the package.
     path: "packages/stow-s3",
   },

@@ -61,7 +61,7 @@ The shared SDK profile includes atomic `If-None-Match: *` and `If-Match` conditi
 
 ### 7. Versioning
 
-The existing rule requiring a major version bump is amended for the pre-1.0 line: `0.2.0` may contain documented breaking behavior because it is not yet the stable `@chs/stow-s3` 1.x contract. The 1.x boundary is reserved for the first stable, non-breaking contract. The npm version, binary build version, and status version must come from one version source.
+The existing rule requiring a major version bump is amended for the pre-1.0 line: `0.2.0` may contain documented breaking behavior because it is not yet the stable `@chester-hill-solutions/stow-s3` 1.x contract. The 1.x boundary is reserved for the first stable, non-breaking contract. The npm version, binary build version, and status version must come from one version source.
 
 ### 8. Backends and storage format
 
