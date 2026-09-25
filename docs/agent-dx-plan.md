@@ -271,7 +271,7 @@ The direct Go/WASM runtime remains valuable for callers that:
 `EmbeddedStow` should not pretend to be an S3 server. The in-process S3
 compatibility adapter now exists for the native path as `runtime.StoreAdapter`,
 which is what gives the HTTP server a single choke point for quotas and
-accounting. The public `EmbeddedStow`/`@chs/stow-s3/browser` profiles remain
+accounting. The public `EmbeddedStow`/`@chester-hill-solutions/stow-s3/browser` profiles remain
 direct object interfaces with no S3 wire surface, and that split is intentional.
 
 ### 4.3 Do not start with a shared daemon

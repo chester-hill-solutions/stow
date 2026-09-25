@@ -58,10 +58,10 @@ function findMonorepoBinary() {
 // workflow builds, so an install on a supported platform resolves a binary with
 // no PATH or environment setup.
 const PLATFORM_PACKAGES = {
-    "linux-x64": "@chs/stow-s3-linux-x64",
-    "linux-arm64": "@chs/stow-s3-linux-arm64",
-    "darwin-x64": "@chs/stow-s3-darwin-x64",
-    "darwin-arm64": "@chs/stow-s3-darwin-arm64",
+    "linux-x64": "@chester-hill-solutions/stow-s3-linux-x64",
+    "linux-arm64": "@chester-hill-solutions/stow-s3-linux-arm64",
+    "darwin-x64": "@chester-hill-solutions/stow-s3-darwin-x64",
+    "darwin-arm64": "@chester-hill-solutions/stow-s3-darwin-arm64",
 };
 const BUNDLED_BINARY_SUBPATH = "bin/stow-s3";
 function findBundledBinary() {
@@ -131,7 +131,7 @@ export class StowBinaryNotFoundError extends Error {
             "It is searched for in this order: the STOW_BIN environment variable, " +
             "bin/stow-s3 relative to a monorepo checkout, then stow-s3 on PATH. " +
             "Install the platform binary package for this platform, point STOW_BIN at an " +
-            "existing binary, or use the EmbeddedStow and @chs/stow-s3/browser profiles, " +
+            "existing binary, or use the EmbeddedStow and @chester-hill-solutions/stow-s3/browser profiles, " +
             "which need no server binary.");
         this.name = "StowBinaryNotFoundError";
     }

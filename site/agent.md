@@ -22,7 +22,7 @@ would otherwise need a live bucket.
 ## Install
 
 **The npm and PyPI packages are not published yet.** Both registry names are
-reserved and the release pipeline is built, but `@chs/stow-s3` and `stow-s3` are
+reserved and the release pipeline is built, but `@chester-hill-solutions/stow-s3` and `stow-s3` are
 not on npm or PyPI, so `npm install` and `pip install` will fail with a 404. Do
 not spend a turn discovering that. The Go module *is* published and is the
 shortest path today.
@@ -63,7 +63,7 @@ TypeScript:
 
 ```ts
 import { GetObjectCommand, PutObjectCommand } from "@aws-sdk/client-s3";
-import { withStow } from "@chs/stow-s3";
+import { withStow } from "@chester-hill-solutions/stow-s3";
 
 const body = await withStow(async ({ s3, bucket }) => {
   await s3.send(new PutObjectCommand({

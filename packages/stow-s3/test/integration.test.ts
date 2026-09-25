@@ -26,7 +26,7 @@ describe("parseReadyLine", () => {
 describe("stow binary discovery", () => {
   // Derived the same way bin.ts derives it, so this exercises the real mapping
   // on whichever platform runs it.
-  const platformPackage = `@chs/stow-s3-${process.platform}-${process.arch}`;
+  const platformPackage = `@chester-hill-solutions/stow-s3-${process.platform}-${process.arch}`;
 
   async function isolatedBin(directory: string): Promise<typeof BinModule> {
     const isolatedDist = join(directory, "isolated", "dist");

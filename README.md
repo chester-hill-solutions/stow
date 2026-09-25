@@ -47,8 +47,8 @@ Use Stow when a workload needs S3 behavior without a cloud account or network se
 ## Install
 
 **The npm and PyPI packages are not published yet.** Both names are reserved and
-the release pipeline that will publish them is built and green, but `@chs/stow-s3`
-is not on npm and `stow-s3` is not on PyPI. `npm install @chs/stow-s3` and
+the release pipeline that will publish them is built and green, but `@chester-hill-solutions/stow-s3`
+is not on npm and `stow-s3` is not on PyPI. `npm install @chester-hill-solutions/stow-s3` and
 `pip install stow-s3` will fail with a 404 today.
 
 The Go module is published and installs today:
@@ -93,7 +93,7 @@ cd packages/stow-s3 && npm install && npm run build
 
 ```ts
 import { GetObjectCommand, PutObjectCommand } from "@aws-sdk/client-s3";
-import { withStow } from "@chs/stow-s3";
+import { withStow } from "@chester-hill-solutions/stow-s3";
 
 const body = await withStow(async (session) => {
   await session.s3.send(new PutObjectCommand({
@@ -236,7 +236,7 @@ import {
   PutObjectCommand,
   S3Client,
 } from "@aws-sdk/client-s3";
-import { Stow } from "@chs/stow-s3";
+import { Stow } from "@chester-hill-solutions/stow-s3";
 
 const stow = await Stow.start({
   backend: "memory",
@@ -330,8 +330,8 @@ func main() {
 The Node.js WebAssembly profile provides an in-memory object runtime without an HTTP server:
 
 ```ts
-import { EmbeddedStow } from "@chs/stow-s3/embedded";
-import { loadNodeWasmHost } from "@chs/stow-s3/node-wasm";
+import { EmbeddedStow } from "@chester-hill-solutions/stow-s3/embedded";
+import { loadNodeWasmHost } from "@chester-hill-solutions/stow-s3/node-wasm";
 
 const host = await loadNodeWasmHost();
 const embedded = EmbeddedStow.open(host);

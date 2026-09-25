@@ -1,11 +1,11 @@
-# @chs/stow-s3
+# @chester-hill-solutions/stow-s3
 
 TypeScript client for the [stow](https://github.com/chester-hill-solutions/stow-s3) local S3-compatible dev bucket service.
 
 ## Install
 
 ```sh
-npm install @chs/stow-s3
+npm install @chester-hill-solutions/stow-s3
 ```
 
 Build the Go binary first when working from the monorepo:
@@ -17,7 +17,7 @@ make build
 ## Usage
 
 ```ts
-import { Stow } from "@chs/stow-s3";
+import { Stow } from "@chester-hill-solutions/stow-s3";
 
 const bucket = await Stow.start({
   dataDir: ".dev-bucket",
@@ -42,7 +42,7 @@ Both connection helpers also accept an optional `sessionToken` or credential `pr
 `EmbeddedStow` is a host-neutral typed wrapper for the memory-only WASM bridge. The host loads the `js/wasm` artifact and provides a synchronous `call(request)` method; the wrapper handles object bytes, metadata, capabilities, quotas, reset, and close:
 
 ```ts
-import { EmbeddedStow } from "@chs/stow-s3/embedded";
+import { EmbeddedStow } from "@chester-hill-solutions/stow-s3/embedded";
 
 const embedded = EmbeddedStow.open(wasmHost, { maxBytes: 10_000_000 });
 embedded.createBucket("assets");
@@ -54,8 +54,8 @@ embedded.close();
 The Node package includes the tested WASM asset and a ready-made host loader:
 
 ```ts
-import { EmbeddedStow } from "@chs/stow-s3/embedded";
-import { loadNodeWasmHost } from "@chs/stow-s3/node-wasm";
+import { EmbeddedStow } from "@chester-hill-solutions/stow-s3/embedded";
+import { loadNodeWasmHost } from "@chester-hill-solutions/stow-s3/node-wasm";
 
 const host = await loadNodeWasmHost();
 const embedded = EmbeddedStow.open(host, { maxBytes: 10_000_000 });
@@ -86,7 +86,7 @@ credentials, a loopback endpoint, and cleanup on success, failure, or
 cancellation.
 
 ```ts
-import { withStow } from "@chs/stow-s3";
+import { withStow } from "@chester-hill-solutions/stow-s3";
 
 const summary = await withStow(async (session) => {
   await session.s3.send(
@@ -120,7 +120,7 @@ advanced process-owned and external-endpoint APIs.
 
 ### Browser persistence profile
 
-The additive [`@chs/stow-s3/browser`](../../docs/browser-persistence.md) entry
+The additive [`@chester-hill-solutions/stow-s3/browser`](../../docs/browser-persistence.md) entry
 point coordinates durable commits around the embedded memory profile. The
 `openBrowserEmbeddedStow` wrapper replays the committed generation during async
 open, serializes operations FIFO, and commits each mutation before its promise
@@ -132,7 +132,7 @@ namespace ownership:
 import {
   IndexedDbPersistenceAdapter,
   openBrowserEmbeddedStow,
-} from "@chs/stow-s3/browser";
+} from "@chester-hill-solutions/stow-s3/browser";
 
 const persistence = new IndexedDbPersistenceAdapter({
   databaseName: "my-app-stow",
@@ -152,7 +152,7 @@ ownership. `close()` is terminal, idempotent, drains accepted operations, and
 retains data; it does not close the caller-supplied host. Unsupported formats,
 stale generations, denied ownership, quota overflow, and closed profiles use
 stable persistence error codes rather than falling back to memory-only state.
-The existing `EmbeddedStow` and `@chs/stow-s3/node-wasm` contracts remain
+The existing `EmbeddedStow` and `@chester-hill-solutions/stow-s3/node-wasm` contracts remain
 unchanged.
 
 CLI equivalent:

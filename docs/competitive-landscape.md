@@ -103,7 +103,7 @@ configuration (`internal/s3api/cors.go:7-28`).
 - a Go in-process library at `pkg/stow` exposing `Open`, bucket/object operations, `Reset`,
   `Usage`, and `Capabilities` over an in-memory backend only (`pkg/stow/types.go:9-11`,
   `pkg/stow/runtime.go:15-128`);
-- a Go→WASM build (`cmd/stow-wasm/main.go:1-3`) shipped in the npm package `@chs/stow-s3`, exposing an
+- a Go→WASM build (`cmd/stow-wasm/main.go:1-3`) shipped in the npm package `@chester-hill-solutions/stow-s3`, exposing an
   `embedded` in-process entrypoint plus `node-wasm` and `browser` hosts
   (`packages/stow-s3/package.json`).
 

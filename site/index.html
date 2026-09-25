@@ -78,11 +78,11 @@
 
           <div class="hero-side">
             <!-- The install line below is the launch's first promise. It only
-                 resolves once @chs/stow-s3 is published to npm; see the launch
+                 resolves once @chester-hill-solutions/stow-s3 is published to npm; see the launch
                  checklist in docs/ before this page goes live. -->
             <div class="install">
               <span class="prompt" aria-hidden="true">$</span>
-              <code id="install-cmd">npm install @chs/stow-s3</code>
+              <code id="install-cmd">npm install @chester-hill-solutions/stow-s3</code>
               <button type="button" data-copy="#install-cmd">Copy</button>
             </div>
 
@@ -135,7 +135,7 @@ STOW_READY endpoint=http://127.0.0.1:34781 access_key=… mode=local
           <pre id="agent-brief"><span class="c"># Stow S3</span>
 Local S3-compatible object store. Apache 2.0. <span class="k">Not</span> production storage.
 
-<span class="k">install</span>  npm install @chs/stow-s3 @aws-sdk/client-s3
+<span class="k">install</span>  npm install @chester-hill-solutions/stow-s3 @aws-sdk/client-s3
 <span class="k">run</span>      await withStow(async ({ s3, bucket }) =&gt; { <span class="c">/* normal S3 calls */</span> })
 <span class="k">verify</span>   npx stow-doctor
 <span class="k">read</span>     <b>https://stow.chesterhillsolutions.ca/agent.md</b>
@@ -198,7 +198,7 @@ Local S3-compatible object store. Apache 2.0. <span class="k">Not</span> product
               <span>TypeScript</span>
             </div>
             <pre><span class="k">import</span> { PutObjectCommand, GetObjectCommand } <span class="k">from</span> <span class="s">"@aws-sdk/client-s3"</span>;
-<span class="k">import</span> { withStow } <span class="k">from</span> <span class="s">"@chs/stow-s3"</span>;
+<span class="k">import</span> { withStow } <span class="k">from</span> <span class="s">"@chester-hill-solutions/stow-s3"</span>;
 
 <span class="k">await</span> withStow(<span class="k">async</span> ({ s3, bucket }) =&gt; {
   <span class="k">await</span> s3.<span class="k">send</span>(<span class="k">new</span> <span class="s">PutObjectCommand</span>({
@@ -254,7 +254,7 @@ Local S3-compatible object store. Apache 2.0. <span class="k">Not</span> product
           <ul class="grid">
             <li class="card">
               <h3>TypeScript</h3>
-              <span class="installline"><b>npm</b> @chs/stow-s3</span>
+              <span class="installline"><b>npm</b> @chester-hill-solutions/stow-s3</span>
               <pre><span class="k">await</span> withStow(cb)
 Stow.<span class="k">start</span>(opts)
 Stow.<span class="k">connect</span>(endpoint)</pre>
