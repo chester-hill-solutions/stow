@@ -129,6 +129,16 @@ func TestFileOutboxClaimIsExclusiveAndExpires(t *testing.T) {
 	if err := second.MarkClaimedSuccess(entry.ID, "owner-b", claimed.ClaimToken); err == nil {
 		t.Fatal("stale owner was allowed to mark success")
 	}
+	if err := first.Renew(entry.ID, "owner-a", claimed.ClaimToken, 2*time.Minute); err != nil {
+		t.Fatalf("renew claim: %v", err)
+	}
+	if err := first.Release(entry.ID, "owner-a", claimed.ClaimToken); err != nil {
+		t.Fatalf("release claim: %v", err)
+	}
+	claimed, ok, err = first.Claim(entry.ID, "owner-a", time.Minute)
+	if err != nil || !ok {
+		t.Fatalf("reclaim released entry = %+v, ok=%v, err=%v", claimed, ok, err)
+	}
 	expireFileOutboxClaim(t, path, entry.ID)
 	if _, ok, err := second.Claim(entry.ID, "owner-b", time.Minute); err != nil || !ok {
 		t.Fatalf("expired claim ok=%v err=%v, want takeover", ok, err)
