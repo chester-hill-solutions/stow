@@ -34,7 +34,7 @@ if (npmArch === undefined) {
   console.error(`no npm platform package defined for ${goos}/${goarch}`);
   process.exit(1);
 }
-const platformDir = `stow-${goos}-${npmArch}`;
+const platformDir = `stow-s3-${goos}-${npmArch}`;
 const packageDir = resolve(root, "packages", platformDir);
 const manifestPath = resolve(packageDir, "package.json");
 if (!existsSync(manifestPath)) {
@@ -60,9 +60,9 @@ if (manifest.os?.[0] !== goos || manifest.cpu?.[0] !== npmArch) {
 // binary that is not there.
 const work = mkdtempSync(join(tmpdir(), "stow-platform-"));
 try {
-  const extracted = join(work, "stow");
-  execFileSync("tar", ["-xzf", archive, "-C", work, "stow"], { stdio: "inherit" });
-  const staged = join(packageDir, "bin", "stow");
+  const extracted = join(work, "stow-s3");
+  execFileSync("tar", ["-xzf", archive, "-C", work, "stow-s3"], { stdio: "inherit" });
+  const staged = join(packageDir, "bin", "stow-s3");
   mkdirSync(join(packageDir, "bin"), { recursive: true });
   copyFileSync(extracted, staged);
   chmodSync(staged, 0o755);

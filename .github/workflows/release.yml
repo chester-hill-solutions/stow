@@ -86,7 +86,7 @@ jobs:
         run: go build -trimpath -ldflags "-s -w" -o stow-s3 ./cmd/stow-s3
 
       - name: Package
-        run: tar -czf stow-${{ matrix.os }}-${{ matrix.arch }}.tar.gz stow LICENSE README.md
+        run: tar -czf stow-${{ matrix.os }}-${{ matrix.arch }}.tar.gz stow-s3 LICENSE README.md
 
       # The wheel force-includes the binary, so a wheel is only correct for the
       # one platform it was built against. Building it here, in the matrix entry
@@ -343,7 +343,7 @@ jobs:
         uses: softprops/action-gh-release@da05d552573ad5aba039eaac05058a918a7bf631 # v2.2.2
         with:
           files: |
-            dist/stow-s3-*.tar.gz
+            dist/stow-*.tar.gz
             dist/SHA256SUMS.txt
           body: |
             ## stow ${{ github.ref_name }}
@@ -355,7 +355,7 @@ jobs:
             ### Usage
 
             ```bash
-            stow serve --port 0 --data-dir .stow
+            stow-s3 serve --port 0 --data-dir .stow
             ```
 
             Parse the `STOW_READY` line for `endpoint`, `access_key`, and `secret_key`. Create buckets with the AWS SDK (path-style, region `us-east-1`).
