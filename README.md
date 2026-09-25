@@ -59,6 +59,7 @@ internal/s3api/     S3 HTTP + admin routes
 internal/storage/   filesystem + memory stores (atomic JSON object records on disk)
 internal/auth/      SigV4
 internal/runthrough/ upstream adapter
+pkg/stow/            direct embedded Go runtime
 conformance/        AWS SDK Go v2 conformance tests
 packages/stow/      @chs/stow TypeScript wrapper
 ```
