@@ -8,7 +8,7 @@ export { EMBEDDED_PROTOCOL_VERSION, EmbeddedStow, EmbeddedStowError, } from "./e
 // documented import path.
 export { loadNodeWasmHost, } from "./node-wasm-host.js";
 export { parseReadyLine } from "./start.js";
-export { resolveStowBinary, stowBinaryAvailable } from "./bin.js";
+export { StowBinaryNotFoundError, resolveStowBinary, stowBinaryAvailable, } from "./bin.js";
 export { upstreamFromEnv } from "./upstream.js";
 export const Stow = {
     start(options) {

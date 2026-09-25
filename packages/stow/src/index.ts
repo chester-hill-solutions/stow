@@ -49,7 +49,11 @@ export type {
 } from "./types.js";
 
 export { parseReadyLine } from "./start.js";
-export { resolveStowBinary, stowBinaryAvailable } from "./bin.js";
+export {
+  StowBinaryNotFoundError,
+  resolveStowBinary,
+  stowBinaryAvailable,
+} from "./bin.js";
 export { upstreamFromEnv } from "./upstream.js";
 
 export const Stow = {

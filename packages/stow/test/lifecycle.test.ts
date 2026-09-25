@@ -12,7 +12,7 @@ import {
   verifyObjectReadable,
 } from "../dist/instance.js";
 import { startStow } from "../dist/start.js";
-import { Stow } from "../dist/index.js";
+import { Stow, StowBinaryNotFoundError } from "../dist/index.js";
 
 interface FakeS3Server {
   endpoint: string;
@@ -139,14 +139,39 @@ function restoreEnvironment(values: Record<string, string | undefined>): void {
 }
 
 describe("startup lifecycle", () => {
-  it("cleans up when the child fails before readiness", async () => {
+  it("reports a missing server binary instead of a bare ENOENT", async () => {
     const directory = await mkdtemp(join(tmpdir(), "stow-readiness-"));
     const previous = process.env.STOW_BIN;
     try {
       process.env.STOW_BIN = join(directory, "missing-stow");
       await assert.rejects(
         startStow({ dataDir: join(directory, "data") }),
-        /ENOENT/,
+        (error: unknown) => {
+          assert.ok(error instanceof StowBinaryNotFoundError);
+          assert.equal(error.code, "binary_not_found");
+          assert.match(error.message, /STOW_BIN/);
+          assert.match(error.message, /browser/);
+          return true;
+        },
+      );
+    } finally {
+      restoreEnvironment({ STOW_BIN: previous });
+      await rm(directory, { recursive: true, force: true });
+    }
+  });
+
+  it("cleans up when the child exits before readiness", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "stow-child-fail-"));
+    const previous = process.env.STOW_BIN;
+    const failing = join(directory, "stow");
+    try {
+      // A real executable that exits immediately, so startup fails after the
+      // child is spawned rather than before it.
+      await writeFile(failing, "#!/bin/sh\nexit 3\n", { mode: 0o755 });
+      process.env.STOW_BIN = failing;
+      await assert.rejects(
+        startStow({ dataDir: join(directory, "data") }),
+        /exited before STOW_READY/,
       );
     } finally {
       restoreEnvironment({ STOW_BIN: previous });

@@ -1,6 +1,6 @@
 import { rm } from "node:fs/promises";
 import { spawn } from "node:child_process";
-import { resolveStowBinary } from "./bin.js";
+import { StowBinaryNotFoundError, resolveStowBinary, stowBinaryAvailable } from "./bin.js";
 import { createStowInstance, DEFAULT_REGION } from "./instance.js";
 const READY_RE = /^STOW_READY endpoint=(\S+) access_key=(\S+) secret_key=(\S+) mode=(\S+)/;
 export function parseReadyLine(line) {
@@ -242,7 +242,13 @@ export async function startStow(options = {}) {
     }
     const startupDeadline = Date.now() + STARTUP_TIMEOUT_MS;
     const remainingStartupMs = () => Math.max(1, startupDeadline - Date.now());
-    const child = spawn(resolveStowBinary(), buildServeArgs(options, dataDir, port, host), {
+    // Fail with an actionable error before spawn turns a missing binary into a
+    // bare ENOENT for the literal string "stow".
+    const binary = resolveStowBinary();
+    if (!stowBinaryAvailable()) {
+        throw new StowBinaryNotFoundError(binary);
+    }
+    const child = spawn(binary, buildServeArgs(options, dataDir, port, host), {
         stdio: ["ignore", "pipe", "pipe"],
         env: buildChildEnv(options),
     });

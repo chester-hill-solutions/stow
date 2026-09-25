@@ -79,3 +79,25 @@ export function stowBinaryAvailable(): boolean {
   }
   return findOnPath("stow") !== undefined;
 }
+
+/**
+ * StowBinaryNotFoundError reports that no runnable server binary was found.
+ * It exists because the underlying spawn failure is a bare ENOENT for the
+ * literal string "stow", which tells someone who installed from npm nothing
+ * about why their session did not start or what to do about it.
+ */
+export class StowBinaryNotFoundError extends Error {
+  readonly code = "binary_not_found";
+
+  constructor(resolved: string) {
+    super(
+      `The stow server binary was not found (resolved to ${JSON.stringify(resolved)}). ` +
+        "It is searched for in this order: the STOW_BIN environment variable, " +
+        "bin/stow relative to a monorepo checkout, then stow on PATH. " +
+        "Install the platform binary package for this platform, point STOW_BIN at an " +
+        "existing binary, or use the EmbeddedStow and @chs/stow/browser profiles, " +
+        "which need no server binary.",
+    );
+    this.name = "StowBinaryNotFoundError";
+  }
+}
