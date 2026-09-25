@@ -10,11 +10,19 @@ import (
 )
 
 func (a *Adapter) localVersion(ctx context.Context, bucket, key string) string {
+	version, _ := a.localVersionStrict(ctx, bucket, key)
+	return version
+}
+
+func (a *Adapter) localVersionStrict(ctx context.Context, bucket, key string) (string, error) {
 	meta, err := a.local.HeadObject(ctx, bucket, key)
-	if err != nil {
-		return ""
+	if errors.Is(err, storage.ErrObjectNotFound) {
+		return "", nil
 	}
-	return objectVersion(meta)
+	if err != nil {
+		return "", err
+	}
+	return objectVersion(meta), nil
 }
 
 func objectVersion(meta *storage.ObjectMeta) string {
@@ -46,6 +54,18 @@ func (a *Adapter) enqueueIntentLocked(ctx context.Context, operation OutboxOpera
 		version = objectVersion(meta)
 	}
 	entry := OutboxEntry{Operation: operation, Bucket: bucket, Key: key, Version: version, CreatedAt: time.Now().UTC()}
+	return a.outbox.Enqueue(entry)
+}
+
+func (a *Adapter) enqueuePreparedIntentLocked(operation OutboxOperation, bucket, key, previousVersion string) (OutboxEntry, error) {
+	entry := OutboxEntry{
+		Operation:       operation,
+		Bucket:          bucket,
+		Key:             key,
+		PreviousVersion: previousVersion,
+		Prepared:        true,
+		CreatedAt:       time.Now().UTC(),
+	}
 	return a.outbox.Enqueue(entry)
 }
 
@@ -144,7 +164,7 @@ func (a *Adapter) RetryPending(ctx context.Context) error {
 }
 
 func (a *Adapter) retryEntry(ctx context.Context, entry OutboxEntry, now time.Time) (bool, error) {
-	if entry.Terminal || !outboxEntryDue(entry, now) || !a.upstreamEnabled(entry.Bucket) {
+	if entry.Terminal || !outboxEntryDue(entry, now) {
 		return true, nil
 	}
 	key := outboxIdentity(entry.Bucket, entry.Key)
@@ -156,7 +176,18 @@ func (a *Adapter) retryEntry(ctx context.Context, entry OutboxEntry, now time.Ti
 	if !ok {
 		return false, nil
 	}
-	if current.Terminal || !outboxEntryDue(current, now) || !isFirstPendingForKey(pending, current) {
+	if current.Prepared {
+		ready, err := a.reconcilePreparedEntry(ctx, current)
+		if err != nil || !ready {
+			return err != nil, err
+		}
+		pending = a.outbox.Pending()
+		current, ok = findPendingEntry(pending, current.ID)
+		if !ok {
+			return false, nil
+		}
+	}
+	if !a.upstreamEnabled(current.Bucket) || current.Terminal || !outboxEntryDue(current, now) || !isFirstPendingForKey(pending, current) {
 		return true, nil
 	}
 	if err := a.completeIntentLocked(ctx, current); err != nil {
@@ -165,6 +196,46 @@ func (a *Adapter) retryEntry(ctx context.Context, entry OutboxEntry, now time.Ti
 	remainingState := a.outbox.Pending()
 	remaining, stillPending := findPendingEntry(remainingState, current.ID)
 	return stillPending && (!outboxEntryDue(remaining, time.Now()) || !isFirstPendingForKey(remainingState, remaining)), nil
+}
+
+func (a *Adapter) reconcilePreparedEntry(ctx context.Context, entry OutboxEntry) (bool, error) {
+	switch entry.Operation {
+	case OutboxPut:
+		meta, err := a.local.HeadObject(ctx, entry.Bucket, entry.Key)
+		if err != nil {
+			if errors.Is(err, storage.ErrObjectNotFound) {
+				return false, a.outbox.Discard(entry.ID)
+			}
+			return false, err
+		}
+		currentVersion := objectVersion(meta)
+		if entry.PreviousVersion != "" && currentVersion == entry.PreviousVersion {
+			return false, a.outbox.Discard(entry.ID)
+		}
+		return true, a.outbox.Commit(entry.ID, currentVersion)
+	case OutboxDelete:
+		meta, err := a.local.HeadObject(ctx, entry.Bucket, entry.Key)
+		if err == nil {
+			if entry.Version != "" && objectVersion(meta) == entry.Version {
+				return false, a.outbox.Discard(entry.ID)
+			}
+			return false, a.markPreparedConflict(entry)
+		}
+		if !errors.Is(err, storage.ErrObjectNotFound) {
+			return false, err
+		}
+		return true, a.outbox.Commit(entry.ID, entry.Version)
+	default:
+		return false, a.markPreparedConflict(entry)
+	}
+}
+
+func (a *Adapter) markPreparedConflict(entry OutboxEntry) error {
+	conflict := NewDeterministicUpstreamError(ErrOutboxVersionConflict)
+	if err := a.outbox.MarkFailure(entry.ID, conflict, time.Time{}); err != nil {
+		return errors.Join(conflict, err)
+	}
+	return conflict
 }
 
 func outboxEntryDue(entry OutboxEntry, now time.Time) bool {

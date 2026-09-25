@@ -196,22 +196,33 @@ func (a *Adapter) PutObject(ctx context.Context, bucket, key string, body io.Rea
 	if err := a.requireDurableOutbox(action); err != nil {
 		return nil, err
 	}
+	var prepared OutboxEntry
 	if action == writePropagate {
 		unlock := a.outboxLocks.lock(outboxIdentity(bucket, key))
 		defer unlock()
+		previousVersion, err := a.localVersionStrict(ctx, bucket, key)
+		if err != nil {
+			return nil, err
+		}
+		prepared, err = a.enqueuePreparedIntentLocked(OutboxPut, bucket, key, previousVersion)
+		if err != nil {
+			return nil, err
+		}
 	}
 
 	meta, err := a.local.PutObject(ctx, bucket, key, body, opts)
 	if err != nil {
+		if prepared.ID != "" {
+			return nil, errors.Join(err, a.outbox.Discard(prepared.ID))
+		}
 		return nil, err
 	}
 	a.invalidateCache(ctx, bucket, key)
 	if action == writePropagate {
-		entry, err := a.enqueueIntentLocked(ctx, OutboxPut, bucket, key)
-		if err != nil {
+		if err := a.outbox.Commit(prepared.ID, objectVersion(meta)); err != nil {
 			return meta, err
 		}
-		if err := a.completeIntentLocked(ctx, entry); err != nil {
+		if err := a.completeIntentLocked(ctx, prepared); err != nil {
 			return meta, err
 		}
 	}

@@ -23,16 +23,18 @@ const (
 )
 
 type OutboxEntry struct {
-	ID          string          `json:"id"`
-	Operation   OutboxOperation `json:"operation"`
-	Bucket      string          `json:"bucket"`
-	Key         string          `json:"key"`
-	Version     string          `json:"version,omitempty"`
-	CreatedAt   time.Time       `json:"created_at"`
-	Attempts    int             `json:"attempts"`
-	NextAttempt time.Time       `json:"next_attempt"`
-	LastError   string          `json:"last_error,omitempty"`
-	Terminal    bool            `json:"terminal,omitempty"`
+	ID              string          `json:"id"`
+	Operation       OutboxOperation `json:"operation"`
+	Bucket          string          `json:"bucket"`
+	Key             string          `json:"key"`
+	Version         string          `json:"version,omitempty"`
+	PreviousVersion string          `json:"previous_version,omitempty"`
+	Prepared        bool            `json:"prepared,omitempty"`
+	CreatedAt       time.Time       `json:"created_at"`
+	Attempts        int             `json:"attempts"`
+	NextAttempt     time.Time       `json:"next_attempt"`
+	LastError       string          `json:"last_error,omitempty"`
+	Terminal        bool            `json:"terminal,omitempty"`
 }
 
 type Outbox interface {
@@ -40,6 +42,7 @@ type Outbox interface {
 	Pending() []OutboxEntry
 	MarkSuccess(id string) error
 	MarkFailure(id string, cause error, retryAt time.Time) error
+	Commit(id, version string) error
 	Discard(id string) error
 	Close() error
 }
@@ -117,6 +120,17 @@ func (s *outboxState) markFailure(id string, cause error, retryAt time.Time) err
 	return nil
 }
 
+func (s *outboxState) commit(id, version string) error {
+	entry, ok := s.entries[id]
+	if !ok {
+		return fmt.Errorf("outbox entry %q not found", id)
+	}
+	entry.Prepared = false
+	entry.Version = version
+	s.entries[id] = entry
+	return nil
+}
+
 type MemoryOutbox struct {
 	mu    sync.Mutex
 	state outboxState
@@ -148,6 +162,12 @@ func (o *MemoryOutbox) MarkFailure(id string, cause error, retryAt time.Time) er
 	o.mu.Lock()
 	defer o.mu.Unlock()
 	return o.state.markFailure(id, cause, retryAt)
+}
+
+func (o *MemoryOutbox) Commit(id, version string) error {
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	return o.state.commit(id, version)
 }
 
 func (o *MemoryOutbox) Discard(id string) error {
@@ -244,6 +264,20 @@ func (o *FileOutbox) MarkFailure(id string, cause error, retryAt time.Time) erro
 	defer o.mu.Unlock()
 	next := o.state.clone()
 	if err := next.markFailure(id, cause, retryAt); err != nil {
+		return err
+	}
+	if err := o.persistState(next); err != nil {
+		return err
+	}
+	o.state = next
+	return nil
+}
+
+func (o *FileOutbox) Commit(id, version string) error {
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	next := o.state.clone()
+	if err := next.commit(id, version); err != nil {
 		return err
 	}
 	if err := o.persistState(next); err != nil {

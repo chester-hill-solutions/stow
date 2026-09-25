@@ -26,7 +26,7 @@ The native S3 server remains a compatibility adapter over the storage and run-th
 
 A profile reports persistence, multipart, upstream propagation, and quota capabilities. Unsupported combinations fail with a structured error; they do not silently fall back to a native filesystem, remote service, or ephemeral upstream mirror.
 
-Mirror writes require a durable outbox. A memory-only profile without such an outbox rejects live upstream mutations rather than pretending that propagation is durable.
+Mirror writes require a durable outbox. Local mutations write a prepared intent before changing the local record; recovery reconciles that intent against the record's immutable version before propagation. A memory-only profile without such an outbox rejects live upstream mutations rather than pretending that propagation is durable.
 
 ### 4. WASM is a host adapter, not a second object model
 

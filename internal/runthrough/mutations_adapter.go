@@ -16,31 +16,42 @@ func (a *Adapter) DeleteObject(ctx context.Context, bucket, key string) error {
 	if err := a.requireDurableOutbox(action); err != nil {
 		return err
 	}
+	var prepared OutboxEntry
+	version := ""
 	if action == writePropagate {
 		unlock := a.outboxLocks.lock(outboxIdentity(bucket, key))
 		defer unlock()
-	}
-
-	version := ""
-	if action == writePropagate {
-		version = a.localVersion(ctx, bucket, key)
-	}
-	if err := a.local.DeleteObject(ctx, bucket, key); err != nil && !errors.Is(err, storage.ErrObjectNotFound) {
-		return err
-	}
-	a.invalidateCache(ctx, bucket, key)
-	switch action {
-	case writeSkip:
-		return nil
-	case writePropagate:
-		entry, err := a.enqueueIntentLocked(ctx, OutboxDelete, bucket, key, version)
+		var err error
+		version, err = a.localVersionStrict(ctx, bucket, key)
 		if err != nil {
 			return err
 		}
-		return a.completeIntentLocked(ctx, entry)
-	default:
-		return nil
+		prepared, err = a.enqueuePreparedIntentLocked(OutboxDelete, bucket, key, version)
+		if err != nil {
+			return err
+		}
 	}
+	localErr := a.local.DeleteObject(ctx, bucket, key)
+	if localErr != nil {
+		if errors.Is(localErr, storage.ErrObjectNotFound) {
+			if prepared.ID != "" {
+				return a.outbox.Discard(prepared.ID)
+			}
+			return nil
+		}
+		if prepared.ID != "" {
+			return errors.Join(localErr, a.outbox.Discard(prepared.ID))
+		}
+		return localErr
+	}
+	a.invalidateCache(ctx, bucket, key)
+	if action == writePropagate {
+		if err := a.outbox.Commit(prepared.ID, version); err != nil {
+			return err
+		}
+		return a.completeIntentLocked(ctx, prepared)
+	}
+	return nil
 }
 
 func (a *Adapter) DeleteObjects(ctx context.Context, bucket string, keys []string) ([]string, error) {
@@ -51,21 +62,26 @@ func (a *Adapter) DeleteObjects(ctx context.Context, bucket string, keys []strin
 	if err := a.requireDurableOutbox(action); err != nil {
 		return nil, err
 	}
+	var prepared []OutboxEntry
 	if action == writePropagate {
 		identities := make([]string, 0, len(keys))
+		seen := make(map[string]struct{}, len(keys))
 		for _, key := range keys {
+			if _, ok := seen[key]; ok {
+				continue
+			}
+			seen[key] = struct{}{}
 			identities = append(identities, outboxIdentity(bucket, key))
 		}
 		unlock := a.outboxLocks.lockMany(identities)
 		defer unlock()
-	}
-
-	versions := map[string]string{}
-	if action == writePropagate {
-		for _, key := range keys {
-			versions[key] = a.localVersion(ctx, bucket, key)
+		var err error
+		prepared, err = a.prepareDeleteIntents(ctx, bucket, keys)
+		if err != nil {
+			return nil, err
 		}
 	}
+
 	deleted, localErr := a.local.DeleteObjects(ctx, bucket, keys)
 	if a.separateCache {
 		for _, key := range deleted {
@@ -75,32 +91,57 @@ func (a *Adapter) DeleteObjects(ctx context.Context, bucket string, keys []strin
 	if action != writePropagate {
 		return deleted, localErr
 	}
-
-	// Persist every deletion intent before attempting any upstream delete. A
-	// failed enqueue therefore cannot leave a partially propagated batch.
-	entries, err := a.enqueueDeleteIntents(ctx, bucket, deleted, versions)
-	if err != nil {
-		if localErr != nil {
-			return deleted, errors.Join(localErr, err)
-		}
-		return deleted, err
-	}
 	if localErr != nil {
 		return deleted, localErr
+	}
+
+	entries, err := a.commitDeleteIntents(prepared, deleted)
+	if err != nil {
+		return deleted, err
 	}
 	return deleted, a.propagateIntents(ctx, entries)
 }
 
-func (a *Adapter) enqueueDeleteIntents(ctx context.Context, bucket string, deleted []string, versions map[string]string) ([]OutboxEntry, error) {
-	entries := make([]OutboxEntry, 0, len(deleted))
-	for _, key := range deleted {
-		entry, err := a.enqueueIntentLocked(ctx, OutboxDelete, bucket, key, versions[key])
+func (a *Adapter) prepareDeleteIntents(ctx context.Context, bucket string, keys []string) ([]OutboxEntry, error) {
+	entries := make([]OutboxEntry, 0, len(keys))
+	seen := make(map[string]struct{}, len(keys))
+	for _, key := range keys {
+		if _, ok := seen[key]; ok {
+			continue
+		}
+		seen[key] = struct{}{}
+		previousVersion, err := a.localVersionStrict(ctx, bucket, key)
+		if err != nil {
+			return nil, err
+		}
+		entry, err := a.enqueuePreparedIntentLocked(OutboxDelete, bucket, key, previousVersion)
 		if err != nil {
 			return nil, err
 		}
 		entries = append(entries, entry)
 	}
 	return entries, nil
+}
+
+func (a *Adapter) commitDeleteIntents(prepared []OutboxEntry, deleted []string) ([]OutboxEntry, error) {
+	deletedSet := make(map[string]struct{}, len(deleted))
+	for _, key := range deleted {
+		deletedSet[key] = struct{}{}
+	}
+	committed := make([]OutboxEntry, 0, len(deleted))
+	for _, entry := range prepared {
+		if _, ok := deletedSet[entry.Key]; !ok {
+			if err := a.outbox.Discard(entry.ID); err != nil {
+				return nil, err
+			}
+			continue
+		}
+		if err := a.outbox.Commit(entry.ID, entry.PreviousVersion); err != nil {
+			return nil, err
+		}
+		committed = append(committed, entry)
+	}
+	return committed, nil
 }
 
 func (a *Adapter) propagateIntents(ctx context.Context, entries []OutboxEntry) error {
@@ -120,31 +161,37 @@ func (a *Adapter) CopyObject(ctx context.Context, srcBucket, srcKey, dstBucket, 
 	if err := a.requireDurableOutbox(action); err != nil {
 		return nil, err
 	}
+	var prepared OutboxEntry
 	if action == writePropagate {
 		unlock := a.outboxLocks.lock(outboxIdentity(dstBucket, dstKey))
 		defer unlock()
+		previousVersion, err := a.localVersionStrict(ctx, dstBucket, dstKey)
+		if err != nil {
+			return nil, err
+		}
+		prepared, err = a.enqueuePreparedIntentLocked(OutboxPut, dstBucket, dstKey, previousVersion)
+		if err != nil {
+			return nil, err
+		}
 	}
 
 	meta, err := a.local.CopyObject(ctx, srcBucket, srcKey, dstBucket, dstKey)
 	if err != nil {
+		if prepared.ID != "" {
+			return nil, errors.Join(err, a.outbox.Discard(prepared.ID))
+		}
 		return nil, err
 	}
 	a.invalidateCache(ctx, dstBucket, dstKey)
-	switch action {
-	case writeSkip:
-		return meta, nil
-	case writePropagate:
-		entry, err := a.enqueueIntentLocked(ctx, OutboxPut, dstBucket, dstKey)
-		if err != nil {
+	if action == writePropagate {
+		if err := a.outbox.Commit(prepared.ID, objectVersion(meta)); err != nil {
 			return meta, err
 		}
-		if err := a.completeIntentLocked(ctx, entry); err != nil {
+		if err := a.completeIntentLocked(ctx, prepared); err != nil {
 			return meta, err
 		}
-		return meta, nil
-	default:
-		return meta, nil
 	}
+	return meta, nil
 }
 
 func (a *Adapter) CreateMultipartUpload(ctx context.Context, bucket, key string) (*storage.MultipartUpload, error) {
@@ -172,30 +219,36 @@ func (a *Adapter) CompleteMultipartUpload(ctx context.Context, uploadID string, 
 	if err := a.requireDurableOutbox(action); err != nil {
 		return nil, err
 	}
+	var prepared OutboxEntry
 	if action == writePropagate {
 		unlock := a.outboxLocks.lock(outboxIdentity(bucket, key))
 		defer unlock()
+		previousVersion, err := a.localVersionStrict(ctx, bucket, key)
+		if err != nil {
+			return nil, err
+		}
+		prepared, err = a.enqueuePreparedIntentLocked(OutboxPut, bucket, key, previousVersion)
+		if err != nil {
+			return nil, err
+		}
 	}
 
 	meta, err := a.local.CompleteMultipartUpload(ctx, uploadID, parts)
 	if err != nil {
+		if prepared.ID != "" {
+			return nil, errors.Join(err, a.outbox.Discard(prepared.ID))
+		}
 		return nil, err
 	}
-	switch action {
-	case writeSkip:
-		return meta, nil
-	case writePropagate:
-		entry, err := a.enqueueIntentLocked(ctx, OutboxPut, meta.Bucket, meta.Key)
-		if err != nil {
+	if action == writePropagate {
+		if err := a.outbox.Commit(prepared.ID, objectVersion(meta)); err != nil {
 			return meta, err
 		}
-		if err := a.completeIntentLocked(ctx, entry); err != nil {
+		if err := a.completeIntentLocked(ctx, prepared); err != nil {
 			return meta, err
 		}
-		return meta, nil
-	default:
-		return meta, nil
 	}
+	return meta, nil
 }
 
 func (a *Adapter) multipartTarget(ctx context.Context, uploadID string) (string, error) {
