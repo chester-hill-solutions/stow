@@ -67,6 +67,10 @@ func New(options Options) (*Store, error) {
 	if now == nil {
 		now = time.Now
 	}
+	// Ownership is decided before anything is created, because it is the only
+	// thing that makes Destroy safe. A directory that already existed is
+	// adopted, and an adopted workspace is never stow's to delete.
+	adopted := directoryExists(options.Root)
 	if err := os.MkdirAll(options.Root, 0o755); err != nil {
 		return nil, fmt.Errorf("workspace store: create root: %w", err)
 	}
@@ -98,6 +102,15 @@ func New(options Options) (*Store, error) {
 	if store.manifest.TTLSeconds == 0 {
 		store.manifest.TTLSeconds = options.TTLSeconds
 	}
+	// Ownership is set once, by whoever made the directory, and then preserved.
+	//
+	// A directory stow creates right now is owned, full stop. A directory that
+	// already existed is only owned if the manifest already said so — which
+	// happens when stow created it on an earlier run and this is a reopen. The
+	// distinction has to survive the reopen, or a workspace stow created would
+	// quietly become undeletable the second time it was opened, and Destroy
+	// would be useless for the case it exists for.
+	store.manifest.Owned = !adopted || manifest.Owned
 	store.manifest.Created = store.manifest.Created.UTC()
 	if store.manifest.Created.IsZero() {
 		store.manifest.Created = now().UTC()

@@ -25,10 +25,11 @@ import (
 type Workspace struct {
 	*Runtime
 
-	dir    string
-	bucket string
-	id     string
-	store  *workspace.Store
+	dir       string
+	bucket    string
+	id        string
+	store     *workspace.Store
+	destroyed bool
 }
 
 // WorkspaceOptions configures a workspace.
@@ -123,6 +124,26 @@ func (w *Workspace) ID() string { return w.id }
 // without an S3 round trip, so a host can print a real path for a caller.
 func (w *Workspace) Path(key string) (string, bool) {
 	return w.store.Path(w.bucket, key)
+}
+
+// Destroy removes the workspace directory, and only if stow created it.
+//
+// This is the explicit half of the lifecycle split in ADR 0009 section 3:
+// Close releases the handle, Destroy removes the bytes. A workspace stow
+// *adopted* — one pointed at a directory the caller already had, which is the
+// documented way to use one — is refused, because its contents are the caller's
+// and not stow's to delete. A refusal leaves the workspace intact and usable.
+//
+// A workspace that is already gone is not an error: destroy is idempotent.
+func (w *Workspace) Destroy(ctx context.Context) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if err := w.store.Destroy(); err != nil {
+		return err
+	}
+	w.destroyed = true
+	return nil
 }
 
 // generatedBucketName returns a bucket name unlikely to collide with another
