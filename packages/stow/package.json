@@ -13,15 +13,20 @@
     "./embedded": {
       "types": "./dist/embedded.d.ts",
       "import": "./dist/embedded.js"
+    },
+    "./node-wasm": {
+      "types": "./dist/node-wasm-host.d.ts",
+      "import": "./dist/node-wasm-host.js"
     }
   },
   "files": [
-    "dist"
+    "dist",
+    "src"
   ],
   "scripts": {
     "clean": "node -e \"require('node:fs').rmSync('dist', { recursive: true, force: true })\"",
-    "build": "npm run clean && tsc",
-    "test": "npm run build && tsx --test test/integration.test.ts test/lifecycle.test.ts test/embedded.test.ts",
+    "build": "npm run clean && tsc && node scripts/copy-wasm-assets.mjs",
+    "test": "npm run build && tsx --test test/integration.test.ts test/lifecycle.test.ts test/embedded.test.ts test/node-wasm-host.test.ts",
     "prepublishOnly": "npm run build",
     "lint": "eslint .",
     "check:lint-ratchet": "node ../../scripts/check-lint-ratchet.mjs",

@@ -17,6 +17,8 @@ vendor/
 
 # Node
 node_modules/
+packages/stow/dist/*.wasm
+packages/stow/dist/wasm_exec.js
 npm-debug.log*
 yarn-debug.log*
 yarn-error.log*

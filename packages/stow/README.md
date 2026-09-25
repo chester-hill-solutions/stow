@@ -33,7 +33,7 @@ process.env.S3_SECRET_ACCESS_KEY = bucket.secretAccessKey;
 await bucket.stop();
 ```
 
-`Stow.start()` owns the child process it launches. Use `backend: "memory"` for an explicitly ephemeral instance. To use an already-running endpoint, call `Stow.connect({ endpoint, accessKeyId, secretAccessKey, region })`; its connection is disconnected by the caller rather than by the managed-process `stop()` method. The TypeScript entry points remain endpoint-based; the repository's experimental `js/wasm` bridge is a separate additive profile.
+`Stow.start()` owns the child process it launches. Use `backend: "memory"` for an explicitly ephemeral instance. To use an already-running endpoint, call `Stow.connect({ endpoint, accessKeyId, secretAccessKey, region })`; its `client` is an owned AWS SDK client that the caller can use directly, and `disconnect()` destroys it. The TypeScript entry points remain endpoint-based; the repository's `js/wasm` bridge is a separate additive profile.
 
 Both connection helpers also accept an optional `sessionToken` or credential `provider` for temporary AWS credentials.
 
@@ -51,7 +51,20 @@ const object = embedded.getObject("assets", "hello.txt");
 embedded.close();
 ```
 
-The repository test uses the same bridge from Node via `make test-wasm`.
+The Node package includes the tested WASM asset and a ready-made host loader:
+
+```ts
+import { EmbeddedStow } from "@chs/stow/embedded";
+import { loadNodeWasmHost } from "@chs/stow/node-wasm";
+
+const host = await loadNodeWasmHost();
+const embedded = EmbeddedStow.open(host, { maxBytes: 10_000_000 });
+// use embedded...
+embedded.close();
+await host.close();
+```
+
+Run `make test-wasm` or `make test-node` to rebuild the packaged asset. Custom hosts may still provide their own synchronous `call(request)` implementation.
 
 CLI equivalent:
 

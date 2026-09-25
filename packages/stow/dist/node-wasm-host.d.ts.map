@@ -1,0 +1,1 @@
+{"version":3,"file":"node-wasm-host.d.ts","sourceRoot":"","sources":["../src/node-wasm-host.ts"],"names":[],"mappings":"AAIA,OAAO,KAAK,EAAE,YAAY,EAAE,MAAM,eAAe,CAAC;AAwBlD,MAAM,WAAW,YAAa,SAAQ,YAAY;IAChD,KAAK,IAAI,OAAO,CAAC,IAAI,CAAC,CAAC;CACxB;AAED,wBAAsB,gBAAgB,IAAI,OAAO,CAAC,YAAY,CAAC,CAqC9D"}

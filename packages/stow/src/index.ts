@@ -16,6 +16,10 @@ export {
   EmbeddedStow,
   EmbeddedStowError,
 } from "./embedded.js";
+export {
+  loadNodeWasmHost,
+  type NodeWasmHost,
+} from "./node-wasm-host.js";
 export type {
   EmbeddedBucket,
   EmbeddedCapabilities,
