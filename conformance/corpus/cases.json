@@ -21,21 +21,21 @@
       }
     },
     {
-      "id": "opaque-key-dot-segments",
+      "id": "opaque-key-roundtrip",
       "operation": "putGetRoundTrip",
-      "bucket": "contract-opaque-dot",
+      "bucket": "contract-opaque",
       "key": "dir/../name.txt",
       "body": "opaque key",
       "contentType": "text/plain",
       "metadata": {
-        "case": "opaque-dot-segments"
+        "case": "opaque"
       },
       "expect": {
         "status": 200,
         "body": "opaque key",
         "contentType": "text/plain",
         "metadata": {
-          "case": "opaque-dot-segments"
+          "case": "opaque"
         }
       }
     },
