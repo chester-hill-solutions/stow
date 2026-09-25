@@ -130,11 +130,19 @@ func (s *Server) handleListObjectsV2(ctx context.Context, w http.ResponseWriter,
 }
 
 func (s *Server) handlePutObject(ctx context.Context, w http.ResponseWriter, r *http.Request, bucket, key string) {
-	if err := enforceContentLength(r); err != nil {
+	// Read the body once and share it with every check below. Each of these used
+	// to read the whole body itself, which meant a separate full-size copy per
+	// check for a single request.
+	body, bodyErr := requestBody(r)
+	if bodyErr != nil {
+		writeError(w, r, bodyReadError(bodyErr, resourcePath(bucket, key), s.config.MaxRequestBytes))
+		return
+	}
+	if err := enforceContentLength(r, body); err != nil {
 		writeError(w, r, s3Error{Code: "InvalidArgument", Message: err.Error(), Resource: resourcePath(bucket, key), StatusCode: http.StatusBadRequest})
 		return
 	}
-	if err := verifyContentMD5(r); err != nil {
+	if err := verifyContentMD5(r, body); err != nil {
 		code := "InvalidArgument"
 		if errors.Is(err, storage.ErrMD5Mismatch) {
 			code = "BadDigest"
@@ -142,7 +150,7 @@ func (s *Server) handlePutObject(ctx context.Context, w http.ResponseWriter, r *
 		writeError(w, r, s3Error{Code: code, Message: err.Error(), Resource: resourcePath(bucket, key), StatusCode: http.StatusBadRequest})
 		return
 	}
-	checksumAlgorithm, checksumValue, err := checksumFromRequest(r)
+	checksumAlgorithm, checksumValue, err := checksumFromRequest(r, body)
 	if err != nil {
 		code := "InvalidArgument"
 		if errors.Is(err, storage.ErrChecksumMismatch) {
@@ -240,7 +248,14 @@ func (s *Server) handleDeleteObject(ctx context.Context, w http.ResponseWriter, 
 }
 
 func (s *Server) handleDeleteObjects(ctx context.Context, w http.ResponseWriter, r *http.Request, bucket string) {
-	if err := enforceContentLength(r); err != nil {
+	// DeleteObjects decodes XML straight from the body, so it needs the same
+	// single read every other handler does.
+	body, bodyErr := requestBody(r)
+	if bodyErr != nil {
+		writeError(w, r, bodyReadError(bodyErr, "/"+bucket, s.config.MaxRequestBytes))
+		return
+	}
+	if err := enforceContentLength(r, body); err != nil {
 		writeError(w, r, s3Error{Code: "InvalidArgument", Message: err.Error(), Resource: "/" + bucket, StatusCode: http.StatusBadRequest})
 		return
 	}

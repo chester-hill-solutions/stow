@@ -1,44 +1,44 @@
 {
   "environment": {
-    "measuredAt": "2026-09-25T13:46:43.896Z",
+    "measuredAt": "2026-09-25T15:52:56.334Z",
     "node": "v24.14.0",
     "os": "linux x64 7.0.0-34-generic",
     "cpu": "Intel(R) Core(TM) i5-7600K CPU @ 3.80GHz",
     "cpuCount": 4,
     "totalMemoryMb": 15887,
-    "sessionsPerPoint": 5,
+    "sessionsPerPoint": 10,
     "note": "Peak RSS is sampled from the server child process while it holds the payload."
   },
   "memorySweep": [
     {
       "payloadBytes": 0,
-      "peakRssKbP50": 11784,
-      "readyMsP50": 14.78
+      "peakRssKbP50": 12344,
+      "readyMsP50": 14.95
     },
     {
       "payloadBytes": 1048576,
-      "peakRssKbP50": 19204,
-      "readyMsP50": 15.08
+      "peakRssKbP50": 18212,
+      "readyMsP50": 14.88
     },
     {
       "payloadBytes": 2097152,
-      "peakRssKbP50": 23668,
-      "readyMsP50": 15.99
+      "peakRssKbP50": 25372,
+      "readyMsP50": 15.13
     },
     {
       "payloadBytes": 4194304,
-      "peakRssKbP50": 32004,
-      "readyMsP50": 16.24
+      "peakRssKbP50": 32512,
+      "readyMsP50": 16.57
     },
     {
       "payloadBytes": 8388608,
-      "peakRssKbP50": 51620,
-      "readyMsP50": 18.25
+      "peakRssKbP50": 49100,
+      "readyMsP50": 16.98
     }
   ],
   "derived": {
-    "baselineRssMiB": 11.51,
-    "rssMiBPerPayloadMiB": 4.86,
+    "baselineRssMiB": 12.05,
+    "rssMiBPerPayloadMiB": 4.49,
     "note": "rssMiBPerPayloadMiB is the multiplier a session byte quota must be multiplied by to predict peak RSS."
   }
 }

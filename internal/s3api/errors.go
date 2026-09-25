@@ -86,6 +86,23 @@ func requestTooLargeError(resource string, limit int64) s3Error {
 	}
 }
 
+// bodyReadError maps a failure to read the request body. Reading the body is
+// where the size limit is enforced, so an over-limit body surfaces here and must
+// keep reporting EntityTooLarge rather than a generic read failure.
+func bodyReadError(err error, resource string, limit int64) s3Error {
+	if isRequestTooLarge(err) {
+		var tooLarge *http.MaxBytesError
+		_ = errors.As(err, &tooLarge)
+		return requestTooLargeError(resource, tooLarge.Limit)
+	}
+	return s3Error{
+		Code:       "InvalidArgument",
+		Message:    fmt.Sprintf("could not read request body: %v", err),
+		Resource:   resource,
+		StatusCode: http.StatusBadRequest,
+	}
+}
+
 func mapStorageError(err error, resource string) s3Error {
 	switch {
 	case isRequestTooLarge(err):

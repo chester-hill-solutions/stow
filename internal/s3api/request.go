@@ -2,6 +2,7 @@ package s3api
 
 import (
 	"bytes"
+	"context"
 	"crypto/md5"
 	"encoding/base64"
 	"fmt"
@@ -12,30 +13,77 @@ import (
 	"github.com/chester-hill-solutions/stow/internal/storage"
 )
 
-func enforceContentLength(r *http.Request) error {
-	if r.Header.Get("Content-Length") == "" || r.ContentLength < 0 {
-		return fmt.Errorf("Content-Length required")
-	}
-	var data []byte
-	var err error
-	if r.Body != nil {
-		data, err = io.ReadAll(r.Body)
-		if err != nil {
-			return err
-		}
-		_ = r.Body.Close()
-	}
-	if int64(len(data)) != r.ContentLength {
-		return fmt.Errorf("Content-Length mismatch")
-	}
+// bodyCacheKey carries a per-request holder for the materialised body.
+//
+// A pointer is stored rather than the bytes because a request context is
+// immutable, and the point of this is that the stage which first reads the body
+// publishes it for the stages after it. ServeHTTP installs one holder for every
+// request, so a handler gets the same cache whether or not authentication ran.
+type bodyCache struct {
+	data []byte
+	read bool
+}
+
+type bodyCacheKey struct{}
+
+// withBodyCache returns a request carrying a fresh body cache.
+func withBodyCache(r *http.Request) *http.Request {
+	return r.WithContext(context.WithValue(r.Context(), bodyCacheKey{}, &bodyCache{}))
+}
+
+// restoreBody puts the bytes back on the request so a later stage, including the
+// store, can read the body again without this layer re-reading the socket.
+// bytes.NewReader wraps the slice rather than copying it.
+func restoreBody(r *http.Request, data []byte) {
 	r.Body = io.NopCloser(bytes.NewReader(data))
 	r.GetBody = func() (io.ReadCloser, error) {
 		return io.NopCloser(bytes.NewReader(data)), nil
 	}
+}
+
+// requestBody returns the whole request body, reading the socket at most once
+// per request.
+//
+// Every consumer of the body in this package needs all of it: SigV4 payload
+// verification, the Content-Length comparison, Content-MD5, the checksum
+// algorithms, and the store itself. Reading it separately for each one allocated
+// a fresh full-size copy per consumer, which is where most of the measured
+// per-MiB memory amplification came from.
+func requestBody(r *http.Request) ([]byte, error) {
+	cache, ok := r.Context().Value(bodyCacheKey{}).(*bodyCache)
+	if ok && cache.read {
+		return cache.data, nil
+	}
+	if r.Body == nil {
+		if ok {
+			cache.read = true
+		}
+		return nil, nil
+	}
+	data, err := io.ReadAll(r.Body)
+	if err != nil {
+		return nil, err
+	}
+	_ = r.Body.Close()
+	restoreBody(r, data)
+	if ok {
+		cache.data = data
+		cache.read = true
+	}
+	return data, nil
+}
+
+func enforceContentLength(r *http.Request, data []byte) error {
+	if r.Header.Get("Content-Length") == "" || r.ContentLength < 0 {
+		return fmt.Errorf("Content-Length required")
+	}
+	if int64(len(data)) != r.ContentLength {
+		return fmt.Errorf("Content-Length mismatch")
+	}
 	return nil
 }
 
-func verifyContentMD5(r *http.Request) error {
+func verifyContentMD5(r *http.Request, data []byte) error {
 	encoded := strings.TrimSpace(r.Header.Get("Content-MD5"))
 	if encoded == "" {
 		return nil
@@ -43,18 +91,6 @@ func verifyContentMD5(r *http.Request) error {
 	expected, err := base64.StdEncoding.DecodeString(encoded)
 	if err != nil {
 		return fmt.Errorf("invalid Content-MD5: %w", err)
-	}
-	var data []byte
-	if r.Body != nil {
-		data, err = io.ReadAll(r.Body)
-		if err != nil {
-			return err
-		}
-		_ = r.Body.Close()
-	}
-	r.Body = io.NopCloser(bytes.NewReader(data))
-	r.GetBody = func() (io.ReadCloser, error) {
-		return io.NopCloser(bytes.NewReader(data)), nil
 	}
 	actual := md5.Sum(data)
 	if !bytes.Equal(expected, actual[:]) {
@@ -153,14 +189,10 @@ func checksumHeaderValuesByName(name string) (string, bool) {
 	return "", false
 }
 
-func checksumFromRequest(r *http.Request) (string, string, error) {
+func checksumFromRequest(r *http.Request, data []byte) (string, string, error) {
 	algorithm, providedValue, err := checksumHeaderValues(r)
 	if err != nil || algorithm == "" {
 		return algorithm, providedValue, err
-	}
-	data, err := readAndRestoreBody(r)
-	if err != nil {
-		return "", "", err
 	}
 	computed, err := storage.ComputeChecksum(algorithm, data)
 	if err != nil {
@@ -172,28 +204,17 @@ func checksumFromRequest(r *http.Request) (string, string, error) {
 	return algorithm, computed, nil
 }
 
-func readAndRestoreBody(r *http.Request) ([]byte, error) {
-	if r.Body == nil {
-		return nil, nil
-	}
-	data, err := io.ReadAll(r.Body)
-	if err != nil {
-		return nil, err
-	}
-	_ = r.Body.Close()
-	r.Body = io.NopCloser(bytes.NewReader(data))
-	r.GetBody = func() (io.ReadCloser, error) {
-		return io.NopCloser(bytes.NewReader(data)), nil
-	}
-	return data, nil
-}
-
 // prepareRequestForAuth makes request bodies replayable for SigV4 payload verification.
 // AWS SDK clients sign bodyless requests (CreateBucket, DeleteObject, etc.) with the
 // empty payload hash but do not set http.Request.GetBody on the server side.
-func prepareRequestForAuth(r *http.Request) error {
+//
+// It returns a request carrying the body when it had to read one, so the
+// handlers downstream reuse those bytes instead of each reading the socket
+// again. The bytes are still restored onto the request, so the store reads them
+// from r.Body as before.
+func prepareRequestForAuth(r *http.Request) (*http.Request, error) {
 	if r.GetBody != nil {
-		return nil
+		return r, nil
 	}
 
 	if r.Body == nil || r.ContentLength == 0 {
@@ -205,21 +226,17 @@ func prepareRequestForAuth(r *http.Request) error {
 		r.GetBody = func() (io.ReadCloser, error) {
 			return io.NopCloser(bytes.NewReader(nil)), nil
 		}
-		return nil
+		return r, nil
 	}
 
 	if strings.EqualFold(r.Header.Get("X-Amz-Content-Sha256"), "UNSIGNED-PAYLOAD") {
-		return nil
+		return r, nil
 	}
 
-	data, err := io.ReadAll(r.Body)
+	prepared, err := requestBody(r)
 	if err != nil {
-		return err
+		return r, err
 	}
-	_ = r.Body.Close()
-	r.Body = io.NopCloser(bytes.NewReader(data))
-	r.GetBody = func() (io.ReadCloser, error) {
-		return io.NopCloser(bytes.NewReader(data)), nil
-	}
-	return nil
+	restoreBody(r, prepared)
+	return r, nil
 }

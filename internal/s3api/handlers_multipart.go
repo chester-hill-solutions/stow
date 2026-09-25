@@ -47,11 +47,18 @@ func (s *Server) handleUploadPart(ctx context.Context, w http.ResponseWriter, r 
 		return
 	}
 
-	if err := enforceContentLength(r); err != nil {
+	// Read the body once and share it with every check below, for the same
+	// reason as PutObject: each check used to make its own full-size copy.
+	body, bodyErr := requestBody(r)
+	if bodyErr != nil {
+		writeError(w, r, bodyReadError(bodyErr, resourcePath(bucket, key), s.config.MaxRequestBytes))
+		return
+	}
+	if err := enforceContentLength(r, body); err != nil {
 		writeError(w, r, s3Error{Code: "InvalidArgument", Message: err.Error(), Resource: resourcePath(bucket, key), StatusCode: http.StatusBadRequest})
 		return
 	}
-	if err := verifyContentMD5(r); err != nil {
+	if err := verifyContentMD5(r, body); err != nil {
 		code := "InvalidArgument"
 		if errors.Is(err, storage.ErrMD5Mismatch) {
 			code = "BadDigest"
@@ -59,7 +66,7 @@ func (s *Server) handleUploadPart(ctx context.Context, w http.ResponseWriter, r 
 		writeError(w, r, s3Error{Code: code, Message: err.Error(), Resource: resourcePath(bucket, key), StatusCode: http.StatusBadRequest})
 		return
 	}
-	checksumAlgorithm, checksumValue, err := checksumFromRequest(r)
+	checksumAlgorithm, checksumValue, err := checksumFromRequest(r, body)
 	if err != nil {
 		code := "InvalidArgument"
 		if errors.Is(err, storage.ErrChecksumMismatch) {

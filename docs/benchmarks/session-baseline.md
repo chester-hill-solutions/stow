@@ -70,6 +70,61 @@ the streaming or single-copy write path in phase 2 a scale requirement, not a
 polish item, and the target should be restated as a reduction in the multiplier
 rather than a percentage of the limit.
 
+### 1a. Corrected: the multiplier is GC headroom, not the number of copies
+
+The explanation above attributed the multiplier to the number of full-body
+copies. That was tested and it is wrong. The write path made four or five
+independent full-size copies of every request body: SigV4 payload preparation,
+the Content-Length comparison, Content-MD5, the checksum algorithm, and the
+runtime's own read-then-copy before storing.
+
+Collapsing the four copies inside `internal/s3api` into one, by reading the body
+once per request and sharing those bytes with every check, changed nothing
+measurable. Three runs of the sweep on each build, same machine, same session
+defaults:
+
+| Build | multiplier samples | median |
+|---|---:|---:|
+| before (four copies in `s3api`) | 4.56, 4.48, 4.68 | 4.56 |
+| after (one copy in `s3api`) | 4.52, 4.49, 4.48 | 4.49 |
+
+The distributions overlap. A change that removed three quarters of the copies in
+one layer moved the number by less than the run-to-run spread.
+
+Varying the Go GC instead, with no code change at all:
+
+| `GOGC` | multiplier | 4 MiB put p50 |
+|---|---:|---:|
+| 100 (default) | 4.62 | 111.7 ms |
+| 50 | 3.34 | 112.3 ms |
+| 20 | 3.07 | 113.1 ms |
+
+`GOMEMLIMIT=64MiB` alone changed nothing (4.49), which is consistent with the
+heap never approaching the limit.
+
+**The multiplier is dominated by GC headroom, not by copy count.** Peak RSS
+tracks the largest simultaneously live set, times the GC target. The copies
+removed above are transient: each became garbage as soon as the next stage
+consumed it. The live set is the body plus the runtime's copy, and the default
+`GOGC=100` then allows the heap to roughly double on top of that.
+
+Two consequences, both of which redirect phase 2:
+
+- Removing redundant copies is worth doing for clarity and for the CPU spent
+  hashing the body more than once, but it will not move peak RSS. Expect no
+  memory number from it, and do not re-run this experiment expecting one.
+- The lever that actually works is not holding the whole body resident, and the
+  cheapest available version of that is GC tuning. Whether `stow` should lower
+  `GOGC` for a session, and at what cost to a long-lived server, is an open
+  decision, not a measurement. Streaming the write path would still remove the
+  live set itself, and remains the only route to a multiplier near 1.
+
+**2. The 64 MiB / 10,000 object default is wrong for an ephemeral agent
+session.** At the measured multiplier, a 64 MiB session budget implies roughly
+300 MB of peak RSS per session. One hundred parallel sessions would need
+around 30 GB, which the plan's "100 parallel default sessions all acquire and
+release successfully" target cannot assume on an ordinary machine.
+
 **2. The 64 MiB / 10,000 object default is wrong for an ephemeral agent
 session.** At the measured multiplier, a 64 MiB session budget implies roughly
 300 MB of peak RSS per session. One hundred parallel sessions would need

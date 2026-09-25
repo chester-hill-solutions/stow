@@ -183,7 +183,9 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	start := time.Now()
 	reqID := newRequestID()
 	ctx := withRequestID(r.Context(), reqID)
-	r = r.WithContext(ctx)
+	// The body cache is installed for every request, not only authenticated
+	// ones, so the handler and the auth stage share a single read of the body.
+	r = withBodyCache(r.WithContext(ctx))
 	rw := &statusRecorder{ResponseWriter: w, status: http.StatusOK}
 
 	if handleCORSPreflight(rw, r) {
@@ -211,7 +213,8 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if s.auth != nil {
-		if err := prepareRequestForAuth(r); err != nil {
+		prepared, err := prepareRequestForAuth(r)
+		if err != nil {
 			if isRequestTooLarge(err) {
 				writeError(rw, r, requestTooLargeError(r.URL.Path, s.config.MaxRequestBytes))
 			} else {
@@ -220,6 +223,9 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			s.logRequest(r, rw.status, time.Since(start))
 			return
 		}
+		// Carry the body the auth stage just read, so the handler reuses it
+		// instead of materialising the same bytes again.
+		r = prepared
 		if err := s.auth(r); err != nil {
 			writeError(rw, r, authError(err))
 			s.logRequest(r, rw.status, time.Since(start))
