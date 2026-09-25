@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"context"
 	"errors"
-	"fmt"
 	"io"
 	"sync"
 
@@ -55,25 +54,6 @@ func newInstance(options Options, store storage.Store, resetStore func() (storag
 		persistent:       persistent,
 		multipartEnabled: multipartEnabled,
 	}
-}
-
-func normalizeOptions(options Options, boundStore bool) (Options, error) {
-	if options.Backend == "" {
-		options.Backend = BackendMemory
-	}
-	if options.Backend != BackendMemory && (!boundStore || options.Backend != BackendFilesystem) {
-		return Options{}, ErrUnsupportedBackend
-	}
-	if options.MaxBytes < 0 || options.MaxObjects < 0 {
-		return Options{}, fmt.Errorf("runtime quotas must not be negative")
-	}
-	if options.MaxBytes == 0 {
-		options.MaxBytes = DefaultMaxBytes
-	}
-	if options.MaxObjects == 0 {
-		options.MaxObjects = DefaultMaxObjects
-	}
-	return options, nil
 }
 
 func (i *Instance) checkContext(ctx context.Context) error {

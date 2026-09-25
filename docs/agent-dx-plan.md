@@ -143,21 +143,261 @@ in a phase that a document had already marked complete. Two were reachable from
 a published artifact. Neither a status table nor a passing gate would have found
 them; reading the code did.
 
+### 0.5 Revision 2: the default is a workspace, not a scoped S3 session
+
+This revision records a change of product direction, not a change of schedule.
+It is dated 2026-09-25 and it amends sections 1, 3, 4, 10, and 16 of this
+document. Three ADRs carry the decisions:
+
+- **ADR 0007** — the workspace is the default; S3 is an opt-in facade.
+- **ADR 0008** — a workspace stores objects as real files, with metadata in
+  one manifest.
+- **ADR 0009** — a workspace outlives the process that created it.
+
+The buildable specification is `docs/workspace-contract.md`: the concrete
+interface in three languages, the key-to-path encoding, the manifest format, the
+error codes, and the fourteen conformance cases. The ADRs decide; that document
+specifies.
+
+#### What changed and why
+
+The plan built the right thing for the wrong default. Section 4.1 made a
+short-lived child S3 server the default agent surface, and sections 1 through
+9 then optimised it: a versioned ready protocol, SigV4 off stdout, generated
+credentials, memory quotas, a tighter collector, a platform binary. All of
+that work is sound and none of it is wasted — it is the S3 session profile,
+and it stays.
+
+What it optimised was a surface that is the wrong default for the product
+being described. Three measured and code-level facts forced the change:
+
+1. **The cost is wrong for something a framework starts per task.** 11.6 MB of
+   fixed process RSS, 15.4 ms p50 to ready, 35.5 ms p50 shutdown, measured on
+   Linux x64. The per-session byte cost has already been fought from 4.59 MB
+   per MiB to 3.27 MB; the fixed cost is untouched by collector tuning and
+   will not yield to it.
+2. **The data directory is not a directory.** Objects are base64 inside
+   per-object JSON records (`internal/storage/fs/fs_records.go:14`). An agent
+   cannot read a file it was told to read. A developer who wants real files
+   creates a temp directory first and starts Stow beside it, which makes
+   Stow a sidecar to the thing it should be.
+3. **The public in-process runtime cannot hold a workspace at all.**
+   `pkg/stow/types.go:10` exposes one backend, and `runtime.Open` rejects any
+   other without an injected store (`internal/runtime/instance.go:64`).
+
+The third fact is the one that matters most for planning. The in-process
+default is not a refactor of something that exists; it is blocked behind a
+persistent backend in the public runtime that does not exist yet.
+
+#### What this invalidates
+
+| Section | Status |
+|---|---|
+| 1, "Product outcome" | Amended. The outcome is a bounded artifact workspace; the S3 endpoint is one capability of it |
+| 3, principle 3, "Ephemeral by default" | **Superseded.** Durability is bounded by a TTL, not by scope exit. See ADR 0009 |
+| 4.1, "Default implementation: managed child S3 endpoint" | **Superseded for the default path.** It remains the documented shape of the S3 session profile. See ADR 0007 |
+| 4.2, direct embedded runtime as a separate profile | **Reversed.** It becomes the default where a client can embed it. See ADR 0007 |
+| 4.3, no shared daemon | Unchanged. ADR 0009 keeps it |
+| 10, prioritized backlog | Reordered below |
+| 16, first execution slice | Superseded below |
+
+#### Status of the eight product requirements
+
+| # | Requirement | State in this tree | Evidence |
+|---|---|---|---|
+| 1 | Zero-friction install | Partial; blocked on accounts, not code | Go module live. `published: false` at `scripts/check-install-surface.mjs:32,41`. Windows parent-death watch is `ErrUnsupported` (`internal/parentwatch/parentwatch_unsupported.go`) and `parentwatch_test.go` has no build tag, so it does not compile there |
+| 2 | Default workspace, not a sidecar | **Absent** | ADR 0007, ADR 0008. Objects are JSON records, not files |
+| 3 | Survive the process | **Inverted today** | Memory backend and `mkdtemp` by default (`session.ts:109,117`), removed on close (`:269`), `parentPid: process.pid` (`:124`). No registry, no resume, no promote. ADR 0009 |
+| 4 | Framework embed | Absent | Two first-party clients, no integrations. `stow mcp` exists only as prose in `docs/agentic-dx-10-plan.md:186` |
+| 5 | Human distribution | Partial, and one part is blocked | Presign works. No relay, no preview (ADR 0009 §6 keeps a relay out of scope). Promote is blocked on run-through mode having never read or written upstream — see 0.6 defect 1 |
+| 6 | Safe by construction | Mostly done, one cheap finish | Virtual-hosted parses (`s3api/router.go:25`) but `conformance/CONFORMANCE.md:98` records the smoke test as pending, and the client hardcodes `forcePathStyle: true` (`index.ts:104,109`) |
+| 7 | Quotas and policy | Half | Bytes, objects, body cap, CORS allowlist, admin token done. Missing: request rate, wall clock, audit log. Stow can refuse to make outbound calls; it cannot stop the *agent* from reaching the network |
+| 8 | Cheaper than a temp directory | Half, and unreachable for the current shape | Measured figures above. ADR 0007 section 3 restricts the cost target to the embedded path |
+
+#### Two constraints on the new plan
+
+- **The in-process default does not hold for Python.** `packages/stow-s3-py`
+  spawns a server and there is no embedded path. The *workspace* is uniform
+  across languages; the process is not. Any cost figure must be attributed to
+  a path, never averaged across both. See ADR 0007 section 3.
+- **`close()` stops meaning "the data is gone."** That is a breaking change to
+  both client packages and it invalidates a passing lifecycle test. See ADR
+  0009 sections 3 and Consequences.
+
+#### What is not being re-decided
+
+More S3 operations, a dashboard, a vector store, a memory graph, a tool
+marketplace, WASM for its own sake. Each would help a specialist and none
+would make this the default. The product bar is that an agent runtime starts a
+bounded artifact workspace the way it already starts a sandbox, and that some
+of those workspaces speak S3 so existing and generated code keeps working.
+
+### 0.6 Inherited defects this plan is standing on
+
+This section exists because the plan above is being written on top of a tree
+that has now produced the same failure three separate times: **the feature is
+present, the tests are green, and neither can see the defect.** Two permissive
+defaults shipped from a phase a document had already marked complete (ADR
+0005, ADR 0006). A 3,646-line subsystem — 30% of production Go, 75 passing
+tests — has never once read through to an upstream.
+
+The lesson is not "write more tests." It is that the *shape* of a test decides
+whether it can fail, and that a status table records intent rather than
+behaviour. So the known-broken items are listed here, with evidence, *before*
+the backlog is sequenced. Anything in section 10.1 sitting on one of these is
+either blocked or must carry its fix.
+
+| # | Defect | Evidence | What it blocks |
+|---|---|---|---|
+| 1 | **Run-through never reads or writes upstream.** `resolveObject` treats `ErrBucketNotFound` from *either* store as a final answer, so the cache-miss path is unreachable and the only cache writer is never called. Writes 404 first: `Instance.PutObject` runs a `HeadObject` quota pre-check before the outbox is touched. All four bucket operations are local-only, so upstream buckets are invisible | `internal/runthrough/adapter.go:305,326,376`; `internal/runtime/instance.go:192,425`; `cmd/stow-s3/store.go:28` | **Promote.** Requirement 5's "promote to the user's real bucket", and W8, are built on a subsystem that has never moved a byte. Promote is either blocked on this or scoped to a local copy with an explicit refusal |
+| 2 | **The cache adapter special-cases one of two missing sentinels.** Both stores return `ErrBucketNotFound`, never `ErrObjectNotFound`, for a missing bucket. The correct helper already exists and is unused at the fault line | `internal/storage/fs/fs.go:126`; `internal/storage/memory.go:204`; `internal/runthrough/cache_policy.go:139` | The workspace backend is a *third* `storage.Store`. Anything that layers stores inherits this trap |
+| 3 | **The request-body cap cannot be raised.** `server.go:220` applies `MaxBytesReader` at `s.config.MaxRequestBytes`, and `cmd/stow-s3/main.go:77` sets it to the constant — with no flag and no option. A `PUT` above 8 MiB fails with `EntityTooLarge` whatever the caller asks for | `internal/s3api/errors.go:63`; `cmd/stow-s3/main.go:77` | Requirement 7, and any workspace where an agent legitimately writes a large file through S3. A quota a host cannot raise is not a quota, it is a surprise |
+| 4 | **Two unimplemented S3 features return the wrong error code.** 18 sub-resources correctly return `NotImplemented`; `versions` and `location` are omitted from the list and fall through to `InvalidRequest` | `internal/s3api/dispatch.go:121-138` | Requirement 6, which is explicitly about *error codes SDKs already understand*. An SDK feature-gate keyed on the code takes the wrong branch. Two entries to add |
+| 5 | **The coverage floor is an aggregate, and it hides the shipped entry points.** 62.38% of 5,253 statements is the floor; `cmd/stow-s3` is 40.9% and `internal/s3api` 55.9% | `scripts/baselines/go-coverage.json` | W1 adds a new public entry point. An aggregate floor lets the new path ship uncovered while the total still rises |
+| 6 | **An ambient AWS profile silently switches a server into run-through mode.** `DetectMode` selects run-through whenever the upstream variables resolve, which the `AWS_*` fallback makes easy. `STOW_MODE=local` is the escape hatch and is not discoverable | `internal/runthrough/config.go:213` | Requirement 6's safety claim, and the workspace default. A workspace must never auto-detect an upstream |
+| 7 | **The user-facing docs still describe the superseded default.** `site/agent.md`, `site/llms.txt`, and `skills/stow-s3/SKILL.md` all present `withStow`/`with_session` as *the* pattern, and the skill's own description says "a bucket that is thrown away afterwards" — the exact default revision 2 removes. `check-install-surface.mjs` reads those files for publication status only | `site/agent.md:66,86`; `skills/stow-s3/SKILL.md:3,69,90` | Adoption. The install surface is the first thing an agent reads, and it currently teaches the old contract. No gate catches this, which was predicted when those files were created |
+| 8 | **`npm view` reports a package a consumer cannot install.** On this machine the `@chester-hill-solutions` scope is bound to `https://npm.pkg.github.com` in `.npmrc`, and a scope binding beats `--registry`. So `npm view @chester-hill-solutions/stow-s3 version` answers `0.2.0` for a package that is not on npmjs at all | Verified 2026-09-25 by direct HTTP: npmjs `404`, GitHub Packages `401`, PyPI `404` | Any "is it published?" check done with `npm view` on this machine is wrong, including a human's. Query the registry API with `curl` and read the status code. This one produced a false positive during this very work |
+| 9 | **The install-surface gate's disclaimer rule is inverted.** A *published* target must be accompanied by a disclaimer matching `/not published\|not yet\|not on npm\|not on PyPI\|404/`, so a document that correctly says "the Go module is published and works" is failed for not also saying that something else is unpublished. It passes today only because the prose happens to contain those words elsewhere | `scripts/check-install-surface.mjs:84` | W13. That work extends this pattern to declare the *default* once in a script, so extending a rule with a known backwards test propagates the bug. Fix the rule first, or do not build on the pattern |
+| 10 | **`npm ci` cannot run, so the TypeScript verification path is dead on main.** The lockfile carries four entries for the platform carrier packages with **no `version` and no `resolved`**, so npm refuses with a lockfile-desync `EUSAGE`. The `npm error aliases: …` line is npm listing its own command aliases, and it is a red herring that sends you looking at the wrong file | `packages/stow-s3/package-lock.json` | `make test-node`, and therefore `make check-generated`, and therefore the last step of `make standards`. Found while trying to verify W3 in TypeScript; committed breakage, not local drift |
+| 11 | **The documented `STOW_BIN` precedence is the opposite of the implemented one.** The comment claims an explicit `STOW_BIN` wins for development; both clients check the bundled platform package first, and three tests encode the comment rather than the code | `packages/stow-s3/src/bin.ts`, `packages/stow-s3-py/src/stow_s3/bin.py` | The code is right — a pinned install should outrank a stale exported environment variable — so the comment was the defect. The failure is invisible until a platform package is present in the tree, which is precisely the state the dev install must avoid |
+
+#### Harness rules for the workspace backend
+
+Defects 1 and 5 above share one root cause, and W0 is a new store that will hit
+it immediately. In `internal/runthrough`, all 13 adapter test constructions pass
+the *same* store as both local and cache, while production passes two distinct
+stores. With `cache == local`, a cache lookup can never fail independently of
+the local one, so the broken branch was unreachable. The six tests that did use
+distinct stores all pre-seeded `cache.CreateBucket`, which made the cache agree
+with the local store about which buckets exist.
+
+Three rules follow, and they bind on W0:
+
+1. **When a constructor takes two dependencies of the same interface, compare
+   what the tests pass against what `main` passes.** If they differ, an entire
+   configuration is untested. The workspace backend plus its manifest is
+   exactly that shape.
+2. **A fixture that pre-creates the parent of the thing under test makes the
+   test unable to fail.** The harness's *default* must be the broken case, and
+   a test must opt in to seeding. Not a comment asking people to remember.
+3. **The same-bytes test belongs in the corpus, not in a hand-written
+   expectation.** A test that a mock can satisfy has not tested the claim in
+   ADR 0007 section 5.
+
+#### One technique worth keeping
+
+Run-through can be exercised end to end with no cloud account by starting a
+second `stow` as the upstream and reading its address and credentials off the
+`STOW_READY` line. That is how the read-path defect was reproduced rather than
+merely reasoned about, and it is how W8's promote path gets tested without an
+AWS account. Note that the access log prints every request as `GET /s3`
+regardless of bucket and key, so the log cannot tell you which object was
+touched; use `/_stow/inspect` instead.
+
+### 0.7 Market position and the wedge
+
+Added 2026-09-25, after `docs/competitive-landscape.md` Part 2. This section
+narrows the thesis. The framing in section 0.5 described a direction that turned
+out to be a shipping product category, so the plan is re-derived from what is
+actually open.
+
+#### What the market did while this plan was being written
+
+| Requirement | Who has it | Grade |
+|---|---|---|
+| 2. Workspace that is the cwd, same bytes as S3 | Cloudflare Sandbox mounts buckets as local paths; a major cloud vendor has shipped the convergence itself | A / C |
+| 3. TTL-bounded durable scratch | Ordinary. A documented three-day default TTL, extendable | A |
+| 4. Framework embed | The Agents SDK shipped a first-party sandbox abstraction with named storage mounts and seven official providers; a Kubernetes SIG standard exists with Python and Go clients | A |
+| 6. S3 wire compatibility | Every emulator and every cloud. Never was a differentiator | A |
+
+**So the concept stopped being the product.** Being right about the category was
+worth something in early 2026 and is worth very little now. Section 0.5's
+"honest bar" — that every agent runtime starts a bounded artifact workspace — was
+already true when it was written, and it is the wrong bar to aim at.
+
+#### The two exits, which are the actual opening
+
+The two most widely used local S3 options both stopped being zero-account within
+about five weeks:
+
+- **MinIO community edition**: the repository states it is no longer maintained
+  and that community distribution is source-only. Unmaintained, plus source-only,
+  plus a named commercial successor — three separable facts, and this plan does
+  not assert an archive date, because no first-party one was found.
+- **LocalStack**: from 2026-03-23 a single unified image requires an auth token
+  *including in CI*, with a temporary bypass that expired 2026-04-06. Active and
+  well funded, not discontinued — what ended is starting with no account at all.
+
+That is a stronger position than a merely validated category. A validated
+category with occupied seats is hard. This one had its lowest-friction occupant
+leave.
+
+#### The wedge, stated as a distribution claim
+
+Every competitor in the landscape requires at least one of: a cloud account, a
+cluster, a deployed edge function on a paid plan, a container runtime, or a
+provider sign-up. The two exits removed the two ways that used to be satisfiable
+locally and for free.
+
+What remains is narrow:
+
+> **The only S3-shaped workspace an agent or a CI job can start with no account,
+> no container runtime, and no path to production credentials — and which is also
+> that process's working directory.**
+
+This is won or lost on whether installation works. **The account-side unblock in
+section 10.1 is therefore the precondition for the strategy, not a packaging
+chore.** A correct, well-tested workspace that cannot be `pip install`ed is not
+more useful than the alternatives; it is less useful, because it also asks for a
+build.
+
+#### What this changes in the plan
+
+1. **W7 is rewritten.** It is no longer "define the embed surface." It is
+   conformance to surfaces other people own: the Agents SDK sandbox manifest,
+   whose storage concept is a *mount* rather than a *workspace*, and the
+   Kubernetes SIG agent-sandbox API. A smaller prize, better specified.
+2. **The concept claims are demoted.** Sections 0.5, 1, and 16 keep the
+   direction, because a workspace that is the working directory is still the
+   right shape. They stop being the *argument*.
+3. **Requirement 1 is promoted** from one P0 among many to the gate on the whole
+   strategy, and given its own phase with its own exit condition.
+4. **A competitive response is added.** The LocalStack displacement is a
+   concrete, dated, addressable event, and Stow's zero-account property is the
+   direct replacement for the thing CI pipelines lost on 2026-03-23.
+
+#### What did not change
+
+The technical work. W0 and W1 built the workspace backend and put it behind a
+public API, and that is the right foundation for this wedge rather than for the
+old one — the wedge is "starts with nothing," and an in-process runtime with no
+listener, no port, no credentials, and no process is exactly what starts with
+nothing.
+
 ## 1. Product outcome
 
-Stow should become the shortest path from an agent or test to a disposable, S3-compatible workspace:
+> **Amended by revision 2.** The outcome is a bounded artifact workspace, not a
+> disposable S3 endpoint. The flow below now reads workspace-first with S3 as
+> an opt-in capability, and the cleanup guarantee is bounded durability rather
+> than deletion on scope exit. See ADR 0007 and ADR 0009.
+
+Stow should become the shortest path from an agent or test to a bounded
+workspace that is already its working directory:
 
 ```text
-install package -> acquire session -> use an S3 SDK -> run work -> release session
+install package -> open workspace -> work in the directory -> optionally speak S3 -> close
 ```
 
-A successful session should provide:
+A successful workspace should provide:
 
-- an automatically provisioned bucket;
-- a configured S3 client for the language in use;
+- a real directory the caller can `cd` into, with an automatically provisioned
+  bucket over the same bytes;
+- a configured S3 client for the language in use, when S3 compatibility is
+  wanted;
 - a loopback endpoint when S3 wire compatibility is required;
 - isolated credentials and data;
-- predictable cleanup after success, failure, cancellation, or process termination;
+- bounded durability: the workspace outlives the process and is collected on a
+  TTL, and closing it is not deletion;
 - bounded resource usage;
 - explicit capabilities;
 - no ambient environment mutation;
@@ -214,7 +454,12 @@ The first release of this direction is not:
 
 1. **One obvious happy path.** `withStow(...)` in TypeScript and `with stow.session()` in Python should be the first interface users see.
 2. **S3 compatibility at the seam.** Language packages should configure existing S3 clients. They should not reimplement S3 operations.
-3. **Ephemeral by default.** The standard agent session uses memory, one generated bucket, loopback-only networking, and automatic cleanup.
+3. **Bounded durability by default.** The standard workspace survives its
+   process and is collected on a TTL, measured in hours, rather than being
+   deleted when a scope exits. It still cannot reach anything upstream
+   without an explicit opt-in. *(Superseded by ADR 0007 and ADR 0009; the
+   previous wording was "ephemeral by default", which was right for a unit
+   test and wrong as the only mode.)*
 4. **Explicit ownership.** Every process, client, directory, lock, and background worker has one owner and one close path.
 5. **No ambient configuration.** The default session must not inherit `STOW_*`, `S3_*`, or `AWS_*` values from the parent process.
 6. **Capability negotiation.** A caller can discover persistence, multipart, upstream, quota, and protocol capabilities before issuing operations.
@@ -226,6 +471,12 @@ The first release of this direction is not:
 12. **Additive migration.** Existing `Stow.start()`, `Stow.connect()`, and `EmbeddedStow` remain available while the scoped APIs mature.
 
 ## 4. Architecture decision
+
+> **Superseded in part.** Section 4.1 remains the documented architecture of
+> the S3 session profile, which is supported and unchanged. It is no longer the
+> product default: ADR 0007 makes the workspace the default and the S3 endpoint
+> an opt-in facade. Section 4.2 is reversed for the same reason. Read this
+> section as the contract for callers who want a real S3 endpoint.
 
 ### 4.1 Default implementation: managed child S3 endpoint
 
@@ -260,6 +511,13 @@ Each default session should use:
 - no persistent data directory unless explicitly requested.
 
 ### 4.2 Direct embedded runtime remains a separate profile
+
+> **Reversed.** Under ADR 0007 the direct runtime is the *default* wherever a
+> client can embed it, and the child process is the fallback for clients that
+> cannot. The text below is kept because it correctly describes when the
+> embedded path is the better choice, and because the split it draws between
+> "direct object interface" and "S3 wire surface" still holds inside each
+> profile.
 
 The direct Go/WASM runtime remains valuable for callers that:
 
@@ -704,6 +962,128 @@ A skipped required scenario is a failure. A live-provider scenario may be schedu
 
 ## 9. Delivery plan
 
+> **Re-sequenced by revision 2.** Sections 9.1–9.5 below are the current plan.
+> The historical phases that follow are kept as the record of the S3 session
+> path, which is supported and largely executed. They are not the order of
+> work; 10.1 is the backlog and 9.1 is the shape of it.
+
+### 9.1 Shape of the plan
+
+Five movements. Revision 3 adds one and promotes another, because the market
+analysis in section 0.7 changed what the sequence is *for*.
+
+```text
+  Phase 0        Phase A          Phase B            Phase C         Phase D
+  THE GATE       the workspace    durability         compatibility   reach
+  ─────────      ───────────      ───────────        ────────────    ────────────
+  install works  W0 backend       W3 lifecycle       W2 virtual-host W7  conform to
+  W14 accounts   W1 pkg/stow      W4 registry + GC   W10 error codes      owned seams
+  W15 proof      contract tests   W8 handoff         W6 quotas        W13 doc gate
+                                                                W16 displace
+                                                                W17 MCP
+```
+
+**Phase 0 is first because it is the strategy.** Section 0.7 argues the wedge is
+a distribution claim, and a distribution claim that cannot be `pip install`ed is
+not a distribution claim. This phase was previously a parallel note about
+accounts; it is now the gate the rest waits on, because everything after it is
+worthless if a competitor ships the same wedge first with a working installer.
+
+Phases A and C have no dependency on each other. Phase B depends on A. Phase D
+depends on B, and W12 depends on nothing.
+
+### 9.2 Phase 0 — the gate: it installs, or nothing else matters
+
+**Entry:** nothing. No code dependencies; start immediately, in parallel with
+Phase A.
+**Exit:** `pip install stow-s3` and `npm install @chester-hill-solutions/stow-s3`
+both work on a machine with no account, no card, and no registry configuration,
+on every platform in the support matrix, with the binary inside.
+
+The work splits by who owns it, and the split matters:
+
+| Item | Owner | Why it is not an engineering task |
+|---|---|---|
+| Organisation, npm trusted publishing, PyPI trusted publisher | **The owner** | Accounts. No code change shortens this |
+| Registry line in the documented install command | Engineering | The package must be reachable where a consumer actually looks |
+| Per-platform wheel tags and the executable bit | Engineering, done | Two packaging traps already recorded, both invisible until installed for real |
+| W15 clean-install proof | Engineering | The gate that keeps Phase 0 honest |
+
+**W15 is the part that is easy to skip and must not be.** A release gate that
+asserts publication status from a declaration in a script is a status table, and
+this repository has three recorded instances of a status table disagreeing with
+reality. The proof is a clean-room install — empty container, no credentials in
+the environment, no npmrc — that runs an actual agent-shaped workload. It runs in
+CI on every release, and it fails on a 404.
+
+Note the trap already recorded about local verification: the scope is bound to a
+private registry in one developer's npmrc, so `npm view` answers for the wrong
+registry and reports a package a consumer cannot install. The gate must query
+registries over HTTP and read status codes, not ask npm.
+
+### 9.3 Phase A — the workspace backend
+
+**Entry:** the contract in `docs/workspace-contract.md` is agreed.
+**Exit:** WS-01 and WS-02 pass, and the rest of that document's section 8 corpus
+runs.
+
+**Status: complete.** The backend is `internal/storage/workspace` and the public
+entry point is `stow.OpenWorkspace`. Both same-bytes directions pass, the store
+runs the shared backend contract suite, and the package is at 74% coverage.
+
+The discipline that made it trustworthy is worth keeping: WS-01 and WS-02 were
+written before the backend and confirmed to fail against a store that cannot
+satisfy them. Section 0.6 records three other instances in this repository of a
+green suite over a path that had never run.
+
+### 9.4 Phase B — durability
+
+**Entry:** Phase A complete.
+**Exit:** a workspace survives its process, resumes by ID, and is collected on a
+TTL without ever touching a live one.
+
+The uncomfortable part of this phase is that it turns a deliberate breaking
+change into a failing test. `close()` stops meaning "the data is gone", so the
+"100 sessions leak nothing" assertion is wrong the moment the phase starts.
+Replacing it in the same diff as the behaviour change, with the message saying
+why, is the discipline. A test quietly edited to match new behaviour teaches the
+next reader that the old guarantee was optional.
+
+This phase is also where requirement 5's honest half lands: a handoff that names
+a workspace rather than a secret key.
+
+### 9.5 Phase C — compatibility and quotas
+
+Phase C finishes a contract that is already 95% written: two entries in the
+unsupported-marker list, virtual-hosted style end to end, and the quota
+dimensions that do not exist, including making the request-body cap raisable.
+It is small, it is independent, and it should not queue behind Phase A.
+Requirement 6 of the product direction is *specifically* about error codes SDKs
+already understand, and two of them are currently wrong.
+
+### 9.6 Phase D — reach, by conformance rather than invention
+
+Phase D makes Stow reachable, and revision 3 changes its content entirely. The
+original plan was to build integrations so that `Agent(workspace=...)` was Stow.
+That seam is owned by a framework vendor and a Kubernetes SIG, and their word
+for this is a *mount*.
+
+So Phase D is:
+
+- **W7**, rewritten: implement the storage-mount half of an existing sandbox
+  manifest, and the filesystem capability of the Kubernetes SIG API. The success
+  condition is unchanged and still right — a third party using Stow without
+  importing it — but it is reached by satisfying someone else's contract.
+- **W16**, the displacement: publish the zero-account replacement for what CI
+  lost on 2026-03-23, aimed at the teams whose pipelines broke that day. A dated,
+  addressable, still-fresh event, and the most time-sensitive positioning
+  available.
+- **W17**, the MCP server, still the honest boring-tools surface.
+- **W13**, the doc-shape gate, so the install surface stops teaching a contract
+  that no longer exists.
+
+### 9.7 Historical phases: the S3 session path
+
 The phases are ordered by dependency, not by language. The first implementation slice should be Phase 0 and Phase 1, not a broad S3 expansion.
 
 ### Phase 0 — Close the safety gaps and settle distribution
@@ -1045,6 +1425,58 @@ Exit criteria:
 
 ## 10. Prioritized backlog
 
+### 10.1 Revision 3 backlog
+
+Revised by revision 2 (ADR 0007/0008/0009) and again by revision 3, which
+re-derived the sequence from the market position in section 0.7. Supersedes the
+ordering in 10.2 for anything on the workspace path.
+
+Three facts set the order. **The public in-process runtime could not hold a
+workspace** — W0/W1, now done. **The subsystem promote would depend on has never
+worked** (section 0.6, defect 1). And **the wedge is a distribution claim**, so
+Phase 0 gates the rest rather than running beside it.
+
+| ID | Pri | Work item | Depends on | Exit condition |
+|---|---:|---|---|---|
+| W14 | **P0** | The accounts: organisation, npm trusted publishing, PyPI trusted publisher, and a registry line in the documented install command | — | **Owner action, not engineering.** Both packages install from a clean machine with no account and no registry configuration |
+| W15 | **P0** | Clean-install proof in CI | W14 | An empty container, no credentials, no npmrc, runs a real agent-shaped workload through the published package. Fails on a 404. Queries registries over HTTP, never via `npm view` |
+| W0 | P0 | Workspace backend | — | **Done.** Both same-bytes directions pass; 74% covered; runs the shared backend contract suite |
+| W1 | P0 | Expose it through `pkg/stow` | W0 | **Done.** `stow.OpenWorkspace`, in-process, no injected store; `pkg/stow` at 76% |
+| W3 | P0 | Workspace lifecycle: `open`, `close`, `destroy`, `resume` | W1 | `close()` is non-destructive, `destroy()` deletes, resume by ID returns the same workspace. Replaces the "leaks nothing" assertion in the same diff |
+| W4 | P0 | Session registry and TTL collector | W3 | A dead session's workspace is reclaimed; a live one, and a live cwd, never is |
+| W2 | P1 | Finish the S3 compatibility contract | — | Virtual-hosted style runs in the corpus and the client stops hardcoding `forcePathStyle` |
+| W10 | P1 | Error codes SDKs already understand | W2 | `versions` and `location` return `NotImplemented` (0.6 defect 4) |
+| W6 | P1 | Quotas a host can actually set | W1 | Bytes, objects, request rate, wall clock, audit log, and a **raisable** `MaxRequestBytes` (0.6 defect 3) |
+| W5 | P1 | S3 facade on the same runtime instance | W1 | One object store, two surfaces. A facade with its own storage is rejected in review |
+| W8 | P1 | Handoff reference | W4 | A handoff carries a session ID and an open capability, not a secret key (`session.ts:253`) |
+| W7 | P1 | **Conformance to owned seams** — the storage-mount half of a published sandbox manifest, and the filesystem capability of the Kubernetes SIG agent-sandbox API | W5 | A third party obtains a Stow-backed workspace **through someone else's interface**, without importing Stow. The original goal, reached by satisfying a contract we do not define |
+| W16 | P1 | The displacement | W14, W15 | The zero-account replacement for what CI lost on 2026-03-23 is published and installable, aimed at the teams whose pipelines broke that day |
+| W17 | P2 | MCP stdio server | W3 | The boring complete six: `write_file`, `read_file`, `list`, `stat`, `put_url`, `presign_download` |
+| W9 | P2 | **Promote, after the read/write path is fixed** | 0.6 defect 1, W4 | Blocked, not merely late. Run-through has never moved a byte |
+| W11 | P2 | Platform cost baseline: embed vs child, per language | W1, W5 | Two profiles reported separately, never averaged. macOS arm64 and Windows **measured on their own runners** |
+| W12 | P2 | Windows parent-death watch and a build tag on its test | — | The test compiles on Windows; the watch is implemented or explicitly refused. Requirement 1 is untrue on Windows until this lands |
+| W13 | P1 | A gate for the documented default | W3 | The four user-facing docs describe the current default, declared once in a script. **Blocked on fixing the inverted disclaimer rule first** (0.6 defect 9) — do not extend a rule whose test is backwards |
+
+The critical path, with Phase 0 promoted:
+
+```text
+W14 -> W15 ─┐
+            ├─> W16 (the strategy lands)
+W0 -> W1 -> W3 -> W4 -> W8
+            └-> W5 -> W7
+W2, W10, W12: independent, from day one
+W6, W13, W17: after their dependencies
+W9: blocked on fixing run-through, not on anything above
+```
+
+**W14 is the only item on this list that is not engineering, and it gates the
+most.** It has a lead time no code change shortens. Everything else is worthless
+if someone else ships this wedge first with a working installer — which, given
+that the two previous occupants of this exact position left inside five weeks of
+each other, is not a hypothetical.
+
+### 10.2 Prior backlog: the S3 session path
+
 | ID | Priority | Work item | Depends on | Exit condition |
 |---|---:|---|---|---|
 | A0 | P0 | Safety gaps: body cap, native quota wiring, read/write timeouts | — | Oversized request rejected before allocation; quotas enforced and tested |
@@ -1205,6 +1637,48 @@ Targets are measured on a documented benchmark environment. They are not claims 
 
 ### Soak tests
 
+#### Workspace path
+
+Added by revision 2. The tests above describe the S3 session; the workspace
+needs its own, and the difference is that a workspace is a *directory*.
+
+**Written before the implementation.** WS-01 and WS-02 are the first two cases
+written in Phase A and the first two run. They must be confirmed RED against
+`internal/storage/fs`, which is a store rather than a workspace, before the
+backend exists. A test that has never failed has not been tested.
+
+**Corpus, not fixtures.** All fourteen cases in
+`docs/workspace-contract.md` section 8 run through `conformance/corpus/cases.json`
+against the workspace backend alongside the memory and filesystem backends. A
+hand-written expectation for a workspace is a test that can be satisfied by
+whatever the implementation happens to do.
+
+**The harness default is the broken case.** A workspace harness creates no
+buckets, pre-seeds nothing, and leaves the directory empty unless a case asks
+otherwise. This is the direct lesson of the run-through suite, where 13 of 19
+adapter constructions passed the same store as both local and cache and the six
+that did not pre-seeded the cache's buckets, which made the defect unreachable
+in every one of them.
+
+**Adoption is tested by not doing anything.** WS-03, WS-08, and WS-12 all
+begin by writing a file with `os.WriteFile` and then asking stow to serve it.
+There is no import call in any of them, because there is no import call in the
+product.
+
+**Two keys, one file.** WS-06 runs on a real case-insensitive filesystem. A
+macOS or Windows runner is required; a cross-compile cannot observe the
+collision, and a test that skips on the platform where the bug lives is the
+`kevent` defect's second cousin.
+
+**Platform matrix.** Linux x64, macOS arm64, and Windows, each on its own
+runner, for: key encoding (WS-05, WS-13), case folding (WS-06), path length
+(WS-04), and the atomic manifest write under concurrent writers.
+
+**Cost, reported per path.** The embedded workspace path and the child-process
+session path are measured and published separately, on the same machine, with
+the backend named. A single number covering both is a number that describes
+neither. Windows and macOS numbers are measured, not extrapolated from Linux.
+
 Run at least 24 hours with repeated:
 
 - session acquisition/release;
@@ -1333,6 +1807,31 @@ Do not collect product analytics by default. Open-source adoption evidence shoul
 
 ## 14. Risks and mitigations
 
+### 14.1 Risks specific to the workspace path
+
+Added by revision 2. The risks in 14.2 predate it. Revision 3 adds the market
+risks, which are the ones that can end the project rather than slow it.
+
+| Risk | Mitigation |
+|---|---|
+| **The concept was taken, and the differentiator is thinner than the plan assumed** | Section 0.7 states the wedge as a *distribution* claim and demotes every concept claim. The build is not invalidated: an in-process runtime with no listener, port, credential, or process is exactly what "starts with nothing" requires |
+| **A competitor ships this wedge with a working installer first** | W14 and W15 are promoted to a gate for the whole strategy. This is what makes the account work urgent rather than merely outstanding |
+| **The embed seam is owned by others and the win condition shrank** | W7 is rewritten as conformance. The goal is unchanged — a third party uses Stow without importing it — but it is reached by satisfying a contract we do not define, in their vocabulary (a *mount*, not a *workspace*) |
+| **A hosted provider offers a usable no-card free tier** | Would narrow the wedge to "no Docker" and strip it of structural character. Listed in `docs/competitive-landscape.md` §10.6 as a verification task, because it is cheap to check and expensive to discover late |
+| **The MinIO framing is wrong because a maintained fork exists** | The plan asserts only what the repository states: unmaintained, source-only, commercial successor. It does not say "MinIO is dead", and the fork is recorded as the strongest available mitigation |
+| A structural finding is graded on secondary evidence and is wrong | Every market claim in Part 2 carries an A/B/C grade, and the single most load-bearing one is grade C. §10.6 lists what to read before the roadmap is approved |
+| The same-bytes claim is tested after the fact, so it confirms the implementation rather than the claim | WS-01 and WS-02 were written first and confirmed to fail against a store that is not a workspace. Section 0.6's harness rules bind here, and are not advisory |
+| Two S3 keys collide on a case-insensitive filesystem and one is silently lost | The backend indexes by case-folded path and escapes the loser. The rule set is the *union* of all supported hosts, so it is testable on Linux CI rather than only on a Windows runner |
+| The collector deletes a live agent's working directory | `workspace_in_use` is a correctness error, not policy. The collector must be able to *establish* that a workspace is live, not assume it |
+| `close()` stops deleting and callers never call `destroy` | Bounded by a TTL, reported through metrics and the capability query, and named in the changelog as a breaking change. A forgotten workspace is a disk cost, not a data-loss incident |
+| A corrupt manifest reads as total data loss | The filesystem, not the manifest, is the source of truth for existence, and a corrupt manifest refuses the open rather than rebuilding empty. WS-09 |
+| The workspace backend is a third store and repeats the two-store adapter bug | Every layering adapter over it gets the `cache_policy.go:139` treatment — both missing sentinels — and a test comparing what the tests pass against what `main` passes |
+| A cost figure from the embedded path is quoted as a general session cost | Two profiles reported separately, never averaged, and the Python exception stated in ADR 0007 section 3 rather than discovered by a user |
+| The install surface teaches the old contract | W13 declares the current default once in a script, gated on first fixing the inverted disclaimer rule (0.6 defect 9) |
+| Windows support is claimed from a cross-compile | W11 and W12 require runners. The kqueue parent-death watch shipped as fixed once, after being cross-compiled, vetted, and described as fixed in a commit message |
+
+### 14.2 Risks from the S3 session plan
+
 | Risk | Mitigation |
 |---|---|
 | Wrappers duplicate lifecycle logic | One versioned session protocol and shared conformance scenarios |
@@ -1372,7 +1871,42 @@ Do not make these prerequisites for the first agent-DX release:
 
 Add these only when external agent workloads demonstrate a need.
 
+### 15.1 Added by revision 3: things the market analysis rules out
+
+These are new non-goals and the direct consequence of section 0.7. Each is
+something a fair reading of the original brief would have put in scope, and each
+is now explicitly not:
+
+- **A sandbox runtime.** Do not build isolation, microVMs, gVisor, or container
+  management. Seven hosted providers and two standards bodies already do it, and
+  it is the opposite of the zero-infrastructure wedge. Stow's safety property is
+  *no path to production credentials*, not *untrusted code execution*.
+- **A FUSE or kernel filesystem mount.** It is the approach the incumbent
+  cloud product was positioned against, it needs privileges a library should not
+  ask for, and a workspace is already a real directory. The S3 facade is the
+  integration point; a mount would be a second one.
+- **A hosted relay for human download.** Still out of scope per ADR 0009
+  section 6, and revision 3 strengthens the reason: a relay is an operating cost
+  and a second product.
+- **A vector store, memory graph, or tool marketplace.** Unchanged from the
+  brief's own reasoning — a different primitive.
+- **A dashboard.** Unchanged, and now also uncompetitive.
+- **Chasing the framework embed as a moat.** We can be a provider behind an
+  owned interface. We cannot be the owner of it, and a plan that assumes
+  otherwise is planning to lose.
+- **Multi-region, multi-tenant, or cross-machine durable workspaces.** The wedge
+  is a local disposable workspace. Bounded durability on one machine is the
+  design, and it is the feature.
+
 ## 16. First execution slice
+
+> **Superseded by revision 2.** The slice below was written against a default
+> of a scoped child S3 session, and it has been substantially executed: the
+> request-body cap, the quota wiring, the versioned ready protocol, both
+> language clients, the platform binary packaging, and the benchmark baseline
+> all exist. What it did not question was the default itself. The slice below
+> remains the record of that session's work; the slice that follows replaces
+> it as the next one.
 
 The next implementation session should not start with Python packaging or more
 S3 operations, and it should not start with a document. It should close the
@@ -1394,27 +1928,91 @@ unbounded request path and answer the distribution question:
 
 The project becomes a strong agent and DX library when a new user can write one scoped block, use a normal S3 SDK, and trust that nothing survives the block unless they explicitly choose otherwise.
 
+### 16.1 The slice that replaces it
+
+The last sentence above is now the wrong target. "Nothing survives the block"
+was correct when the block was the unit of work; it is wrong when the block is
+a framework's per-task callback, which is what ADR 0009 replaces it with. The
+replacement sentence is the one in ADR 0007 section 5: an agent runtime starts
+a bounded workspace that is already its working directory, and the same bytes
+are reachable through S3.
+
+Three tasks, in this order, and nothing else starts until they are done:
+
+1. **W0 — the workspace backend.** Objects as real files, one manifest,
+   adopting files it did not write. Its exit condition is the two-direction
+   same-bytes test, in the conformance corpus rather than in a unit test that
+   a mock could satisfy. Nothing else in this plan is load-bearing.
+2. **W1 — expose it through `pkg/stow`.** A persistent in-process workspace
+   with no injected store and no child process. Until this exists, the
+   direction in ADR 0007 is a design and not a product.
+3. **W2 — finish virtual-hosted style.** Independent, cheap, and the last
+   uncompleted item in the S3 compatibility contract.
+
+The account-side unblock for requirement 1 runs alongside all three, because
+it is waiting on people rather than on code.
+
 ## 17. Decision checklist before implementation
 
-- [ ] What is the exact default promise?
-- [ ] What is the canonical session name in TypeScript and Python?
-- [ ] What is the PyPI distribution name, and is it available? — **`stow-s3`**, import
+Answered by revision 2 unless marked open. An unanswered box next to a decided
+question is how this document drifted from the code twice already.
+
+- [x] What is the exact default promise? — **A bounded workspace that is already
+  the working directory, with S3 as an opt-in facade.** ADR 0007; the interface
+  is specified in `docs/workspace-contract.md` section 1. The S3 session
+  profile remains supported under ADR 0004.
+- [ ] What is the canonical session name in TypeScript and Python? — Open. The
+  workspace introduces a second noun, and whether the client exports
+  `openWorkspace` alongside `openStow` or replaces it is a naming decision
+  nobody has made. Note that `stow` is taken as a bare name on npm, PyPI, and
+  in `PATH`, so the namespace is not free.
+- [x] What is the PyPI distribution name, and is it available? — **`stow-s3`**, import
   package `stow_s3`, Python 3.10+. `stow` is taken on PyPI by an unrelated
-  package. Recorded in `docs/distribution-spike.md`.
+  package. Recorded in `docs/distribution-spike.md`. The name is reserved and
+  the project is not created; confirmed as a 404 from outside the repo.
 - [ ] Which S3 client libraries are first-class?
-- [ ] Is async Python part of the first release or a later release?
-- [ ] Which platforms ship in the first release? — **macOS arm64 and Linux x64.**
-  The release pipeline already builds all four candidate platforms.
-- [ ] How is the binary distributed with each package? (A0.5 answer: platform
-  optional packages. Measured in `docs/distribution-spike.md`.)
+- [ ] Is async Python part of the first release or a later release? — Open, and
+  now heavier: Python has no embedded path at all (ADR 0007 section 3), so async
+  would be layered on a subprocess.
+- [x] Which platforms ship in the first release? — **macOS arm64 and Linux x64**
+  for the S3 session profile. **For the workspace backend, Windows is
+  first-release too**, because the key-to-path encoding in
+  `docs/workspace-contract.md` section 3 has Windows-specific rules that are
+  untestable without a Windows runner (W12, WS-13). The release pipeline already
+  builds all four candidate platforms.
+- [x] How is the binary distributed with each package? — **Platform optional
+  packages**, resolved before `PATH`, so a plain install starts a session with
+  no environment setup. Measured in `docs/distribution-spike.md`. Note that
+  `STOW_BIN` is the *from-source* key and disappears once anything is
+  published.
 - [x] What are the default quotas? — **16 MiB / 1,000 objects / 8 MiB per
-  request.** The byte and object counts are enforced natively. The memory figure
-  that came with them has been restated: sessions now run `GOGC=50`, which
-  measures 3.27 MB peak RSS per MiB rather than 4.59, so a 16 MiB session implies
-  roughly 65 MB including fixed process RSS, not 85 MB. See section 11 and
-  `docs/benchmarks/session-baseline.md`.
-- [ ] Which capabilities must be present for an agent adapter?
-- [ ] How are child-agent credentials handed off?
-- [ ] How are cleanup errors reported without hiding the primary error?
-- [ ] Which run-through behaviors are safe enough for the first release?
-- [ ] Which external pilots define success?
+  request** for a session. The byte and object counts are enforced natively. The
+  memory figure that came with them has been restated: sessions now run
+  `GOGC=50`, which measures 3.27 MB peak RSS per MiB rather than 4.59, so a
+  16 MiB session implies roughly 65 MB including fixed process RSS, not 85 MB.
+  See section 11 and `docs/benchmarks/session-baseline.md`. **The 8 MiB request
+  cap is currently unraisable** — it is a constant with no flag (section 0.6,
+  defect 3) — and must become host-configurable in W6.
+- [x] Which capabilities must be present for an agent adapter? —
+  `docs/workspace-contract.md` section 6. Notably `caseInsensitiveHost`, which
+  changes observable behaviour, and `s3Session: false`, which stops a caller
+  assuming the workspace profile's guarantees.
+- [x] How are child-agent credentials handed off? — **Two separate values.** An
+  in-process-tree environment mapping, which does carry the generated secret key
+  and already exists, and a *handoff reference* that carries a session ID and an
+  open capability and no secret. ADR 0009 section 5.
+- [x] How are cleanup errors reported without hiding the primary error? —
+  `withStow` already aggregates rather than masking (ADR 0004 section 2). The
+  workspace contract adds `workspace_in_use` as a correctness error and
+  `workspace_manifest_corrupt` as a refusal that deletes nothing.
+  `docs/workspace-contract.md` section 5.
+- [ ] Which run-through behaviors are safe enough for the first release? —
+  Open, and the question is currently unanswerable: run-through has never read
+  through to an upstream or propagated a write (section 0.6, defect 1). Nothing
+  in run-through should be advertised for the workspace path until that is
+  fixed, and promote is blocked on it.
+- [ ] Which external pilots define success? — Open. The measurable form is
+  already written down in section 1: installation success, time to first
+  operation, repeated use, reliability under parallel sessions, and the number
+  of external workloads using the published packages without tribal knowledge.
+  What is missing is the named pilots.

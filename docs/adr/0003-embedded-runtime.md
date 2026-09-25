@@ -46,3 +46,9 @@ Direct-runtime tests exercise lifecycle, isolation, quotas, reset, and close. Th
 ## Out of scope
 
 This ADR does not add browser persistence, automatic bucket provisioning, a public S3 server artifact, a new cache abstraction, or a replacement for the existing TypeScript lifecycle APIs.
+
+The "first profile is memory-only" decision in section 1 above is the
+constraint ADR 0008 lifts. `pkg/stow` still exposes only `BackendMemory`, and
+`runtime.Open` still refuses any other backend without an injected store; the
+workspace backend that makes the in-process runtime the product default is
+specified in ADR 0008 and is not yet built. Everything else in this ADR stands.
