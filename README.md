@@ -57,7 +57,18 @@ func main() {
 }
 ```
 
-The `js/wasm` bridge exposes the same memory runtime through a small JSON/base64 host protocol:
+The `js/wasm` bridge exposes the same memory runtime through a versioned JSON/base64 host protocol. The Node package includes the tested WASM asset and loader:
+
+```ts
+import { EmbeddedStow } from "@chs/stow/embedded";
+import { loadNodeWasmHost } from "@chs/stow/node-wasm";
+
+const host = await loadNodeWasmHost();
+const embedded = EmbeddedStow.open(host);
+// use embedded...
+embedded.close();
+await host.close();
+```
 
 ```sh
 make test-wasm
