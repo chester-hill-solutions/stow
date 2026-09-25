@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/chester-hill-solutions/stow/internal/runthrough"
 	"github.com/chester-hill-solutions/stow/internal/storage"
 	"github.com/chester-hill-solutions/stow/internal/version"
 )
@@ -23,6 +24,10 @@ type cacheEvictionsProvider interface {
 
 type outboxStatsProvider interface {
 	OutboxStats() (pending, terminal int)
+}
+
+type outboxEntriesProvider interface {
+	OutboxEntries() []runthrough.OutboxEntry
 }
 
 type outboxAdminProvider interface {
@@ -78,6 +83,25 @@ func (s *Server) handleAdmin(w http.ResponseWriter, r *http.Request) {
 
 func writeAdminError(w http.ResponseWriter, status int, message string) {
 	http.Error(w, message, status)
+}
+
+func outboxErrorClass(message string) string {
+	if message == "" {
+		return ""
+	}
+	message = strings.ToLower(message)
+	switch {
+	case strings.Contains(message, "not found"):
+		return "not_found"
+	case strings.Contains(message, "timeout"), strings.Contains(message, "deadline"):
+		return "timeout"
+	case strings.Contains(message, "accessdenied"), strings.Contains(message, "signature"), strings.Contains(message, "credential"):
+		return "authorization"
+	case strings.Contains(message, "quota"), strings.Contains(message, "throttl"):
+		return "capacity"
+	default:
+		return "upstream_error"
+	}
 }
 
 func (s *Server) writeStatus(w http.ResponseWriter, r *http.Request) {
@@ -185,6 +209,23 @@ func (s *Server) writeInspect(w http.ResponseWriter, r *http.Request) {
 	if provider, ok := s.store.(outboxStatsProvider); ok {
 		outboxPending, outboxTerminal = provider.OutboxStats()
 	}
+	outboxEntries := make([]map[string]interface{}, 0)
+	if provider, ok := s.store.(outboxEntriesProvider); ok {
+		for _, entry := range provider.OutboxEntries() {
+			outboxEntries = append(outboxEntries, map[string]interface{}{
+				"id":           entry.ID,
+				"operation":    entry.Operation,
+				"bucket":       entry.Bucket,
+				"key":          entry.Key,
+				"version":      entry.Version,
+				"attempts":     entry.Attempts,
+				"terminal":     entry.Terminal,
+				"prepared":     entry.Prepared,
+				"last_error":   outboxErrorClass(entry.LastError),
+				"next_attempt": entry.NextAttempt,
+			})
+		}
+	}
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(map[string]any{
 		"buckets":           snaps,
@@ -194,6 +235,7 @@ func (s *Server) writeInspect(w http.ResponseWriter, r *http.Request) {
 		"cache_evictions":   cacheEvictions,
 		"outbox_pending":    outboxPending,
 		"outbox_terminal":   outboxTerminal,
+		"outbox_entries":    outboxEntries,
 	})
 }
 

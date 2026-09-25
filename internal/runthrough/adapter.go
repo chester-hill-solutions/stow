@@ -112,6 +112,11 @@ func (a *Adapter) OutboxStats() (pending, terminal int) {
 	return pending, terminal
 }
 
+// OutboxEntries returns a point-in-time copy for administrative inspection.
+func (a *Adapter) OutboxEntries() []OutboxEntry {
+	return a.outbox.Pending()
+}
+
 // DiscardOutboxEntry removes one pending or terminal propagation intent.
 func (a *Adapter) DiscardOutboxEntry(id string) error {
 	for _, entry := range a.outbox.Pending() {
