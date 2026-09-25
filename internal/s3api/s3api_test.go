@@ -369,9 +369,10 @@ func TestAdminOutboxDiscard(t *testing.T) {
 		t.Fatalf("enqueue: %v", err)
 	}
 	srv, err := s3api.New(s3api.Config{
-		Store: adapter,
-		Auth:  s3api.DevBypass,
-		Host:  "127.0.0.1",
+		Store:      adapter,
+		Auth:       s3api.DevBypass,
+		Host:       "127.0.0.1",
+		AdminToken: testAdminToken,
 	})
 	if err != nil {
 		t.Fatalf("new server: %v", err)
@@ -379,7 +380,22 @@ func TestAdminOutboxDiscard(t *testing.T) {
 	ts := httptest.NewServer(srv.Handler())
 	defer ts.Close()
 
+	// A destructive route with no token is not reachable even over loopback.
+	// See TestDestructiveAdminRoutesRequireToken.
+	unauthorized, err := http.Post(ts.URL+"/_stow/outbox/discard?id="+entry.ID, "application/json", nil)
+	if err != nil {
+		t.Fatalf("unauthorized discard: %v", err)
+	}
+	unauthorized.Body.Close()
+	if unauthorized.StatusCode != http.StatusNotFound {
+		t.Fatalf("unauthorized discard status = %d, want 404", unauthorized.StatusCode)
+	}
+	if pending := outbox.Pending(); len(pending) != 1 {
+		t.Fatalf("unauthorized discard changed the outbox: %+v", pending)
+	}
+
 	req, _ := http.NewRequest(http.MethodPost, ts.URL+"/_stow/outbox/discard?id="+entry.ID, nil)
+	req.Header.Set(s3api.AdminTokenHeader, testAdminToken)
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
 		t.Fatalf("discard: %v", err)

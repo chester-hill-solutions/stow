@@ -77,25 +77,29 @@ Closed since this section was written:
 2. **`cleanSlate` was an unguarded recursive delete** of any caller-supplied
    path, including the home directory, in the published `dist/`. Fixed;
    `docs/adr/0006-owned-data-directory-reset.md`.
+3. **The admin surface had no credential.** `--allow-public-admin` was the only
+   gate, so enabling it exposed the destructive `outbox/retry` and
+   `outbox/discard` actions to anyone who could reach the port. The flag is now
+   deprecated and ignored; remote admin requires an admin token, and the
+   destructive routes require it on loopback too, because loopback is not a
+   privilege boundary. Read-only routes stay loopback-open so `stow doctor` is
+   unaffected.
+4. **CORS reflected any origin.** Any website a developer visited could read
+   responses from their local stow, with the credentials the SDK had already put
+   in the page. Now an allowlist defaulting to loopback, `Vary: Origin` on every
+   response, and a refused preflight. This also wires `Config.CORSOrigins`,
+   which had been declared and never read.
 
 Still open, in descending order of harm:
 
-3. **The admin surface has no credential.** `--allow-public-admin` is a bare
-   boolean, and the routes it exposes include the destructive outbox
-   `retry` and `discard` actions. There is no admin token, so
-   `--allow-public-admin` means *unauthenticated* rather than *authenticated*.
-   `internal/s3api/server.go`.
-4. **CORS reflects any origin.** `internal/s3api/cors.go` echoes the request's
-   `Origin` and, when absent, sends `*`. There is no allowlist and no
-   `Vary: Origin`. `Config.CORSOrigins` is declared and never read anywhere, so
-   the allowlist was designed and never wired.
 5. **The macOS parent-death watch is a no-op.** `internal/parentwatch` opens a
    kqueue descriptor and `defer`-closes it the instant `Watch` returns; no
    goroutine ever services the registered `NOTE_EXIT` event. macOS arm64 is a
    first-class release platform by the decision in section 17, so sessions can
    orphan there. Windows is `ErrUnsupported`, and `parentwatch_test.go` has no
    build tag, so it does not even compile on that platform. There is no macOS or
-   Windows CI job.
+   Windows CI job. The fix is small but cannot be verified on this host, so it
+   wants a macOS runner rather than a blind edit.
 6. **The filesystem key limit is ~127 bytes, not the documented 1024.**
    `storage.ValidateKey` accepts 1024, but keys become
    `hex.EncodeToString` filenames and `NAME_MAX` is 255, so a 128-byte key fails
@@ -111,6 +115,12 @@ Still open, in descending order of harm:
 Item 6 is the one that invalidates a stated exit criterion rather than merely
 adding work, and it is also the prerequisite for the storage format v3 in the
 10-plan: that change is a hash-filename scheme, which is the same fix.
+
+The recurring lesson across items 1 to 4 is worth recording. Each was a
+*permissive default* that the surrounding prose described as safe, and each sat
+in a phase that a document had already marked complete. Two were reachable from
+a published artifact. Neither a status table nor a passing gate would have found
+them; reading the code did.
 
 ## 1. Product outcome
 

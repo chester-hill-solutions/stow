@@ -209,7 +209,10 @@ func serve(args []string) {
 	secretKey := flags.String("secret-key", "", "Secret key (generated if omitted)")
 	host := flags.String("host", "127.0.0.1", "Listen host")
 	baseHost := flags.String("base-host", "", "Host suffix for virtual-hosted-style routing")
-	allowPublicAdmin := flags.Bool("allow-public-admin", false, "Allow unauthenticated admin and metrics routes on non-loopback requests")
+	allowPublicAdmin := flags.Bool("allow-public-admin", false, "Deprecated and ignored: remote admin routes now require --admin-token")
+	adminToken := flags.String("admin-token", "", "Credential for admin and metrics routes; prefer STOW_ADMIN_TOKEN so it is not visible in the process list")
+	var corsOrigins corsOriginList
+	flags.Var(&corsOrigins, "cors-origin", "Browser origin permitted to read responses; repeatable. Default permits loopback origins only")
 	modeFlag := flags.String("mode", "auto", "Operational mode: local, run-through, or auto (default)")
 	allowLiveWrites := flags.Bool("allow-live-writes", false, "Propagate writes to upstream S3")
 	cacheDir := flags.String("cache-dir", "", "Run-through cache directory (default: <data-dir>/cache)")
@@ -241,7 +244,10 @@ func serve(args []string) {
 	}
 
 	if *allowPublicAdmin {
-		log.Printf("WARNING: admin and metrics routes are exposed without authentication")
+		log.Printf("WARNING: --allow-public-admin no longer grants access and is ignored; use --admin-token or STOW_ADMIN_TOKEN to authorize remote admin routes")
+	}
+	if *adminToken == "" {
+		*adminToken = strings.TrimSpace(os.Getenv("STOW_ADMIN_TOKEN"))
 	}
 	if *allowLiveWrites {
 		rtCfg.AllowLiveWrites = true
@@ -311,6 +317,8 @@ func serve(args []string) {
 		WritePolicy:      writePolicy,
 		UpstreamHost:     upstreamHost,
 		AllowPublicAdmin: *allowPublicAdmin,
+		AdminToken:       *adminToken,
+		CORSOrigins:      corsOrigins,
 	})
 	if err != nil {
 		log.Fatalf("create server: %v", err)

@@ -358,7 +358,61 @@ The server can bind to a network interface:
 
 Clients on the same network can then connect to the host's port and use S3 operations. Keep the server behind a firewall or private network boundary. Put it behind a TLS-terminating proxy before sending traffic over an untrusted network.
 
-The S3 routes require the generated or configured credentials. Administrative routes are separate from S3 authentication and must not be exposed publicly. Use the current server for local development and controlled private deployments. It is not a hardened public or multi-tenant storage service.
+The S3 routes require the generated or configured credentials. Use the current server for local development and controlled private deployments. It is not a hardened public or multi-tenant storage service.
+
+## Admin and metrics routes
+
+Diagnostics live under `/_stow/`, separate from S3 authentication:
+
+| Route | Effect |
+|---|---|
+| `/_stow/health` | liveness |
+| `/_stow/status` | mode, policies, version |
+| `/_stow/inspect` | object and upload state |
+| `/_stow/metrics` | request and quota counters |
+| `/_stow/outbox/retry` | retries failed upstream propagation |
+| `/_stow/outbox/discard` | discards an outbox entry |
+
+The two `outbox` routes change what is propagated to a live provider, so they
+always require the admin token — including on loopback, because loopback is not
+a privilege boundary. The read-only routes work on loopback without a token, so
+`stow doctor` and a local shell need nothing, and require the token from any
+other address.
+
+Set the token with `STOW_ADMIN_TOKEN` rather than the flag, so it does not appear
+in the process list:
+
+```bash
+STOW_ADMIN_TOKEN=$(openssl rand -hex 24) ./bin/stow-s3 serve --host 0.0.0.0
+curl -H "X-Stow-Admin: $STOW_ADMIN_TOKEN" http://host:9000/_stow/metrics
+```
+
+A request without a valid token gets `404`, not `403`, so the route's existence
+is not advertised. With no token configured the outbox routes are not reachable
+at all.
+
+`--allow-public-admin` is **deprecated and ignored**. It used to be the only
+gate, which made exposing the outbox routes an unauthenticated act rather than a
+privileged one. The flag now logs a warning and changes nothing; use
+`--admin-token`.
+
+## Browser origins (CORS)
+
+Stow permits loopback origins by default — `http://localhost:*` and
+`http://127.0.0.1:*` — which is the case a local dev server actually has. It
+previously reflected whatever `Origin` a request carried, which let any website
+a developer visited read their local bucket using the credentials their SDK had
+already placed in the page.
+
+Name the origins you need instead:
+
+```bash
+./bin/stow-s3 serve --cors-origin https://app.example --cors-origin http://localhost:5173
+```
+
+`--cors-origin *` restores the old permissive behavior, but only when you ask
+for it by name. Responses always carry `Vary: Origin`, without which a cache can
+serve one origin's allow header to another.
 
 ## Development
 

@@ -2,10 +2,12 @@ package s3api
 
 import (
 	"context"
+	"crypto/subtle"
 	"fmt"
 	"log"
 	"net"
 	"net/http"
+	"strings"
 	"sync"
 	"time"
 
@@ -26,11 +28,25 @@ type Config struct {
 	Mode string
 	// CachePolicy is the run-through cache policy (e.g. readThroughCache) or "none".
 	CachePolicy string
-	// WritePolicy is "local-only" or "allowLiveWrites".
+	// WritePolicy reports the effective write policy (see
+	// runthrough.EffectiveWritePolicy): local-only, mirrorWrites,
+	// mirrorWrites-disabled, or allowLiveWrites.
 	WritePolicy string
 	// UpstreamHost is a redacted upstream endpoint host for status (no secrets).
 	UpstreamHost string
-	// AllowPublicAdmin explicitly permits admin and metrics routes on non-loopback requests.
+	// AdminToken is the credential required by admin and metrics routes. When
+	// empty, those routes are reachable only from loopback, and the destructive
+	// outbox routes are not reachable at all.
+	//
+	// This exists because AllowPublicAdmin was a bare boolean, which made
+	// exposing the outbox retry and discard actions on a network interface an
+	// unauthenticated act rather than a privileged one.
+	AdminToken string
+	// AllowPublicAdmin is retained for source compatibility and no longer
+	// grants access by itself. Remote admin routes require AdminToken. The
+	// server logs a deprecation warning when this is set.
+	//
+	// Deprecated: use AdminToken.
 	AllowPublicAdmin bool
 	// MaxRequestBytes caps the bytes read from a single request body. Zero uses
 	// DefaultMaxRequestBytes. The cap is applied at the HTTP boundary so every
@@ -186,6 +202,9 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	// The body cache is installed for every request, not only authenticated
 	// ones, so the handler and the auth stage share a single read of the body.
 	r = withBodyCache(r.WithContext(ctx))
+	// Attached before the preflight and before dispatch so every response path,
+	// including the error and XML helpers, applies the same allowlist.
+	r = withCORSOrigins(r, s.config.CORSOrigins)
 	rw := &statusRecorder{ResponseWriter: w, status: http.StatusOK}
 
 	if handleCORSPreflight(rw, r) {
@@ -202,7 +221,7 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if isAdminPath(r.URL.Path) {
-		if !s.config.AllowPublicAdmin && !isLoopbackRequest(r) {
+		if !s.authorizeAdmin(rw, r) {
 			http.NotFound(rw, r)
 			s.logRequest(r, rw.status, time.Since(start))
 			return
@@ -288,6 +307,49 @@ func isLoopbackRequest(r *http.Request) bool {
 	}
 	ip := net.ParseIP(host)
 	return ip != nil && ip.IsLoopback()
+}
+
+// authorizeAdmin decides whether a request may reach an admin route.
+//
+// The rule has two levels, and the distinction is the point:
+//
+//   - Read-only routes (health, status, inspect, metrics) are reachable from
+//     loopback without a credential, which is what stow doctor and a local
+//     shell both rely on, and from anywhere with the admin token.
+//   - Destructive routes (outbox retry and discard) always require the token,
+//     including on loopback. They change what is propagated to a live provider,
+//     so a stray local process should not be able to trigger them by guessing a
+//     path. When no token is configured they are simply not reachable, which is
+//     the "disable admin routes when the token is absent" behavior.
+//
+// AllowPublicAdmin no longer participates. It used to be the only gate, which
+// meant the flag turned "authenticated" into "unauthenticated" rather than the
+// other way round.
+//
+// A rejection is 404 rather than 403 so the route's existence is not advertised
+// to a caller that could not use it.
+func (s *Server) authorizeAdmin(w http.ResponseWriter, r *http.Request) bool {
+	if s.adminTokenMatches(r) {
+		return true
+	}
+	if isDestructiveAdminPath(r.URL.Path) {
+		return false
+	}
+	return isLoopbackRequest(r)
+}
+
+// adminTokenMatches reports whether the request carries the configured token.
+//
+// The comparison is constant time so a caller cannot discover the token by
+// timing repeated attempts, and a server with no token configured never
+// authorizes on the strength of an absent or empty header.
+func (s *Server) adminTokenMatches(r *http.Request) bool {
+	expected := strings.TrimSpace(s.config.AdminToken)
+	if expected == "" {
+		return false
+	}
+	presented := strings.TrimSpace(r.Header.Get(AdminTokenHeader))
+	return subtle.ConstantTimeCompare([]byte(presented), []byte(expected)) == 1
 }
 
 // Handler returns an http.Handler for httptest.
