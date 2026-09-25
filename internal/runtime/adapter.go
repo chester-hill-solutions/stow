@@ -127,18 +127,7 @@ func (a *StoreAdapter) DeleteObject(ctx context.Context, bucket, key string) err
 }
 
 func (a *StoreAdapter) DeleteObjects(ctx context.Context, bucket string, keys []string) ([]string, error) {
-	deleted := make([]string, 0, len(keys))
-	for _, key := range keys {
-		err := a.instance.DeleteObject(ctx, bucket, key)
-		if errors.Is(err, storage.ErrObjectNotFound) {
-			continue
-		}
-		if err != nil {
-			return deleted, err
-		}
-		deleted = append(deleted, key)
-	}
-	return deleted, nil
+	return a.instance.DeleteObjects(ctx, bucket, keys)
 }
 
 func (a *StoreAdapter) CopyObject(ctx context.Context, srcBucket, srcKey, dstBucket, dstKey string) (*storage.ObjectMeta, error) {
