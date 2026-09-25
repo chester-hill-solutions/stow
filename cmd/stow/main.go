@@ -127,6 +127,8 @@ func main() {
 	switch os.Args[1] {
 	case "serve":
 		serve(os.Args[2:])
+	case "doctor":
+		doctor(os.Args[2:])
 	default:
 		usage()
 		os.Exit(1)
@@ -134,7 +136,7 @@ func main() {
 }
 
 func usage() {
-	fmt.Fprintf(os.Stderr, "usage: stow <command>\n\ncommands:\n  serve    start the S3-compatible server\n")
+	fmt.Fprintf(os.Stderr, "usage: stow <command>\n\ncommands:\n  serve    start the S3-compatible server\n  doctor   report whether this machine can run a stow session\n")
 }
 
 func resolveLocalCredentials(accessKey, secretKey string) (string, string) {

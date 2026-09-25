@@ -77,6 +77,28 @@ if (declared.length > 0) {
   problems.push(`unexpected optionalDependencies: ${declared.join(", ")}`);
 }
 
+// `stow doctor` reports whether a published binary exists for the running
+// platform, so its list has to be the same list that actually ships. It lives in
+// Go, in GOOS/GOARCH form, while the manifests use npm's cpu names, so the two
+// are translated rather than compared as strings.
+const NPM_CPU_TO_GOARCH = { x64: "amd64", arm64: "arm64" };
+const doctorSource = readFileSync(resolve(root, "cmd/stow/doctor.go"), "utf8");
+const doctorList = doctorSource.match(/var supportedPlatforms = \[\]string\{([^}]*)\}/s)?.[1];
+if (!doctorList) {
+  problems.push("cmd/stow/doctor.go no longer declares supportedPlatforms");
+} else {
+  const declaredPlatforms = [...doctorList.matchAll(/"([a-z0-9]+)\/([a-z0-9]+)"/g)].map((m) => `${m[1]}/${m[2]}`);
+  const shippedPlatforms = PLATFORM_PACKAGES.map((p) => `${p.os}/${NPM_CPU_TO_GOARCH[p.cpu] ?? p.cpu}`);
+  const missingFromDoctor = shippedPlatforms.filter((p) => !declaredPlatforms.includes(p));
+  const missingFromRelease = declaredPlatforms.filter((p) => !shippedPlatforms.includes(p));
+  if (missingFromDoctor.length > 0) {
+    problems.push(`stow doctor omits shipped platforms: ${missingFromDoctor.join(", ")}`);
+  }
+  if (missingFromRelease.length > 0) {
+    problems.push(`stow doctor claims platforms that are not shipped: ${missingFromRelease.join(", ")}`);
+  }
+}
+
 if (problems.length > 0) {
   for (const problem of problems) console.error(problem);
   process.exit(1);

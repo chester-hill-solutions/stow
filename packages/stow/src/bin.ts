@@ -90,30 +90,56 @@ function findBundledBinary(): string | undefined {
 }
 
 /**
- * Resolve the stow binary path.
+ * Where a resolved binary path came from. The source is what a user needs when
+ * a session will not start: "stow is not on PATH" and "STOW_BIN points at a
+ * binary from an older release" are different problems with different fixes,
+ * and the path alone does not distinguish them.
+ */
+export type StowBinarySource =
+  | "platform-package"
+  | "environment"
+  | "monorepo"
+  | "path";
+
+export interface ResolvedStowBinary {
+  readonly path: string;
+  readonly source: StowBinarySource;
+}
+
+/** The platform package that should ship the binary here, if one is published. */
+export function platformPackageForCurrentPlatform(): string | undefined {
+  return PLATFORM_PACKAGES[`${process.platform}-${process.arch}`];
+}
+
+/**
+ * Resolve the stow binary path and report which rule produced it.
  *
  * Precedence: a platform binary installed alongside this package, the STOW_BIN
  * environment variable, `bin/stow` relative to a monorepo root, then `stow` on
  * PATH. A plain `npm install` on a supported platform therefore works with no
  * setup, while an explicit STOW_BIN still wins for development and testing.
  */
-export function resolveStowBinary(): string {
+export function resolveStowBinaryDetailed(): ResolvedStowBinary {
   const bundled = findBundledBinary();
   if (bundled !== undefined) {
-    return bundled;
+    return { path: bundled, source: "platform-package" };
   }
 
   const fromEnv = process.env.STOW_BIN?.trim();
   if (fromEnv) {
-    return fromEnv;
+    return { path: fromEnv, source: "environment" };
   }
 
   const fromRepo = findMonorepoBinary();
   if (fromRepo) {
-    return fromRepo;
+    return { path: fromRepo, source: "monorepo" };
   }
 
-  return "stow";
+  return { path: "stow", source: "path" };
+}
+
+export function resolveStowBinary(): string {
+  return resolveStowBinaryDetailed().path;
 }
 
 export function stowBinaryAvailable(): boolean {

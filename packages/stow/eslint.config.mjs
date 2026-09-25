@@ -10,10 +10,10 @@ export default tseslint.config(
   eslint.configs.recommended,
   ...tseslint.configs.recommended,
   {
-    // Build and maintenance scripts run in Node, not the browser. Without this
-    // they are linted with no globals, so every process and console reference
-    // is reported as undefined.
-    files: ["scripts/**/*.mjs"],
+    // Build and maintenance scripts, and the published stow-doctor entry point,
+    // run in Node rather than the browser. Without this they are linted with no
+    // globals, so every process and console reference is reported as undefined.
+    files: ["scripts/**/*.mjs", "bin/**/*.mjs"],
     languageOptions: {
       globals: { ...globals.node },
       parserOptions: { ecmaVersion: "latest", sourceType: "module" },

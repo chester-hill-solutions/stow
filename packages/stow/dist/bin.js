@@ -81,28 +81,35 @@ function findBundledBinary() {
         return undefined;
     }
 }
+/** The platform package that should ship the binary here, if one is published. */
+export function platformPackageForCurrentPlatform() {
+    return PLATFORM_PACKAGES[`${process.platform}-${process.arch}`];
+}
 /**
- * Resolve the stow binary path.
+ * Resolve the stow binary path and report which rule produced it.
  *
  * Precedence: a platform binary installed alongside this package, the STOW_BIN
  * environment variable, `bin/stow` relative to a monorepo root, then `stow` on
  * PATH. A plain `npm install` on a supported platform therefore works with no
  * setup, while an explicit STOW_BIN still wins for development and testing.
  */
-export function resolveStowBinary() {
+export function resolveStowBinaryDetailed() {
     const bundled = findBundledBinary();
     if (bundled !== undefined) {
-        return bundled;
+        return { path: bundled, source: "platform-package" };
     }
     const fromEnv = process.env.STOW_BIN?.trim();
     if (fromEnv) {
-        return fromEnv;
+        return { path: fromEnv, source: "environment" };
     }
     const fromRepo = findMonorepoBinary();
     if (fromRepo) {
-        return fromRepo;
+        return { path: fromRepo, source: "monorepo" };
     }
-    return "stow";
+    return { path: "stow", source: "path" };
+}
+export function resolveStowBinary() {
+    return resolveStowBinaryDetailed().path;
 }
 export function stowBinaryAvailable() {
     const bin = resolveStowBinary();

@@ -35,17 +35,35 @@ const repoRoot = resolve(import.meta.dirname, "..");
 const baselinePath = resolve(repoRoot, "scripts/baselines/go-coverage.json");
 const profilePath = resolve(repoRoot, ".cache/go-coverage.out");
 mkdirSync(resolve(repoRoot, ".cache"), { recursive: true });
-execFileSync("go", ["test", "./...", "-coverprofile", profilePath], { cwd: repoRoot, stdio: "inherit" });
 
-const measured = coverageFromProfile(readFileSync(profilePath, "utf8"));
+// How many samples --baseline takes before recording a value.
+const BASELINE_SAMPLES = 3;
+
+function measure() {
+  execFileSync("go", ["test", "./...", "-coverprofile", profilePath], { cwd: repoRoot, stdio: "inherit" });
+  return coverageFromProfile(readFileSync(profilePath, "utf8"));
+}
 
 if (process.argv.includes("--baseline")) {
-  writeFileSync(baselinePath, `${JSON.stringify(measured, null, 2)}\n`);
+  // The measurement is noisy, so a single sample records a number the next run
+  // may not reproduce, which is how this gate used to flap. The baseline is a
+  // floor, so record the lowest sample rather than the luckiest one.
+  const samples = [];
+  for (let index = 0; index < BASELINE_SAMPLES; index += 1) {
+    samples.push(measure());
+  }
+  const floor = samples.reduce((lowest, sample) =>
+    sample.coveredStatements < lowest.coveredStatements ? sample : lowest,
+  );
+  writeFileSync(baselinePath, `${JSON.stringify(floor, null, 2)}\n`);
   console.log(
-    `Wrote ${baselinePath}: ${measured.percentage}% (${measured.coveredStatements}/${measured.totalStatements} statements)`,
+    `Wrote ${baselinePath}: ${floor.percentage}% (${floor.coveredStatements}/${floor.totalStatements} statements) ` +
+      `from the lowest of ${BASELINE_SAMPLES} samples: ${samples.map((s) => s.coveredStatements).join(", ")}`,
   );
   process.exit(0);
 }
+
+const measured = measure();
 if (!existsSync(baselinePath)) {
   console.error(`Coverage baseline missing: ${baselinePath}`);
   process.exit(2);
