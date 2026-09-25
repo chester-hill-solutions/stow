@@ -1,0 +1,6 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 186 28" width="186" height="28" role="img" aria-label="Stow S3">
+  <title>Stow S3</title>
+  <rect x="0" y="4" width="20" height="20" rx="4" fill="none" stroke="#6ee7a8" stroke-width="1.75"/>
+  <path d="M5 11.5h10M5 14h10M5 16.5h6" stroke="#6ee7a8" stroke-width="1.75" stroke-linecap="round"/>
+  <text x="28" y="20.5" font-family="ui-monospace, 'SF Mono', 'Cascadia Code', Menlo, Consolas, monospace" font-size="18" font-weight="600" letter-spacing="0.08em" fill="#f0efed">STOW<tspan fill="#6ee7a8"> S3</tspan></text>
+</svg>

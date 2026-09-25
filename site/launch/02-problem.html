@@ -1,0 +1,51 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <link rel="stylesheet" href="card.css" />
+  </head>
+  <body>
+    <!-- 02 The problem. The crossed-out node is the whole argument. -->
+    <div class="card">
+      <div class="wordmark"><span class="box"></span><span>STOW <b>S3</b></span></div>
+
+      <h1 class="mt-lg">Your test needs S3.<br />It doesn't need <em>AWS.</em></h1>
+
+      <div class="flow">
+        <div class="node">
+          <small>your code</small>
+          Your App
+        </div>
+        <div class="arrow">&#10230;</div>
+        <div class="node hero-node">
+          <small>local</small>
+          Stow S3
+        </div>
+        <div class="arrow">&#10230;</div>
+        <div class="node">
+          <small>or</small>
+          Memory / Filesystem
+        </div>
+      </div>
+
+      <div class="mt-lg" style="display: flex; gap: 26px; flex-wrap: wrap">
+        <span class="clients" style="margin: 0">
+          <span style="text-decoration: line-through; text-decoration-thickness: 3px"
+            >no AWS account</span
+          >
+          <span style="text-decoration: line-through; text-decoration-thickness: 3px"
+            >no bucket to create</span
+          >
+          <span style="text-decoration: line-through; text-decoration-thickness: 3px"
+            >no credentials to leak</span
+          >
+        </span>
+      </div>
+
+      <div class="foot">
+        <span class="tag">one binary &middot; 10.6 MB</span>
+        <span class="url">github.com/chester-hill-solutions/stow-s3</span>
+      </div>
+    </div>
+  </body>
+</html>

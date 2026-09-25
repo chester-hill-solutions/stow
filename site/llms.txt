@@ -1,0 +1,36 @@
+# Stow S3
+
+> S3 without the cloud. A tiny, open-source S3-compatible object store for
+> development, tests, CI, and agents.
+
+Stow is an Apache 2.0 S3-compatible object store that runs on the local
+machine. It speaks real S3 over HTTP with SigV4, so existing SDK code works
+unchanged. Nothing is provisioned, no account is needed, and a scoped session
+deletes itself when it closes.
+
+## Start here
+
+- [Agent instructions](/agent.md): install commands, the scoped-session pattern
+  in TypeScript and Python, and what a session guarantees. This is the
+  shortest correct path for a coding agent.
+- [README on GitHub](https://github.com/chester-hill-solutions/stow-s3):
+  the full reference, including the CLI, the Go runtime, and the WebAssembly
+  profile.
+
+## Install
+
+```bash
+npm install @chs/stow-s3 @aws-sdk/client-s3   # TypeScript
+pip install "stow-s3[boto3]"                  # Python
+go get github.com/chester-hill-solutions/stow-s3/pkg/stow   # Go
+```
+
+Each package ships the server binary. Nothing else is required. If the binary
+cannot be found, `npx stow-doctor` or `stow-s3 doctor` reports which side is
+broken.
+
+## Optional
+
+- Product Hunt listing and the other five launch images
+- `site/launch/*.html` are the sources of the launch graphics; the rendered
+  PNGs are in `site/images/`

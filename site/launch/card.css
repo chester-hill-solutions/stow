@@ -1,0 +1,404 @@
+/* Stow launch graphics.
+ *
+ * Each card is a fixed-size canvas that a headless browser screenshots. Type
+ * is set at render size, so a 168px headline here is a 168px headline in the
+ * PNG -- which is the whole reason these are HTML and not generated images.
+ * Image models misspell, and a launch asset with a typo is a launch asset that
+ * ships a mistake.
+ */
+
+:root {
+  --ink-0: #0a0a0b;
+  --ink-1: #101012;
+  --ink-2: #17171a;
+  --ink-3: #1e1e22;
+  --line: #2b2b31;
+  --text-1: #f0efed;
+  --text-2: #a8a7a3;
+  --text-3: #7d7c78;
+  /* Matches the site's accent exactly. A phosphor green, borrowed from nothing
+     -- in particular not from Amazon S3's brand orange. */
+  --accent: #6ee7a8;
+  --accent-soft: #8ff5c4;
+  --accent-quiet: #0d2b1c;
+
+  --mono: ui-monospace, "SF Mono", "Cascadia Code", "JetBrains Mono", Menlo,
+    Consolas, "Liberation Mono", monospace;
+}
+
+* {
+  margin: 0;
+  padding: 0;
+  box-sizing: border-box;
+}
+
+body {
+  background: var(--ink-0);
+  color: var(--text-1);
+  font-family: var(--mono);
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+}
+
+.card {
+  position: relative;
+  width: 2400px;
+  height: 1260px;
+  padding: 130px 150px;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+/* A single hairline of accent at the top edge. One mark, used the same way on
+   every card, so the five read as a set. */
+.card::before {
+  content: "";
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: 8px;
+  background: var(--accent);
+}
+
+.wordmark {
+  display: flex;
+  align-items: center;
+  gap: 22px;
+  font-size: 40px;
+  font-weight: 600;
+  letter-spacing: 0.14em;
+  color: var(--text-1);
+}
+.wordmark .box {
+  width: 56px;
+  height: 56px;
+  border: 4px solid var(--accent);
+  border-radius: 12px;
+  position: relative;
+  flex: none;
+}
+.wordmark .box::after {
+  content: "";
+  position: absolute;
+  left: 13px;
+  right: 13px;
+  top: 16px;
+  height: 4px;
+  background: var(--accent);
+  box-shadow: 0 12px 0 var(--accent), 0 24px 0 var(--accent);
+  opacity: 0.9;
+}
+.wordmark .box::after {
+  background: linear-gradient(
+    to right,
+    var(--accent) 0 100%
+  );
+}
+.wordmark span b {
+  color: var(--accent);
+  font-weight: inherit;
+}
+
+/* The footer is a flow child pushed to the bottom, not an overlay. Absolute
+   positioning let card content run straight through it, which is exactly the
+   kind of collision a fixed-size canvas hides until you render it. */
+.foot {
+  margin-top: auto;
+  padding-top: 60px;
+  display: flex;
+  align-items: baseline;
+  gap: 34px;
+  font-size: 34px;
+  color: var(--text-3);
+  letter-spacing: 0.04em;
+  flex: none;
+}
+.foot .tag {
+  color: var(--text-2);
+}
+.foot .url {
+  margin-left: auto;
+  color: var(--text-3);
+}
+
+h1 {
+  font-size: 168px;
+  line-height: 0.95;
+  letter-spacing: -0.035em;
+  font-weight: 600;
+  text-wrap: balance;
+}
+h1 em {
+  font-style: normal;
+  color: var(--accent);
+}
+
+.sub {
+  font-size: 52px;
+  line-height: 1.3;
+  color: var(--text-2);
+  letter-spacing: -0.01em;
+  max-width: 34ch;
+  font-weight: 400;
+}
+
+.kicker {
+  font-size: 36px;
+  letter-spacing: 0.22em;
+  color: var(--accent);
+  text-transform: uppercase;
+  margin-bottom: 46px;
+}
+
+.center {
+  justify-content: center;
+}
+.mt {
+  margin-top: 70px;
+}
+.mt-lg {
+  margin-top: 110px;
+}
+
+/* ---------------------------------------------------------------- card 02 */
+
+.flow {
+  display: flex;
+  align-items: stretch;
+  gap: 0;
+  margin-top: 100px;
+}
+.flow .node {
+  border: 3px solid var(--line);
+  border-radius: 20px;
+  padding: 44px 52px;
+  font-size: 40px;
+  line-height: 1.25;
+  color: var(--text-1);
+  background: var(--ink-1);
+  min-width: 360px;
+  text-align: center;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  gap: 14px;
+}
+.flow .node small {
+  font-size: 27px;
+  color: var(--text-3);
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+}
+.flow .node.hero-node {
+  border-color: var(--accent);
+  background: linear-gradient(
+    180deg,
+    rgba(255, 153, 0, 0.11),
+    rgba(255, 153, 0, 0.03)
+  );
+}
+.flow .node.hero-node small {
+  color: var(--accent);
+}
+.flow .node .strike {
+  color: var(--text-3);
+  text-decoration: line-through;
+  text-decoration-thickness: 3px;
+  text-decoration-color: var(--text-3);
+}
+.flow .arrow {
+  align-self: center;
+  color: var(--accent);
+  font-size: 54px;
+  padding: 0 34px;
+  line-height: 1;
+}
+
+/* ---------------------------------------------------------------- card 03 */
+
+.steps {
+  display: flex;
+  align-items: center;
+  margin-top: 104px;
+  gap: 0;
+}
+.steps .step {
+  border: 3px solid var(--line);
+  background: var(--ink-1);
+  border-radius: 18px;
+  padding: 40px 44px;
+  font-size: 38px;
+  color: var(--text-1);
+  min-width: 300px;
+  text-align: center;
+}
+.steps .step.on {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+.steps .chev {
+  color: var(--text-3);
+  font-size: 46px;
+  padding: 0 26px;
+}
+.steps .call {
+  font-size: 54px;
+  color: var(--accent);
+  background: var(--ink-1);
+  border: 3px solid var(--accent);
+  border-radius: 18px;
+  padding: 34px 48px;
+}
+
+/* ---------------------------------------------------------------- card 05 */
+
+.grid5 {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 26px;
+  margin-top: 92px;
+}
+.grid5 .cell {
+  border: 3px solid var(--line);
+  border-radius: 18px;
+  background: var(--ink-1);
+  padding: 44px 20px;
+  text-align: center;
+  font-size: 40px;
+  color: var(--text-1);
+}
+.grid5 .cell b {
+  display: block;
+  font-weight: 600;
+}
+.grid5 .cell small {
+  display: block;
+  margin-top: 12px;
+  font-size: 26px;
+  color: var(--text-3);
+  letter-spacing: 0.08em;
+}
+.rail {
+  margin-top: 34px;
+  height: 3px;
+  background: var(--line);
+  position: relative;
+}
+.clients {
+  margin-top: 40px;
+  display: flex;
+  gap: 20px;
+  flex-wrap: wrap;
+}
+.clients span {
+  border: 3px solid var(--line);
+  border-radius: 999px;
+  padding: 18px 36px;
+  font-size: 34px;
+  color: var(--text-2);
+  background: var(--ink-1);
+}
+
+/* ---------------------------------------------------------------- card 04 */
+
+/* Two columns, grants against denials. Stacking five rows overflowed the
+   canvas; side by side the contrast becomes the composition instead of
+   something you scroll past. */
+.perms {
+  margin-top: 84px;
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 44px;
+  flex: none;
+}
+.perms .col {
+  border: 3px solid var(--line);
+  border-radius: 20px;
+  background: var(--ink-1);
+  padding: 40px 44px;
+}
+.perms .col.allow {
+  border-color: rgba(110, 231, 168, 0.45);
+}
+.perms h4 {
+  font-size: 27px;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+  margin-bottom: 30px;
+  color: var(--text-3);
+  font-weight: 500;
+}
+.perms .allow h4 {
+  color: var(--accent);
+}
+.perms .row {
+  display: flex;
+  align-items: baseline;
+  gap: 20px;
+  font-size: 35px;
+  line-height: 1.5;
+  color: var(--text-1);
+}
+.perms .row + .row {
+  margin-top: 22px;
+}
+.perms .mark {
+  flex: none;
+  width: 34px;
+}
+.perms .allow .mark {
+  color: var(--accent);
+}
+.perms .deny .mark {
+  color: var(--text-3);
+}
+
+/* --------------------------------------------------------------------- og */
+
+.og {
+  width: 1200px;
+  height: 630px;
+  padding: 74px 80px;
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+  /* Without a gap, `space-between` put the foot flush against the subhead and
+     the two read as one block. */
+  gap: 44px;
+}
+.og h1 {
+  font-size: 92px;
+}
+.og .sub {
+  font-size: 30px;
+  max-width: 36ch;
+  margin-top: 30px;
+}
+.og .foot {
+  padding-top: 0;
+  font-size: 25px;
+}
+.og .wordmark {
+  font-size: 27px;
+  gap: 14px;
+}
+.og .wordmark .box {
+  width: 36px;
+  height: 36px;
+  border-width: 3px;
+  border-radius: 8px;
+}
+.og .wordmark .box::after {
+  left: 8px;
+  right: 8px;
+  top: 11px;
+  height: 2px;
+  box-shadow: 0 7px 0 var(--accent), 0 14px 0 var(--accent);
+}
+.og .kicker {
+  font-size: 21px;
+  margin-bottom: 26px;
+  letter-spacing: 0.2em;
+}

@@ -1,0 +1,40 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <link rel="stylesheet" href="card.css" />
+  </head>
+  <body>
+    <!-- 04 Agents. The card that earns relevance without pretending to be an
+         AI product: it is about what the agent is NOT handed. -->
+    <div class="card">
+      <div class="wordmark"><span class="box"></span><span>STOW <b>S3</b></span></div>
+
+      <h1 class="mt" style="font-size: 128px">
+        Give your agent a bucket.<br /><em>Not your AWS account.</em>
+      </h1>
+
+      <div class="perms">
+        <div class="col allow">
+          <h4>It may use</h4>
+          <div class="row"><span class="mark">+</span><span>A private endpoint</span></div>
+          <div class="row"><span class="mark">+</span><span>A bucket of its own</span></div>
+          <div class="row"><span class="mark">+</span><span>The normal S3 SDK</span></div>
+        </div>
+        <div class="col deny">
+          <h4>It never sees</h4>
+          <div class="row"><span class="mark">&times;</span><span>Your credentials</span></div>
+          <div class="row"><span class="mark">&times;</span><span>Your production bucket</span></div>
+          <div class="row"><span class="mark">&times;</span><span>Anything that outlives the run</span></div>
+        </div>
+      </div>
+
+      <div class="foot">
+        <span class="tag"
+          >artifacts, transcripts, scratch &mdash; all gone afterwards</span
+        >
+        <span class="url">github.com/chester-hill-solutions/stow-s3</span>
+      </div>
+    </div>
+  </body>
+</html>

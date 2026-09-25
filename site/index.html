@@ -1,0 +1,380 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Stow S3 — S3 without the cloud</title>
+    <meta
+      name="description"
+      content="Stow is a tiny, open-source S3-compatible object store for development, tests, CI, and agents. Run it locally, use the S3 clients you already know, and throw it away when you're done."
+    />
+
+    <meta property="og:type" content="website" />
+    <meta property="og:title" content="Stow S3 — S3 without the cloud" />
+    <meta
+      property="og:description"
+      content="A tiny, open-source S3-compatible object store for development, tests, CI, and agents. No AWS account. No infrastructure."
+    />
+    <meta property="og:image" content="/images/og.png" />
+    <meta property="og:image:width" content="1200" />
+    <meta property="og:image:height" content="630" />
+    <meta property="og:url" content="https://stow.chesterhillsolutions.ca/" />
+    <meta name="twitter:card" content="summary_large_image" />
+
+    <link rel="icon" href="/assets/favicon.svg" type="image/svg+xml" />
+    <link rel="stylesheet" href="/assets/stow.css" />
+    <!-- Agent clients: these two make the same instructions discoverable
+         without content negotiation, so a plain static host still works. -->
+    <link rel="alternate" type="text/markdown" href="/agent.md" title="Agent instructions" />
+    <link rel="alternate" type="text/plain" href="/llms.txt" title="llms.txt" />
+  </head>
+  <body>
+    <a class="skip" href="#main">Skip to content</a>
+
+    <div class="shell">
+      <header class="masthead">
+        <a href="/" aria-label="Stow home">
+          <img src="/assets/wordmark.svg" alt="Stow S3" width="186" height="28" />
+        </a>
+        <nav aria-label="Primary">
+          <a href="#problem">Why</a>
+          <a href="#session">Sessions</a>
+          <a href="#surfaces">Languages</a>
+          <a
+            href="https://github.com/chester-hill-solutions/stow-s3"
+            rel="noreferrer noopener"
+            >GitHub</a
+          >
+        </nav>
+      </header>
+
+      <main id="main">
+        <!-- ------------------------------------------------------------ hero -->
+        <section class="hero">
+          <p class="eyebrow">Free &middot; Open source &middot; Apache 2.0</p>
+
+          <div class="hero-main">
+            <h1>S3 <em>without the cloud.</em></h1>
+            <p class="lede">
+              A tiny, open-source object store that speaks Amazon S3, for
+              development, tests, CI, and agents. Run it locally, use the S3
+              clients you already know, and throw it away when you're done.
+            </p>
+
+            <div class="cta">
+              <a class="btn btn-primary" href="#session">Get started</a>
+              <a
+                class="btn btn-ghost"
+                href="https://github.com/chester-hill-solutions/stow-s3"
+                rel="noreferrer noopener"
+                ><span class="star" aria-hidden="true">&#9733;</span> GitHub<span
+                  data-stars
+                  hidden
+                ></span
+                ></a
+              >
+            </div>
+          </div>
+
+          <div class="hero-side">
+            <!-- The install line below is the launch's first promise. It only
+                 resolves once @chs/stow-s3 is published to npm; see the launch
+                 checklist in docs/ before this page goes live. -->
+            <div class="install">
+              <span class="prompt" aria-hidden="true">$</span>
+              <code id="install-cmd">npm install @chs/stow-s3</code>
+              <button type="button" data-copy="#install-cmd">Copy</button>
+            </div>
+
+            <p class="reassure">
+              No AWS account. No infrastructure. Use the S3 clients you already
+              know.
+            </p>
+
+            <ul class="proof">
+              <li><b>10.6 MB</b><span>single binary</span></li>
+              <li><b>0</b><span>cloud services</span></li>
+              <li><b>4</b><span>language surfaces</span></li>
+              <li class="proof-note">
+                <b>no credentials to rotate</b><span>ephemeral keys per session</span>
+              </li>
+            </ul>
+          </div>
+        </section>
+
+        <!-- Real output from the real binary, captured from
+             `./bin/stow-s3 serve --port 0 --backend memory`. -->
+        <div class="term" role="figure" aria-label="Terminal output from stow serve">
+          <div class="term-bar">
+            <span class="dot" aria-hidden="true"></span>
+            <span>stow serve --port 0 --backend memory</span>
+            <span class="spacer"></span>
+            <span>local mode</span>
+          </div>
+          <pre><span class="p">$ </span><b>stow serve --port 0 --backend memory</b>
+stow mode: local
+  cache policy: none
+  write policy: local-only
+stow listening on <span class="s">http://127.0.0.1:34781</span> (mode=local)
+STOW_READY endpoint=http://127.0.0.1:34781 access_key=… mode=local
+<span class="c"># credentials are printed for a hand-run server only; a session
+# receives them over a file descriptor instead.</span></pre
+          >
+        </div>
+
+        <!-- ------------------------------------------------- agent handoff -->
+        <div class="term" role="figure" aria-label="Agent instructions summary">
+          <div class="term-bar">
+            <span class="dot" aria-hidden="true"></span>
+            <span>For coding agents</span>
+            <span class="spacer"></span>
+            <button type="button" data-copy="#agent-brief" class="term-copy">
+              Copy
+            </button>
+          </div>
+          <pre id="agent-brief"><span class="c"># Stow S3</span>
+Local S3-compatible object store. Apache 2.0. <span class="k">Not</span> production storage.
+
+<span class="k">install</span>  npm install @chs/stow-s3 @aws-sdk/client-s3
+<span class="k">run</span>      await withStow(async ({ s3, bucket }) =&gt; { <span class="c">/* normal S3 calls */</span> })
+<span class="k">verify</span>   npx stow-doctor
+<span class="k">read</span>     <b>https://stow.chesterhillsolutions.ca/agent.md</b>
+<span class="k">source</span>   github.com/chester-hill-solutions/stow-s3
+
+<span class="c"># Fetching this page with Accept: text/markdown returns agent.md
+# instead of HTML, and /llms.txt is an index of both.</span></pre>
+        </div>
+
+        <!-- ------------------------------------------------------------- 01 -->
+        <section class="section" id="problem">
+          <span class="num">01</span>
+          <h2>You shouldn't need AWS to test S3.</h2>
+          <p>
+            Your application writes to S3, so now your test suite needs a bucket.
+            The usual choices are a real cloud bucket, a mock that only implements
+            the three calls this one test happens to make, or a container heavier
+            than the thing you're testing.
+          </p>
+          <p>
+            <strong>Stow is the fourth option.</strong> A real S3 API, on your own
+            machine, that costs nothing and leaves no trace. If your code can talk
+            to S3, it can talk to Stow — same SDK, same SigV4, same
+            <code>PutObject</code>.
+          </p>
+
+          <div class="stat-row">
+            <div>
+              <b>&mdash;</b>
+              <span>no credentials to rotate</span>
+            </div>
+            <div>
+              <b>1</b>
+              <span>process to start</span>
+            </div>
+            <div>
+              <b>&infin;</b>
+              <span>buckets, thrown away after</span>
+            </div>
+          </div>
+        </section>
+
+        <!-- ------------------------------------------------------------- 02 -->
+        <section class="section" id="session">
+          <span class="num">02</span>
+          <h2>One call. Private S3.</h2>
+          <p>
+            A session is the shortest path from nothing to a working S3 client. It
+            starts a private server on an ephemeral port, creates a bucket, waits
+            until the server reports itself ready, and hands back a client already
+            pointed at it. On close it stops the server and deletes the data
+            directory.
+          </p>
+
+          <div class="term" role="figure" aria-label="TypeScript example using withStow">
+            <div class="term-bar">
+              <span class="dot" aria-hidden="true"></span>
+              <span>test/s3.test.ts</span>
+              <span class="spacer"></span>
+              <span>TypeScript</span>
+            </div>
+            <pre><span class="k">import</span> { PutObjectCommand, GetObjectCommand } <span class="k">from</span> <span class="s">"@aws-sdk/client-s3"</span>;
+<span class="k">import</span> { withStow } <span class="k">from</span> <span class="s">"@chs/stow-s3"</span>;
+
+<span class="k">await</span> withStow(<span class="k">async</span> ({ s3, bucket }) =&gt; {
+  <span class="k">await</span> s3.<span class="k">send</span>(<span class="k">new</span> <span class="s">PutObjectCommand</span>({
+    Bucket: bucket,
+    Key: <span class="s">"input.json"</span>,
+    Body: <span class="s">'{"task":"summarize"}'</span>,
+  }));
+
+  <span class="k">const</span> got = <span class="k">await</span> s3.<span class="k">send</span>(<span class="k">new</span> <span class="s">GetObjectCommand</span>({ Bucket: bucket, Key: <span class="s">"input.json"</span> }));
+  <span class="k">await</span> got.Body.transformToString();
+});
+<span class="c">// the server and its data are gone by the time this resolves</span></pre
+          >
+        </div>
+
+          <p>
+            Four guarantees matter when something else is running the test
+            suite, and the server enforces all of them:
+          </p>
+
+          <div class="scope">
+            <div class="yes">
+              <h3>A session cannot</h3>
+              <ul>
+                <li>Inherit your cloud config</li>
+                <li>Outlive your process</li>
+                <li>Report a limit it hasn't checked</li>
+                <li>Grow past 16 MiB / 1,000 objects</li>
+              </ul>
+            </div>
+            <div class="yes">
+              <h3>It does</h3>
+              <ul>
+                <li>Strip STOW_*, S3_*, AWS_* first</li>
+                <li>Exit if its parent dies, killed or not</li>
+                <li>Read capabilities off the server</li>
+                <li>Enforce limits server-side, every request</li>
+              </ul>
+            </div>
+          </div>
+        </section>
+
+        <!-- ------------------------------------------------------------- 03 -->
+        <section class="section" id="surfaces">
+          <span class="num">03</span>
+          <h2>S3 where you need it.</h2>
+          <p>
+            The protocol is the same everywhere. What changes is how you reach it:
+            four language surfaces, three storage modes, and the S3 clients you
+            already have.
+          </p>
+
+          <ul class="grid">
+            <li class="card">
+              <h3>TypeScript</h3>
+              <span class="installline"><b>npm</b> @chs/stow-s3</span>
+              <pre><span class="k">await</span> withStow(cb)
+Stow.<span class="k">start</span>(opts)
+Stow.<span class="k">connect</span>(endpoint)</pre>
+            </li>
+            <li class="card">
+              <h3>Python</h3>
+              <span class="installline"><b>pip</b> stow-s3[boto3]</span>
+              <pre><span class="k">with</span> with_session() <span class="k">as</span> s:
+    s.s3_client()
+    s.new_bucket_name()</pre>
+            </li>
+            <li class="card">
+              <h3>Go</h3>
+              <span class="installline"><b>go get</b> /pkg/stow</span>
+              <pre>rt, _ := stow.<span class="k">Open</span>(
+  stow.Options{
+    Backend: memory,
+  },
+)
+<span class="c">// no listener, no creds</span></pre>
+            </li>
+            <li class="card">
+              <h3>WebAssembly</h3>
+              <span class="installline"><b>3.7 MB</b> runtime</span>
+              <pre>const host = <span class="k">await</span>
+  loadNodeWasmHost();
+EmbeddedStow.<span class="k">open</span>(host);
+s.putObject(b, k, data)
+<span class="c">// node and browser</span></pre>
+            </li>
+          </ul>
+
+          <p>
+            Storage is selectable per server:
+            <strong>memory</strong> for throwaway work,
+            <strong>filesystem</strong> when data has to survive a restart, and
+            <strong>run-through</strong> when you want a local S3 in front of an
+            upstream bucket you already have.
+          </p>
+
+          <div class="scope">
+            <div class="yes">
+              <h3>Implemented</h3>
+              <ul>
+                <li>Buckets: create, list, inspect, delete</li>
+                <li>Objects: put, get, head, copy, delete</li>
+                <li>List with prefixes and pagination</li>
+                <li>Range reads</li>
+                <li>Conditional reads and writes</li>
+                <li>MD5, CRC32, CRC32C, SHA-1, SHA-256</li>
+                <li>Multipart uploads</li>
+                <li>Presigned requests</li>
+                <li>SigV4 authentication</li>
+              </ul>
+            </div>
+            <div class="no">
+              <h3>Not implemented</h3>
+              <ul>
+                <li>Versioning</li>
+                <li>ACLs and bucket policies</li>
+                <li>Lifecycle rules</li>
+                <li>Replication</li>
+                <li>Event notifications</li>
+                <li>Object tagging and lock</li>
+                <li>S3 Select</li>
+                <li>KMS-backed encryption</li>
+              </ul>
+            </div>
+          </div>
+        </section>
+
+        <section class="finale">
+          <h2>Give your tests a bucket. Not your AWS account.</h2>
+          <p>
+            It is free, it is Apache 2.0, and it is one binary. If it breaks,
+            the issue tracker is the fastest way to tell me.
+          </p>
+          <div class="cta">
+            <a
+              class="btn btn-primary"
+              href="https://github.com/chester-hill-solutions/stow-s3#readme"
+              rel="noreferrer noopener"
+              >Read the README</a
+            >
+            <a
+              class="btn btn-ghost"
+              href="https://github.com/chester-hill-solutions/stow-s3/issues"
+              rel="noreferrer noopener"
+              >Report something</a
+            >
+          </div>
+        </section>
+      </main>
+
+      <footer>
+        <p class="trademark">
+          Stow S3 is an independent project. It is not affiliated with,
+          endorsed by, or sponsored by Amazon Web Services. Amazon S3, AWS, and
+          S3 are trademarks of Amazon.com, Inc. or its affiliates, used here to
+          describe compatibility.
+        </p>
+        <span class="org">Stow S3 &mdash; a Chester Hill Solutions project</span>
+        <nav aria-label="Footer">
+          <a
+            href="https://github.com/chester-hill-solutions/stow-s3"
+            rel="noreferrer noopener"
+            >GitHub</a
+          >
+          <a
+            href="https://github.com/chester-hill-solutions/stow-s3/blob/main/LICENSE"
+            rel="noreferrer noopener"
+            >Apache 2.0</a
+          >
+          <a href="https://chesterhillsolutions.ca" rel="noreferrer noopener"
+            >Chester Hill Solutions</a
+          >
+        </nav>
+      </footer>
+    </div>
+
+    <script src="/assets/stow.js" defer></script>
+  </body>
+</html>
