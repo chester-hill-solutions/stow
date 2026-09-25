@@ -19,6 +19,7 @@ type FileOutbox struct {
 }
 
 type persistedOutbox struct {
+	Version   int                    `json:"version,omitempty"`
 	Entries   map[string]OutboxEntry `json:"entries"`
 	Prepared  map[string]OutboxEntry `json:"prepared,omitempty"`
 	Seq       uint64                 `json:"seq"`
@@ -49,6 +50,10 @@ func decodeOutboxState(data []byte) (outboxState, error) {
 	if err := json.Unmarshal(data, &persisted); err != nil {
 		return outboxState{}, fmt.Errorf("decode outbox: %w", err)
 	}
+	if persisted.Version < 0 || persisted.Version > outboxFormatVersion {
+		return outboxState{}, fmt.Errorf("%w: file declares version %d, this writer supports 0-%d",
+			ErrOutboxFormatVersion, persisted.Version, outboxFormatVersion)
+	}
 	if persisted.Entries == nil && persisted.Prepared == nil {
 		var legacy map[string]OutboxEntry
 		if err := json.Unmarshal(data, &legacy); err != nil {
@@ -74,7 +79,25 @@ func decodeOutboxState(data []byte) (outboxState, error) {
 			return outboxState{}, fmt.Errorf("outbox entry %q is both prepared and active", id)
 		}
 	}
+	migrateOutboxAttempts(persisted.Entries)
+	migrateOutboxAttempts(persisted.Prepared)
 	return outboxState{entries: persisted.Entries, prepared: persisted.Prepared, seq: persisted.Seq, nextToken: persisted.NextToken}, nil
+}
+
+// migrateOutboxAttempts marks entries recorded by a pre-version writer as
+// needing upstream reconciliation. Those files predate the attempt marker, so
+// a writer cannot tell whether an earlier attempt already committed upstream.
+func migrateOutboxAttempts(entries map[string]OutboxEntry) {
+	for id, entry := range entries {
+		if entry.AttemptedAt.IsZero() && entry.Attempts > 0 {
+			entry.AttemptedAt = entry.CreatedAt
+			if entry.AttemptedAt.IsZero() {
+				entry.AttemptedAt = time.Now().UTC()
+			}
+			entry.NeedsReconcile = true
+			entries[id] = entry
+		}
+	}
 }
 
 func (o *FileOutbox) reloadLocked() error {
@@ -275,7 +298,7 @@ func (o *FileOutbox) Close() error {
 }
 
 func (o *FileOutbox) persistState(state outboxState) error {
-	data, err := json.MarshalIndent(persistedOutbox{Entries: state.entries, Prepared: state.prepared, Seq: state.seq, NextToken: state.nextToken}, "", "  ")
+	data, err := json.MarshalIndent(persistedOutbox{Version: outboxFormatVersion, Entries: state.entries, Prepared: state.prepared, Seq: state.seq, NextToken: state.nextToken}, "", "  ")
 	if err != nil {
 		return err
 	}

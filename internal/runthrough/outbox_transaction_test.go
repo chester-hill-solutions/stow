@@ -44,6 +44,112 @@ func TestFileOutboxPersistsPreparedCommit(t *testing.T) {
 	}
 }
 
+type postCommitErrorUpstream struct {
+	*mockUpstream
+	failNextPut bool
+}
+
+func (u *postCommitErrorUpstream) PutObject(ctx context.Context, bucket, key string, body io.Reader, options storage.PutOptions) error {
+	if err := u.mockUpstream.PutObject(ctx, bucket, key, body, options); err != nil {
+		return err
+	}
+	if u.failNextPut {
+		u.failNextPut = false
+		return runthrough.NewTransientUpstreamError(errors.New("upstream acknowledgement lost"))
+	}
+	return nil
+}
+
+func TestRetryReconcilesCommittedUpstreamPut(t *testing.T) {
+	ctx := context.Background()
+	local := storage.NewMemoryStore()
+	if err := local.CreateBucket(ctx, "bucket"); err != nil {
+		t.Fatalf("create bucket: %v", err)
+	}
+	meta, err := local.PutObject(ctx, "bucket", "key", bytes.NewReader([]byte("value")), storage.PutOptions{})
+	if err != nil {
+		t.Fatalf("put local: %v", err)
+	}
+	outbox, err := runthrough.NewFileOutbox(filepath.Join(t.TempDir(), "outbox.json"))
+	if err != nil {
+		t.Fatalf("outbox: %v", err)
+	}
+	if _, err := outbox.Enqueue(runthrough.OutboxEntry{Operation: runthrough.OutboxPut, Bucket: "bucket", Key: "key", Version: meta.VersionID}); err != nil {
+		t.Fatalf("enqueue: %v", err)
+	}
+	up := &postCommitErrorUpstream{mockUpstream: newMockUpstream(), failNextPut: true}
+	adapter := runthrough.NewWithOutbox(runthrough.Config{Policy: runthrough.PolicyMirrorWrites, AllowLiveWrites: true}, local, local, up, outbox)
+	if err := adapter.RetryPending(ctx); err == nil {
+		t.Fatal("expected first acknowledgement failure")
+	}
+	time.Sleep(1100 * time.Millisecond)
+	if err := adapter.RetryPending(ctx); err != nil {
+		t.Fatalf("reconciled retry: %v", err)
+	}
+	if up.putCalls != 1 {
+		t.Fatalf("upstream put calls = %d, want one committed call", up.putCalls)
+	}
+	if len(outbox.Pending()) != 0 {
+		t.Fatalf("pending = %+v, want none", outbox.Pending())
+	}
+}
+
+type postCommitErrorDeleteUpstream struct {
+	*mockUpstream
+	failNextDelete bool
+}
+
+func (u *postCommitErrorDeleteUpstream) DeleteObject(ctx context.Context, bucket, key string) error {
+	if err := u.mockUpstream.DeleteObject(ctx, bucket, key); err != nil {
+		return err
+	}
+	if u.failNextDelete {
+		u.failNextDelete = false
+		return runthrough.NewTransientUpstreamError(errors.New("upstream acknowledgement lost"))
+	}
+	return nil
+}
+
+func TestRetryReconcilesCommittedUpstreamDelete(t *testing.T) {
+	ctx := context.Background()
+	local := storage.NewMemoryStore()
+	if err := local.CreateBucket(ctx, "bucket"); err != nil {
+		t.Fatalf("create bucket: %v", err)
+	}
+	meta, err := local.PutObject(ctx, "bucket", "key", bytes.NewReader([]byte("value")), storage.PutOptions{})
+	if err != nil {
+		t.Fatalf("put local: %v", err)
+	}
+	if err := local.DeleteObject(ctx, "bucket", "key"); err != nil {
+		t.Fatalf("delete local: %v", err)
+	}
+	outbox, err := runthrough.NewFileOutbox(filepath.Join(t.TempDir(), "outbox.json"))
+	if err != nil {
+		t.Fatalf("outbox: %v", err)
+	}
+	if _, err := outbox.Enqueue(runthrough.OutboxEntry{Operation: runthrough.OutboxDelete, Bucket: "bucket", Key: "key", Version: meta.VersionID}); err != nil {
+		t.Fatalf("enqueue: %v", err)
+	}
+	up := &postCommitErrorDeleteUpstream{mockUpstream: newMockUpstream(), failNextDelete: true}
+	if err := up.PutObject(ctx, "bucket", "key", bytes.NewReader([]byte("value")), storage.PutOptions{}); err != nil {
+		t.Fatalf("seed upstream: %v", err)
+	}
+	adapter := runthrough.NewWithOutbox(runthrough.Config{Policy: runthrough.PolicyMirrorWrites, AllowLiveWrites: true}, local, local, up, outbox)
+	if err := adapter.RetryPending(ctx); err == nil {
+		t.Fatal("expected first delete acknowledgement failure")
+	}
+	time.Sleep(1100 * time.Millisecond)
+	if err := adapter.RetryPending(ctx); err != nil {
+		t.Fatalf("reconciled retry: %v", err)
+	}
+	if up.delCalls != 1 {
+		t.Fatalf("upstream delete calls = %d, want one committed call", up.delCalls)
+	}
+	if len(outbox.Pending()) != 0 {
+		t.Fatalf("pending = %+v, want none", outbox.Pending())
+	}
+}
+
 type commitThenErrorStore struct {
 	*storage.MemoryStore
 }

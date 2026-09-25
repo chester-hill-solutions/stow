@@ -34,7 +34,7 @@ An explicit run-through policy that combines read-through behavior with propagat
 
 ### Write Outbox
 
-A durable, per-key ordered record of upstream propagation intents. A prepared write-ahead entry is reconciled against the immutable committed local object version before propagation; file-backed workers coordinate attempts with expiring per-entry claims and a filesystem lock. Transient failures are retried, and prepared/active entries support loopback-only inspection and retry/discard actions. A crash after upstream success but before acknowledgement remains at-least-once.
+A durable, per-key ordered record of upstream propagation intents. A prepared write-ahead entry is reconciled against the immutable committed local object version before propagation; file-backed workers coordinate attempts with expiring per-entry claims and a filesystem lock. An already-attempted entry is reconciled against upstream before it is re-propagated, so a crash between upstream success and acknowledgement is normally acknowledged instead of duplicated. Transient failures are retried, and prepared/active entries support loopback-only inspection and retry/discard actions. Outbox files carry a schema version: newer files are rejected, unversioned files migrate, and all writers sharing a file must run the same revision.
 
 ### Persisted Backend
 

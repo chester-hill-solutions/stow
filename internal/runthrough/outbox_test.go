@@ -3,6 +3,9 @@ package runthrough_test
 import (
 	"bytes"
 	"context"
+	"encoding/json"
+	"errors"
+	"os"
 	"path/filepath"
 	"testing"
 	"time"
@@ -41,6 +44,61 @@ func TestFileOutboxRestartsWithMonotonicIDs(t *testing.T) {
 	}
 	if pending[0].ID == pending[1].ID {
 		t.Fatalf("duplicate IDs after restart: %q", pending[0].ID)
+	}
+}
+
+func TestFileOutboxRejectsNewerFormatVersion(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "outbox.json")
+	writeOutboxFile(t, path, `{"version":99,"entries":{},"seq":0}`)
+
+	if _, err := runthrough.NewFileOutbox(path); !errors.Is(err, runthrough.ErrOutboxFormatVersion) {
+		t.Fatalf("NewFileOutbox error = %v, want ErrOutboxFormatVersion", err)
+	}
+}
+
+func TestFileOutboxUpgradesLegacyAttemptedEntries(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "outbox.json")
+	writeOutboxFile(t, path, `{"entries":{"outbox-1":{"id":"outbox-1","operation":"put",`+
+		`"bucket":"bucket","key":"key","created_at":"2026-01-01T00:00:00Z","attempts":2}},`+
+		`"seq":1}`)
+
+	outbox, err := runthrough.NewFileOutbox(path)
+	if err != nil {
+		t.Fatalf("new file outbox: %v", err)
+	}
+	pending, err := outbox.PendingSnapshot()
+	if err != nil {
+		t.Fatalf("pending snapshot: %v", err)
+	}
+	if len(pending) != 1 {
+		t.Fatalf("pending = %+v, want one entry", pending)
+	}
+	if pending[0].AttemptedAt.IsZero() || !pending[0].NeedsReconcile {
+		t.Fatalf("legacy entry was not marked for reconciliation: %+v", pending[0])
+	}
+
+	if err := outbox.MarkFailure(pending[0].ID, errors.New("still failing"), time.Now().Add(time.Hour)); err != nil {
+		t.Fatalf("mark failure: %v", err)
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read outbox: %v", err)
+	}
+	var written struct {
+		Version int `json:"version"`
+	}
+	if err := json.Unmarshal(data, &written); err != nil {
+		t.Fatalf("decode rewritten outbox: %v", err)
+	}
+	if written.Version == 0 {
+		t.Fatalf("rewritten outbox is still unversioned: %s", data)
+	}
+}
+
+func writeOutboxFile(t *testing.T, path, contents string) {
+	t.Helper()
+	if err := os.WriteFile(path, []byte(contents), 0o600); err != nil {
+		t.Fatalf("write outbox file: %v", err)
 	}
 }
 

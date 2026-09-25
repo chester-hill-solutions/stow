@@ -106,7 +106,39 @@ func (a *Adapter) enqueuePreparedIntentLocked(operation OutboxOperation, bucket,
 	return a.prepareIntent(operation, bucket, key, previousVersion, source...)
 }
 
+func (a *Adapter) reconcileUpstreamAttempt(ctx context.Context, entry OutboxEntry) (bool, error) {
+	switch entry.Operation {
+	case OutboxPut, OutboxCopy, OutboxMultipart:
+		local, err := a.local.HeadObject(ctx, entry.Bucket, entry.Key)
+		if err != nil {
+			return false, err
+		}
+		remote, err := a.upstream.HeadObject(ctx, entry.Bucket, entry.Key)
+		if err == nil {
+			return storage.ETagEqual(remote.ETag, local.ETag), nil
+		}
+		if errors.Is(err, storage.ErrObjectNotFound) {
+			return false, nil
+		}
+		return false, err
+	case OutboxDelete:
+		_, err := a.upstream.HeadObject(ctx, entry.Bucket, entry.Key)
+		if errors.Is(err, storage.ErrObjectNotFound) {
+			return true, nil
+		}
+		return false, err
+	default:
+		return false, nil
+	}
+}
+
 func (a *Adapter) propagateEntry(ctx context.Context, entry OutboxEntry) error {
+	if entry.NeedsReconcile {
+		reconciled, err := a.reconcileUpstreamAttempt(ctx, entry)
+		if err != nil || reconciled {
+			return err
+		}
+	}
 	switch entry.Operation {
 	case OutboxPut, OutboxCopy, OutboxMultipart:
 		rc, meta, err := a.local.GetObject(ctx, entry.Bucket, entry.Key)

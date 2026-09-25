@@ -30,7 +30,7 @@ The shared corpus must cover missing/malformed auth, both date forms, wrong secr
 
 The public policies are `readThroughCache` and `mirrorWrites`; `local` is a mode, not a policy. `readThroughCache` writes locally unless the separate live-write flag is enabled. `mirrorWrites` explicitly enables propagation and emits a loud startup warning. The legacy `proxy` policy is rejected with a migration error.
 
-Local mutations commit before upstream propagation. A durable per-key outbox stores an immutable versioned reference, retries transient failures with bounded backoff, coordinates file-backed workers with expiring claims, and retains deterministic failures for inspection. A crash after upstream success but before acknowledgement remains at-least-once. Admin retry/discard actions are loopback-only.
+Local mutations commit before upstream propagation. A durable per-key outbox stores an immutable versioned reference, retries transient failures with bounded backoff, coordinates file-backed workers with expiring claims, and retains deterministic failures for inspection. An entry that was already attempted is reconciled against upstream before it is re-propagated: a put whose upstream ETag matches the immutable local version, or a delete whose object is already absent, is acknowledged without a second upstream mutation. A crash remains at-least-once only when upstream cannot be read during recovery or the object was replaced by another writer. Durable outbox files carry a schema version; a file written by a newer revision is rejected at open, and unversioned files migrate. Admin retry/discard actions are loopback-only.
 
 ### 0.5 Conditional operations and checksums
 

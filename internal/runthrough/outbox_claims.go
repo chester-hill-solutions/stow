@@ -62,9 +62,12 @@ func (s *outboxState) claim(id, owner string, lease time.Duration) (OutboxEntry,
 			return OutboxEntry{}, false, nil
 		}
 	}
+	needsReconcile := !entry.AttemptedAt.IsZero()
 	entry.ClaimOwner = owner
 	entry.ClaimUntil = now.Add(lease)
 	entry.ClaimToken = s.assignToken()
+	entry.AttemptedAt = now
+	entry.NeedsReconcile = needsReconcile
 	s.entries[id] = entry
 	return entry, true, nil
 }

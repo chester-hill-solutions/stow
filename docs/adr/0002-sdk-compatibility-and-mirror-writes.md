@@ -53,7 +53,7 @@ Object keys are opaque S3 strings. `.` and `..` may occur in keys. The persisten
 
 `mirrorWrites` is an explicit opt-in, prints a prominent startup warning, and reports the active write policy. The legacy `proxy` value is rejected with a migration message rather than silently treated as another policy.
 
-A supported local mutation commits locally before upstream propagation. A durable, per-key ordered outbox records an immutable versioned reference to the local result. Transient failures retry with bounded backoff; deterministic failures remain inspectable. The original request returns the upstream failure after the local commit, while the outbox retains the exact result for later propagation.
+A supported local mutation commits locally before upstream propagation. A durable, per-key ordered outbox records an immutable versioned reference to the local result. Transient failures retry with bounded backoff; deterministic failures remain inspectable. An entry that has already been attempted is reconciled against upstream before it is replayed, so a crash between upstream success and acknowledgement is normally acknowledged rather than duplicated; a duplicate can still occur if upstream cannot be read during recovery or the object has since been replaced. The original request returns the upstream failure after the local commit, while the outbox retains the exact result for later propagation.
 
 ### 6. Conditional operations and checksums
 

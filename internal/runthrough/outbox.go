@@ -15,7 +15,17 @@ type OutboxOperation string
 var (
 	ErrOutboxVersionConflict    = errors.New("outbox object version no longer matches the committed record")
 	ErrOutboxPreparedUnresolved = errors.New("outbox prepared intent cannot be reconciled")
+	// ErrOutboxFormatVersion reports a durable outbox written by a different
+	// Stow schema revision. Writers sharing one outbox file must run the same
+	// implementation; refusing to open keeps fencing and reconciliation fields
+	// from being silently dropped.
+	ErrOutboxFormatVersion = errors.New("outbox file format version is not supported by this writer")
 )
+
+// outboxFormatVersion is the on-disk schema revision written by this build.
+// Version 0 (unversioned) files are migrated on read; anything newer is
+// rejected rather than downgraded.
+const outboxFormatVersion = 2
 
 const (
 	OutboxPut       OutboxOperation = "put"
@@ -42,6 +52,8 @@ type OutboxEntry struct {
 	ClaimOwner      string          `json:"claim_owner,omitempty"`
 	ClaimUntil      time.Time       `json:"claim_until,omitempty"`
 	ClaimToken      uint64          `json:"claim_token,omitempty"`
+	AttemptedAt     time.Time       `json:"attempted_at,omitempty"`
+	NeedsReconcile  bool            `json:"needs_reconcile,omitempty"`
 	PreparedOwner   string          `json:"prepared_owner,omitempty"`
 	PreparedUntil   time.Time       `json:"prepared_until,omitempty"`
 	PreparedToken   uint64          `json:"prepared_token,omitempty"`
