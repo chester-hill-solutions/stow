@@ -15,6 +15,12 @@ type memObject struct {
 	meta ObjectMeta
 }
 
+// cloneObjectMeta keeps returned metadata independent from the store's state.
+func cloneObjectMeta(meta ObjectMeta) ObjectMeta {
+	meta.Metadata = cloneMetadata(meta.Metadata)
+	return meta
+}
+
 type memPart struct {
 	info PartInfo
 	data []byte
@@ -135,8 +141,8 @@ func (s *MemoryStore) PutObject(_ context.Context, bucket, key string, body io.R
 	}
 	var existing *ObjectMeta
 	if object, exists := b.objects[key]; exists {
-		copy := object.meta
-		existing = &copy
+		existingMeta := cloneObjectMeta(object.meta)
+		existing = &existingMeta
 	}
 	if err := checkWritePreconditions(opts, existing); err != nil {
 		return nil, err
@@ -154,7 +160,7 @@ func (s *MemoryStore) PutObject(_ context.Context, bucket, key string, body io.R
 		ChecksumValue:     opts.ChecksumValue,
 	}
 	b.objects[key] = &memObject{data: data, meta: meta}
-	out := meta
+	out := cloneObjectMeta(meta)
 	return &out, nil
 }
 
@@ -176,7 +182,7 @@ func (s *MemoryStore) GetObject(_ context.Context, bucket, key string) (io.ReadC
 	if !ok {
 		return nil, nil, ErrObjectNotFound
 	}
-	meta := obj.meta
+	meta := cloneObjectMeta(obj.meta)
 	return io.NopCloser(bytes.NewReader(obj.data)), &meta, nil
 }
 
@@ -198,7 +204,7 @@ func (s *MemoryStore) HeadObject(_ context.Context, bucket, key string) (*Object
 	if !ok {
 		return nil, ErrObjectNotFound
 	}
-	meta := obj.meta
+	meta := cloneObjectMeta(obj.meta)
 	return &meta, nil
 }
 
@@ -276,7 +282,7 @@ func (s *MemoryStore) ListObjectsV2(_ context.Context, bucket string, opts ListO
 		if opts.Prefix != "" && !strings.HasPrefix(key, opts.Prefix) {
 			continue
 		}
-		items = append(items, obj.meta)
+		items = append(items, cloneObjectMeta(obj.meta))
 	}
 	sort.Slice(items, func(i, j int) bool { return items[i].Key < items[j].Key })
 	return PaginateObjects(items, opts), nil

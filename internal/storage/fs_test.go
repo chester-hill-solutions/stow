@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/chester-hill-solutions/stow/internal/storage"
 )
@@ -108,6 +109,125 @@ func TestFilesystemStoreRemovesStaleAtomicTempsOnOpen(t *testing.T) {
 		if _, err := os.Stat(path); !os.IsNotExist(err) {
 			t.Fatalf("stale temp still exists at %s: %v", path, err)
 		}
+	}
+}
+
+func TestFilesystemStoreDoesNotCleanTempsBeforeOwningLock(t *testing.T) {
+	dir := t.TempDir()
+	first, err := storage.NewFilesystemStore(dir)
+	if err != nil {
+		t.Fatalf("first store: %v", err)
+	}
+	t.Cleanup(func() { _ = first.Close() })
+
+	tempPath := filepath.Join(dir, ".multipart", ".tmp-active")
+	if err := os.MkdirAll(filepath.Dir(tempPath), 0o755); err != nil {
+		_ = first.Close()
+		t.Fatalf("mkdir temp parent: %v", err)
+	}
+	if err := os.WriteFile(tempPath, []byte("in progress"), 0o600); err != nil {
+		_ = first.Close()
+		t.Fatalf("write temp: %v", err)
+	}
+
+	if _, err := storage.NewFilesystemStore(dir); err == nil {
+		_ = first.Close()
+		t.Fatal("expected second store to fail while lock is held")
+	}
+	if _, err := os.Stat(tempPath); err != nil {
+		t.Fatalf("active temp was changed by a store that did not own the lock: %v", err)
+	}
+	if err := first.Close(); err != nil {
+		t.Fatalf("close first store: %v", err)
+	}
+
+	second, err := storage.NewFilesystemStore(dir)
+	if err != nil {
+		t.Fatalf("second store after close: %v", err)
+	}
+	_ = second.Close()
+	if _, err := os.Stat(tempPath); !os.IsNotExist(err) {
+		t.Fatalf("stale temp still exists after owner cleanup: %v", err)
+	}
+}
+
+func TestFilesystemStoreRecoversStaleLockBeforeCleanup(t *testing.T) {
+	dir := t.TempDir()
+	tempPath := filepath.Join(dir, "buckets", "bucket", "objects", ".tmp-stale")
+	lockPath := filepath.Join(dir, ".stow.lock")
+	if err := os.MkdirAll(filepath.Dir(tempPath), 0o755); err != nil {
+		t.Fatalf("mkdir temp parent: %v", err)
+	}
+	if err := os.WriteFile(tempPath, []byte("partial"), 0o600); err != nil {
+		t.Fatalf("write temp: %v", err)
+	}
+	if err := os.WriteFile(lockPath, nil, 0o600); err != nil {
+		t.Fatalf("write stale lock: %v", err)
+	}
+	old := time.Now().Add(-24 * time.Hour)
+	if err := os.Chtimes(lockPath, old, old); err != nil {
+		t.Fatalf("age stale lock: %v", err)
+	}
+
+	store, err := storage.NewFilesystemStore(dir)
+	if err != nil {
+		t.Fatalf("new store should recover stale lock: %v", err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
+	if _, err := os.Stat(tempPath); !os.IsNotExist(err) {
+		t.Fatalf("stale temp still exists after recovery: %v", err)
+	}
+}
+
+func TestFilesystemStoreMultipartCompletionReportsCleanupFailureAndCanRecover(t *testing.T) {
+	ctx := context.Background()
+	dir := t.TempDir()
+	store, err := storage.NewFilesystemStore(dir)
+	if err != nil {
+		t.Fatalf("new store: %v", err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
+	if err := store.CreateBucket(ctx, "data"); err != nil {
+		t.Fatalf("create bucket: %v", err)
+	}
+
+	upload, err := store.CreateMultipartUpload(ctx, "data", "big.bin")
+	if err != nil {
+		t.Fatalf("create upload: %v", err)
+	}
+	part, err := store.UploadPart(ctx, upload.UploadID, 1, strings.NewReader("payload"))
+	if err != nil {
+		t.Fatalf("upload part: %v", err)
+	}
+
+	uploadDir := filepath.Join(dir, ".multipart", upload.UploadID)
+	if err := os.Chmod(uploadDir, 0o555); err != nil {
+		t.Fatalf("protect upload directory: %v", err)
+	}
+	defer func() { _ = os.Chmod(uploadDir, 0o755) }()
+	if _, err := store.CompleteMultipartUpload(ctx, upload.UploadID, []storage.PartInfo{*part}); err == nil {
+		t.Fatal("completion ignored staging cleanup failure")
+	}
+	if _, err := os.Stat(uploadDir); err != nil {
+		t.Fatalf("upload staging was not retained for recovery: %v", err)
+	}
+	if _, err := store.GetMultipartUpload(ctx, upload.UploadID); err != nil {
+		t.Fatalf("upload lookup after cleanup failure: %v", err)
+	}
+	if rc, _, err := store.GetObject(ctx, "data", "big.bin"); err != nil {
+		t.Fatalf("committed object after cleanup failure: %v", err)
+	} else {
+		_ = rc.Close()
+	}
+
+	if err := os.Chmod(uploadDir, 0o755); err != nil {
+		t.Fatalf("restore upload directory: %v", err)
+	}
+	if _, err := store.CompleteMultipartUpload(ctx, upload.UploadID, []storage.PartInfo{*part}); err != nil {
+		t.Fatalf("retry completion after restoring cleanup permissions: %v", err)
+	}
+	if _, err := os.Stat(uploadDir); !os.IsNotExist(err) {
+		t.Fatalf("upload staging still exists after successful recovery: %v", err)
 	}
 }
 

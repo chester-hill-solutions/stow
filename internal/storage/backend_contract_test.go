@@ -65,6 +65,70 @@ func TestStoreBatchDeleteRequiresBucket(t *testing.T) {
 	})
 }
 
+func TestStoreMissingBucketErrorsAgreeForObjectOperations(t *testing.T) {
+	withStores(t, func(t *testing.T, store storage.Store) {
+		ctx := context.Background()
+		if _, _, err := store.GetObject(ctx, "missing", "key"); !errors.Is(err, storage.ErrBucketNotFound) {
+			t.Fatalf("get error = %v, want ErrBucketNotFound", err)
+		}
+		if _, err := store.HeadObject(ctx, "missing", "key"); !errors.Is(err, storage.ErrBucketNotFound) {
+			t.Fatalf("head error = %v, want ErrBucketNotFound", err)
+		}
+		if err := store.DeleteObject(ctx, "missing", "key"); !errors.Is(err, storage.ErrBucketNotFound) {
+			t.Fatalf("delete error = %v, want ErrBucketNotFound", err)
+		}
+	})
+}
+
+func TestStoreMetadataMapsDoNotAliasStoredState(t *testing.T) {
+	withStores(t, func(t *testing.T, store storage.Store) {
+		ctx := context.Background()
+		if err := store.CreateBucket(ctx, "metadata"); err != nil {
+			t.Fatalf("create bucket: %v", err)
+		}
+
+		input := map[string]string{"owner": "original"}
+		putMeta, err := store.PutObject(ctx, "metadata", "object", strings.NewReader("payload"), storage.PutOptions{
+			Metadata: input,
+		})
+		if err != nil {
+			t.Fatalf("put object: %v", err)
+		}
+		input["owner"] = "changed input"
+		putMeta.Metadata["owner"] = "changed put result"
+
+		headMeta, err := store.HeadObject(ctx, "metadata", "object")
+		if err != nil {
+			t.Fatalf("head object: %v", err)
+		}
+		headMeta.Metadata["owner"] = "changed head result"
+
+		rc, getMeta, err := store.GetObject(ctx, "metadata", "object")
+		if err != nil {
+			t.Fatalf("get object: %v", err)
+		}
+		_ = rc.Close()
+		getMeta.Metadata["owner"] = "changed get result"
+
+		list, err := store.ListObjectsV2(ctx, "metadata", storage.ListOptions{})
+		if err != nil {
+			t.Fatalf("list objects: %v", err)
+		}
+		if len(list.Objects) != 1 {
+			t.Fatalf("objects = %+v, want one", list.Objects)
+		}
+		list.Objects[0].Metadata["owner"] = "changed list result"
+
+		finalMeta, err := store.HeadObject(ctx, "metadata", "object")
+		if err != nil {
+			t.Fatalf("head object after metadata mutations: %v", err)
+		}
+		if got := finalMeta.Metadata["owner"]; got != "original" {
+			t.Fatalf("stored metadata = %q, want %q", got, "original")
+		}
+	})
+}
+
 func TestStoreMultipartLookup(t *testing.T) {
 	withStores(t, func(t *testing.T, store storage.Store) {
 		ctx := context.Background()

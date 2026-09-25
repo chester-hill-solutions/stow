@@ -141,7 +141,10 @@ func (s *FilesystemStore) CompleteMultipartUpload(_ context.Context, uploadID st
 	if err := writeObjectRecord(objPath, record); err != nil {
 		return nil, err
 	}
-	_ = os.RemoveAll(dir)
+	if err := os.RemoveAll(dir); err != nil {
+		// The object is already committed; retain the upload so callers can retry cleanup.
+		return nil, fmt.Errorf("cleanup multipart upload: %w", err)
+	}
 
 	meta := record.meta(manifest.Bucket, manifest.Key)
 	return &meta, nil

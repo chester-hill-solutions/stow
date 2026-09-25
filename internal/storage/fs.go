@@ -22,6 +22,7 @@ const legacyMetaSuffix = ".stowmeta"
 type FilesystemStore struct {
 	dataDir   string
 	lockPath  string
+	lockID    string
 	mu        sync.RWMutex
 	closeOnce sync.Once
 }
@@ -34,20 +35,18 @@ func NewFilesystemStore(dataDir string) (*FilesystemStore, error) {
 	if err := os.MkdirAll(filepath.Join(dataDir, ".multipart"), 0o755); err != nil {
 		return nil, err
 	}
+
+	lockPath := filepath.Join(dataDir, storeLockName)
+	lockID, err := acquireStoreLock(lockPath)
+	if err != nil {
+		return nil, err
+	}
 	if err := removeStaleTemps(dataDir); err != nil {
+		_ = releaseStoreLock(lockPath, lockID)
 		return nil, fmt.Errorf("clean staging files: %w", err)
 	}
 	warnLegacyLayout(dataDir)
-	lockPath := filepath.Join(dataDir, ".stow.lock")
-	lock, err := os.OpenFile(lockPath, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
-	if err != nil {
-		return nil, fmt.Errorf("acquire store lock: %w", err)
-	}
-	if err := lock.Close(); err != nil {
-		_ = os.Remove(lockPath)
-		return nil, err
-	}
-	return &FilesystemStore{dataDir: dataDir, lockPath: lockPath}, nil
+	return &FilesystemStore{dataDir: dataDir, lockPath: lockPath, lockID: lockID}, nil
 }
 
 func removeStaleTemps(dataDir string) error {
@@ -90,6 +89,14 @@ func (s *FilesystemStore) objectPath(bucket, key string) string {
 
 func (s *FilesystemStore) multipartDir(uploadID string) string {
 	return filepath.Join(s.dataDir, ".multipart", uploadID)
+}
+
+func (s *FilesystemStore) requireBucket(bucket string) error {
+	info, err := os.Stat(s.bucketDir(bucket))
+	if os.IsNotExist(err) || (err == nil && !info.IsDir()) {
+		return ErrBucketNotFound
+	}
+	return err
 }
 
 func (s *FilesystemStore) CreateBucket(_ context.Context, name string) error {
@@ -239,6 +246,9 @@ func (s *FilesystemStore) GetObject(_ context.Context, bucket, key string) (io.R
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
+	if err := s.requireBucket(bucket); err != nil {
+		return nil, nil, err
+	}
 	record, err := readObjectRecord(s.objectPath(bucket, key))
 	if err != nil {
 		if os.IsNotExist(err) {
@@ -260,6 +270,9 @@ func (s *FilesystemStore) HeadObject(_ context.Context, bucket, key string) (*Ob
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
+	if err := s.requireBucket(bucket); err != nil {
+		return nil, err
+	}
 	record, err := readObjectRecord(s.objectPath(bucket, key))
 	if err != nil {
 		if os.IsNotExist(err) {
@@ -281,6 +294,9 @@ func (s *FilesystemStore) DeleteObject(_ context.Context, bucket, key string) er
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
+	if err := s.requireBucket(bucket); err != nil {
+		return err
+	}
 	objPath := s.objectPath(bucket, key)
 	if _, err := os.Stat(objPath); os.IsNotExist(err) {
 		return ErrObjectNotFound
@@ -295,9 +311,7 @@ func (s *FilesystemStore) DeleteObjects(_ context.Context, bucket string, keys [
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	if _, err := os.Stat(s.bucketDir(bucket)); os.IsNotExist(err) {
-		return nil, ErrBucketNotFound
-	} else if err != nil {
+	if err := s.requireBucket(bucket); err != nil {
 		return nil, err
 	}
 
@@ -349,9 +363,7 @@ func readBucketCreated(dir string) (time.Time, error) {
 func (s *FilesystemStore) Close() error {
 	var err error
 	s.closeOnce.Do(func() {
-		if s.lockPath != "" {
-			err = os.Remove(s.lockPath)
-		}
+		err = releaseStoreLock(s.lockPath, s.lockID)
 	})
 	return err
 }
