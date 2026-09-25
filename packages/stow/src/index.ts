@@ -50,6 +50,17 @@ export type {
 
 export { parseReadyLine } from "./start.js";
 export {
+  DEFAULT_SESSION_MAX_BYTES,
+  DEFAULT_SESSION_MAX_OBJECTS,
+  openStow,
+  withStow,
+} from "./session.js";
+export type {
+  EphemeralStowOptions,
+  StowSession,
+  StowSessionCapabilities,
+} from "./session.js";
+export {
   READY_PROTOCOL_VERSION,
   StowProtocolError,
   parseReadyMessage,

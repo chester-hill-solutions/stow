@@ -1,7 +1,7 @@
 import { rm } from "node:fs/promises";
 import { spawn } from "node:child_process";
 import { StowBinaryNotFoundError, resolveStowBinary, stowBinaryAvailable } from "./bin.js";
-import { parseReadyMessage } from "./ready.js";
+import { parseReadyMessage, READY_PROTOCOL_VERSION } from "./ready.js";
 import { createStowInstance, DEFAULT_REGION } from "./instance.js";
 const READY_RE = /^STOW_READY endpoint=(\S+) access_key=(\S+) secret_key=(\S+) mode=(\S+)/;
 export function parseReadyLine(line) {
@@ -25,13 +25,39 @@ const STARTUP_TIMEOUT_MS = 10_000;
 // Descriptor the server writes the versioned readiness object to. Index 3 is the
 // first entry after stdin, stdout, and stderr.
 const READY_FD = 3;
-function toReadyLine(line) {
-    const message = parseReadyMessage(line);
+function toReadyLine(message) {
     return {
         endpoint: message.endpoint,
         accessKeyId: message.accessKeyId,
         secretAccessKey: message.secretAccessKey,
         mode: message.mode,
+    };
+}
+/**
+ * A best-effort message for a server that only printed the legacy line. Limits
+ * are reported as 0, the protocol's "no limit reported" value, so a caller can
+ * tell the difference between "unlimited" and "we do not know".
+ */
+function legacyMessage(line) {
+    return {
+        protocolVersion: READY_PROTOCOL_VERSION,
+        binaryVersion: "unknown",
+        endpoint: line.endpoint,
+        region: DEFAULT_REGION,
+        accessKeyId: line.accessKeyId,
+        secretAccessKey: line.secretAccessKey,
+        mode: line.mode,
+        backend: "unknown",
+        capabilities: {
+            persistent: false,
+            multipart: false,
+            upstream: false,
+            conditionalWrites: false,
+            presignedUrls: false,
+            maxBytes: 0,
+            maxObjects: 0,
+            maxRequestBytes: 0,
+        },
     };
 }
 async function waitForReady(child, timeoutMs = 10_000) {
@@ -84,7 +110,8 @@ async function waitForReady(child, timeoutMs = 10_000) {
                 }
                 settled = true;
                 cleanup(false);
-                resolve(toReadyLine(line));
+                const message = parseReadyMessage(line);
+                resolve({ line: toReadyLine(message), message });
                 return;
             }
         };
@@ -94,10 +121,11 @@ async function waitForReady(child, timeoutMs = 10_000) {
             }
             stdoutBuffer = (stdoutBuffer + chunk.toString("utf8")).slice(-MAX_DIAGNOSTIC_BYTES);
             // Fallback for a server that ignores --ready-fd and writes the legacy
-            // line instead.
+            // line instead. Capabilities are unknown in that case and reported as
+            // such rather than invented.
             for (const line of stdoutBuffer.split(/\r?\n/)) {
-                const ready = parseReadyLine(line);
-                if (!ready) {
+                const legacy = parseReadyLine(line);
+                if (!legacy) {
                     continue;
                 }
                 if (settled) {
@@ -105,7 +133,7 @@ async function waitForReady(child, timeoutMs = 10_000) {
                 }
                 settled = true;
                 cleanup(false);
-                resolve(ready);
+                resolve({ line: legacy, message: legacyMessage(legacy) });
                 return;
             }
         };
@@ -264,6 +292,17 @@ function buildServeArgs(options, dataDir, port, host) {
 }
 function buildChildEnv(options) {
     const childEnv = { ...process.env };
+    if (options.isolatedEnvironment) {
+        // A scoped session must not inherit cloud configuration from the parent
+        // shell. STOW_*, S3_*, and AWS_* are stripped before any session-specific
+        // values are set below, so a stray credential cannot turn a local session
+        // into a run-through one.
+        for (const key of Object.keys(childEnv)) {
+            if (/^(STOW_|S3_|AWS_)/.test(key)) {
+                delete childEnv[key];
+            }
+        }
+    }
     if (options.accessKey) {
         childEnv.STOW_LOCAL_ACCESS_KEY_ID = options.accessKey;
     }
@@ -278,6 +317,9 @@ async function createStartupBuckets(instance, buckets, remainingStartupMs) {
     }
 }
 export async function startStow(options = {}) {
+    return (await startStowWithReady(options)).instance;
+}
+export async function startStowWithReady(options = {}) {
     const dataDir = options.dataDir ?? ".stow";
     if ((options.cacheMaxBytes ?? 0) < 0 ||
         (options.cacheMaxObjects ?? 0) < 0 ||
@@ -305,16 +347,16 @@ export async function startStow(options = {}) {
     try {
         const ready = await waitForReady(child, remainingStartupMs());
         const instance = createStowInstance({
-            endpoint: ready.endpoint,
-            accessKeyId: ready.accessKeyId,
-            secretAccessKey: ready.secretAccessKey,
+            endpoint: ready.line.endpoint,
+            accessKeyId: ready.line.accessKeyId,
+            secretAccessKey: ready.line.secretAccessKey,
             region: DEFAULT_REGION,
-            mode: ready.mode,
+            mode: ready.line.mode,
             dataDir,
             stopProcess: createStopProcess(child),
         });
         await createStartupBuckets(instance, options.buckets ?? [], remainingStartupMs);
-        return instance;
+        return { instance, ready: ready.message };
     }
     catch (error) {
         await stopChild(child);

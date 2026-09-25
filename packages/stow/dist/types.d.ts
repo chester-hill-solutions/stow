@@ -31,6 +31,12 @@ export interface StartOptions {
     maxBytes?: number;
     /** Maximum stored object count enforced on every request. Omit to leave the server unlimited. */
     maxObjects?: number;
+    /**
+     * Strip STOW_*, S3_*, and AWS_* from the child environment so the server
+     * cannot pick up ambient cloud configuration. Sessions set this; a long-lived
+     * server deliberately does not.
+     */
+    isolatedEnvironment?: boolean;
 }
 type AwsSdkV3ConfigBase = {
     endpoint: string;

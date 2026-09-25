@@ -30,7 +30,7 @@
   "scripts": {
     "clean": "node -e \"require('node:fs').rmSync('dist', { recursive: true, force: true })\"",
     "build": "npm run clean && tsc && node scripts/copy-wasm-assets.mjs",
-    "test": "npm run build && tsx --test test/integration.test.ts test/lifecycle.test.ts test/embedded.test.ts test/node-wasm-host.test.ts test/browser.test.ts test/ready.test.ts",
+    "test": "npm run build && tsx --test test/integration.test.ts test/lifecycle.test.ts test/embedded.test.ts test/node-wasm-host.test.ts test/browser.test.ts test/ready.test.ts test/session.test.ts test/session-lifecycle.test.ts",
     "prepublishOnly": "npm run build",
     "lint": "eslint .",
     "check:lint-ratchet": "node ../../scripts/check-lint-ratchet.mjs",
