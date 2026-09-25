@@ -1,6 +1,6 @@
 # SDK Conformance Tests
 
-Local-mode tests in this package exercise the real `s3api.Server` with **SigV4 auth** (not `DevBypass`) using the AWS SDK for Go v2 (`service/s3`).
+Local-mode tests in this package exercise the real `s3api.Server` with **SigV4 auth** (not `DevBypass`). The shared corpus is run through the AWS SDK for Go v2 (`service/s3`) and the Node AWS SDK v3 (`@aws-sdk/client-s3`).
 
 Contract reference: [docs/compat-contract.md](../docs/compat-contract.md) §2 SDK flows.
 
@@ -10,7 +10,29 @@ Contract reference: [docs/compat-contract.md](../docs/compat-contract.md) §2 SD
 make test-conformance
 # or
 go test ./conformance/... -count=1 -v
+# Node shared-corpus runner (after the package build)
+cd packages/stow && npx tsx --test test/integration.test.ts
 ```
+
+## Shared declarative corpus
+
+`corpus/cases.json` is the single source of truth for cross-SDK behavior. Each
+case is isolated, declares its own setup and expected SDK-visible result, and is
+executed by both runners:
+
+- the Go runner in `corpus_*.go` uses the AWS SDK for Go v2 and the configured
+  conformance store (`STOW_CONFORMANCE_BACKEND`, including the runtime adapter);
+- the Node runner in `packages/stow/test/shared-corpus.ts` uses
+  `@aws-sdk/client-s3` against a fresh local instance for each case.
+
+The corpus currently covers put/get round-trips (including opaque and empty
+keys), conditional reads/writes and checksum writes, paginated `ListObjectsV2`
+with prefix, delimiter and `encoding-type=url`, cross-bucket copy with
+`REPLACE` metadata and copy preconditions, and a two-part multipart lifecycle
+with upload/parts listing. A case may add setup objects, request options, and
+expectations (`status`, body, metadata, error code, ETag, checksum, list pages, or part
+numbers) without adding a second hand-written SDK suite. Raw HTTP safety and
+unsupported-operation cases remain in the protocol tests, not in this corpus.
 
 ## Coverage (local mode)
 
@@ -26,7 +48,7 @@ go test ./conformance/... -count=1 -v
 | Presigned GET/PUT | `TestPresignedGetPut` |
 | DeleteObjects batch | `TestDeleteObjects` |
 | SigV4 enforced | `TestSigV4RejectsUnsigned` |
-| Shared corpus + response status | `TestSharedCorpusRoundTrip` (memory/filesystem/runtime adapter) |
+| Shared declarative corpus | `TestSharedCorpus` (Go v2; memory/filesystem/runtime adapter) and the Node shared-corpus suite |
 
 ## Live-provider matrix
 
@@ -74,8 +96,8 @@ configuration or network access. With no opt-in variables, a normal
 ## Gaps / not yet covered
 
 - **Virtual-hosted URL style** (§2.8): path-style only in this suite; virtual-hosted smoke test pending.
-- **ListObjectsV2** delimiter, pagination, `encoding-type=url` (§2.4): prefix and direct-runtime cursor coverage exists, but the shared declarative corpus is still round-trip-focused.
-- **CopyObject** cross-bucket metadata directive / preconditions (§2.6): basic same-bucket copy and focused preconditions are covered; the full operation/status matrix is pending.
+- **ListObjectsV2** token bounds/invalid-token behavior (§2.4): the shared corpus covers prefix, delimiter, `encoding-type=url`, and multi-page continuation; the negative token matrix is pending.
+- **CopyObject** remaining conditional/status combinations (§2.6): cross-bucket copy, `REPLACE` metadata, and `if-none-match` are in the shared corpus; the full date/if-match matrix is pending.
 - **Presigned URL** expiry and OPTIONS preflight (§2.3): happy-path GET/PUT only.
 - **Run-through / upstream** (§6.4): the provider matrix and disposable object lifecycle are implemented, but the live suite still covers one mirror round-trip rather than all six contract scenarios.
-- **Node AWS SDK v3** (`@aws-sdk/client-s3`): shared corpus and lifecycle coverage live under `packages/stow`; direct-runtime differential cases remain future work.
+- **Node AWS SDK v3** (`@aws-sdk/client-s3`): the shared corpus runs through the Node runner in `packages/stow/test/shared-corpus.ts`; direct-runtime differential cases remain future work.

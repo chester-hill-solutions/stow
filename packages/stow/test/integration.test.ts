@@ -1,14 +1,14 @@
 import assert from "node:assert/strict";
-import { chmod, copyFile, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { chmod, copyFile, mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
 import { describe, it } from "node:test";
 import { stowBinaryAvailable } from "../dist/bin.js";
 import { verifyObjectReadable } from "../dist/instance.js";
-import { GetObjectCommand, HeadObjectCommand, PutObjectCommand, S3Client } from "@aws-sdk/client-s3";
 import { Stow } from "../dist/index.js";
 import { parseReadyLine } from "../dist/start.js";
+import { runSharedCorpus } from "./shared-corpus.js";
 
 describe("parseReadyLine", () => {
   it("parses the STOW_READY banner line", () => {
@@ -50,67 +50,6 @@ describe("stow binary discovery", () => {
     }
   });
 });
-
-interface SharedCase {
-  id: string;
-  operation: string;
-  bucket: string;
-  key: string;
-  body: string;
-  contentType?: string;
-  metadata?: Record<string, string>;
-  expect: {
-    status: number;
-    body: string;
-    contentType?: string;
-    metadata?: Record<string, string>;
-  };
-}
-
-async function runSharedCorpus(backend: "filesystem" | "memory"): Promise<void> {
-  const corpus = JSON.parse(
-    await readFile(new URL("../../../conformance/corpus/cases.json", import.meta.url), "utf8"),
-  ) as { cases: SharedCase[] };
-  assert.ok(corpus.cases.length > 0, "shared corpus must contain cases");
-
-  for (const testCase of corpus.cases) {
-    const dataDir = await mkdtemp(join(tmpdir(), `stow-corpus-${backend}-`));
-    const instance = await Stow.start({
-      dataDir,
-      buckets: [testCase.bucket],
-      port: 0,
-      backend,
-    });
-    const client = new S3Client(instance.awsSdkV3Config());
-    try {
-      const put = await client.send(
-        new PutObjectCommand({
-          Bucket: testCase.bucket,
-          Key: testCase.key,
-          Body: testCase.body,
-          ContentType: testCase.contentType,
-          Metadata: testCase.metadata,
-        }),
-      );
-      assert.equal(put.$metadata.httpStatusCode, testCase.expect.status);
-      const head = await client.send(
-        new HeadObjectCommand({ Bucket: testCase.bucket, Key: testCase.key }),
-      );
-      assert.equal(head.ContentType, testCase.expect.contentType);
-      for (const [key, value] of Object.entries(testCase.expect.metadata ?? {})) {
-        assert.equal(head.Metadata?.[key], value);
-      }
-      const get = await client.send(
-        new GetObjectCommand({ Bucket: testCase.bucket, Key: testCase.key }),
-      );
-      assert.equal(await get.Body?.transformToString(), testCase.expect.body);
-    } finally {
-      client.destroy();
-      await instance.stop();
-      await rm(dataDir, { recursive: true, force: true });
-    }
-  }
-}
 
 describe("shared conformance corpus", () => {
   it("runs every corpus case against the filesystem backend", async () => {

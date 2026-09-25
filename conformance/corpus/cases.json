@@ -21,21 +21,40 @@
       }
     },
     {
-      "id": "opaque-key-roundtrip",
+      "id": "opaque-key-dot-segments",
       "operation": "putGetRoundTrip",
-      "bucket": "contract-opaque",
+      "bucket": "contract-opaque-dot",
       "key": "dir/../name.txt",
       "body": "opaque key",
       "contentType": "text/plain",
       "metadata": {
-        "case": "opaque"
+        "case": "opaque-dot-segments"
       },
       "expect": {
         "status": 200,
         "body": "opaque key",
         "contentType": "text/plain",
         "metadata": {
-          "case": "opaque"
+          "case": "opaque-dot-segments"
+        }
+      }
+    },
+    {
+      "id": "opaque-key-dot-segment",
+      "operation": "putGetRoundTrip",
+      "bucket": "contract-opaque-dot-segment",
+      "key": "dir/./name.txt",
+      "body": "dot segments stay opaque",
+      "contentType": "text/plain",
+      "metadata": {
+        "case": "opaque-dot-segment"
+      },
+      "expect": {
+        "status": 200,
+        "body": "dot segments stay opaque",
+        "contentType": "text/plain",
+        "metadata": {
+          "case": "opaque-dot-segment"
         }
       }
     },
@@ -56,6 +75,295 @@
         "metadata": {
           "case": "empty"
         }
+      }
+    },
+    {
+      "id": "conditional-put-if-none-match-rejects-existing",
+      "operation": "conditionalPut",
+      "bucket": "contract-conditional-none",
+      "key": "key.txt",
+      "body": "replacement",
+      "contentType": "text/plain",
+      "ifNoneMatch": "*",
+      "setup": [
+        {
+          "key": "key.txt",
+          "body": "original",
+          "contentType": "text/plain"
+        }
+      ],
+      "expect": {
+        "status": 412,
+        "errorCode": "PreconditionFailed"
+      }
+    },
+    {
+      "id": "conditional-put-if-match-updates-existing",
+      "operation": "conditionalPut",
+      "bucket": "contract-conditional-match",
+      "key": "key.txt",
+      "body": "updated",
+      "contentType": "text/plain",
+      "metadata": {
+        "case": "if-match"
+      },
+      "ifMatch": "*",
+      "setup": [
+        {
+          "key": "key.txt",
+          "body": "original",
+          "contentType": "text/plain"
+        }
+      ],
+      "expect": {
+        "status": 200,
+        "body": "updated",
+        "contentType": "text/plain",
+        "metadata": {
+          "case": "if-match"
+        }
+      }
+    },
+    {
+      "id": "conditional-get-if-none-match-rejects-existing",
+      "operation": "conditionalGet",
+      "bucket": "contract-conditional-get",
+      "key": "key.txt",
+      "ifNoneMatch": "*",
+      "setup": [
+        {
+          "key": "key.txt",
+          "body": "original",
+          "contentType": "text/plain"
+        }
+      ],
+      "expect": {
+        "status": 412,
+        "errorCode": "PreconditionFailed"
+      }
+    },
+    {
+      "id": "checksum-content-md5-rejects-mismatch",
+      "operation": "checksumPut",
+      "bucket": "contract-checksum-md5",
+      "key": "key.txt",
+      "body": "body",
+      "contentMD5": "bm90LXRoZS1ib2R5",
+      "expect": {
+        "status": 400,
+        "errorCode": "BadDigest"
+      }
+    },
+    {
+      "id": "checksum-crc32-roundtrip",
+      "operation": "checksumPut",
+      "bucket": "contract-checksum-crc32",
+      "key": "key.txt",
+      "body": "checksum body",
+      "contentType": "text/plain",
+      "checksumAlgorithm": "CRC32",
+      "checksumValue": "RL7+RQ==",
+      "expect": {
+        "status": 200,
+        "body": "checksum body",
+        "contentType": "text/plain",
+        "checksumAlgorithm": "CRC32",
+        "checksumValue": "RL7+RQ=="
+      }
+    },
+    {
+      "id": "list-prefix-pagination-url-encoding",
+      "operation": "listObjectsV2",
+      "bucket": "contract-list-prefix",
+      "prefix": "a/",
+      "maxKeys": 2,
+      "encodingType": "url",
+      "setup": [
+        {
+          "key": "a/1",
+          "body": "a/1"
+        },
+        {
+          "key": "a/./two",
+          "body": "opaque list key"
+        },
+        {
+          "key": "a/3",
+          "body": "a/3"
+        }
+      ],
+      "expect": {
+        "status": 200,
+        "pages": [
+          {
+            "contents": [
+              "a/./two",
+              "a/1"
+            ],
+            "keyCount": 2,
+            "isTruncated": true
+          },
+          {
+            "contents": [
+              "a/3"
+            ],
+            "keyCount": 1,
+            "isTruncated": false
+          }
+        ]
+      }
+    },
+    {
+      "id": "list-delimiter-pagination",
+      "operation": "listObjectsV2",
+      "bucket": "contract-list-delimiter",
+      "delimiter": "/",
+      "maxKeys": 2,
+      "setup": [
+        {
+          "key": "root.txt",
+          "body": "root"
+        },
+        {
+          "key": "a/1",
+          "body": "a/1"
+        },
+        {
+          "key": "a/2",
+          "body": "a/2"
+        },
+        {
+          "key": "b/1",
+          "body": "b/1"
+        }
+      ],
+      "expect": {
+        "status": 200,
+        "pages": [
+          {
+            "contents": [],
+            "commonPrefixes": [
+              "a/",
+              "b/"
+            ],
+            "keyCount": 2,
+            "isTruncated": true
+          },
+          {
+            "contents": [
+              "root.txt"
+            ],
+            "commonPrefixes": [],
+            "keyCount": 1,
+            "isTruncated": false
+          }
+        ]
+      }
+    },
+    {
+      "id": "copy-cross-bucket-roundtrip",
+      "operation": "copyObject",
+      "bucket": "contract-copy-destination",
+      "sourceBucket": "contract-copy-source",
+      "sourceKey": "source/original.txt",
+      "destinationKey": "copy/final.txt",
+      "setup": [
+        {
+          "bucket": "contract-copy-source",
+          "key": "source/original.txt",
+          "body": "copy these bytes",
+          "contentType": "text/plain",
+          "metadata": {
+            "origin": "source"
+          }
+        }
+      ],
+      "expect": {
+        "status": 200,
+        "body": "copy these bytes",
+        "contentType": "text/plain",
+        "metadata": {
+          "origin": "source"
+        }
+      }
+    },
+    {
+      "id": "copy-replace-metadata",
+      "operation": "copyObject",
+      "bucket": "contract-copy-replace-destination",
+      "sourceBucket": "contract-copy-replace-source",
+      "sourceKey": "source",
+      "destinationKey": "replacement",
+      "contentType": "application/json",
+      "metadata": {
+        "origin": "replacement"
+      },
+      "metadataDirective": "REPLACE",
+      "setup": [
+        {
+          "bucket": "contract-copy-replace-source",
+          "key": "source",
+          "body": "copy me",
+          "contentType": "text/plain",
+          "metadata": {
+            "origin": "source"
+          }
+        }
+      ],
+      "expect": {
+        "status": 200,
+        "body": "copy me",
+        "contentType": "application/json",
+        "metadata": {
+          "origin": "replacement"
+        }
+      }
+    },
+    {
+      "id": "copy-if-none-match-rejects-existing",
+      "operation": "copyObject",
+      "bucket": "contract-copy-precondition-destination",
+      "sourceBucket": "contract-copy-precondition-source",
+      "sourceKey": "source",
+      "destinationKey": "copy",
+      "copySourceIfNoneMatch": "*",
+      "setup": [
+        {
+          "bucket": "contract-copy-precondition-source",
+          "key": "source",
+          "body": "source"
+        }
+      ],
+      "expect": {
+        "status": 412,
+        "errorCode": "PreconditionFailed"
+      }
+    },
+    {
+      "id": "multipart-two-part-lifecycle",
+      "operation": "multipartUpload",
+      "bucket": "contract-multipart",
+      "key": "large/object.bin",
+      "listMultipartUploads": true,
+      "parts": [
+        {
+          "number": 1,
+          "body": "A",
+          "repeat": 5242880
+        },
+        {
+          "number": 2,
+          "body": "final-part"
+        }
+      ],
+      "expect": {
+        "status": 200,
+        "bodyLength": 5242890,
+        "etag": "\"3769d23f4d727b90eb9d3be85d01ce35-2\"",
+        "partNumbers": [
+          1,
+          2
+        ]
       }
     }
   ]
