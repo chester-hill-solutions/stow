@@ -102,8 +102,18 @@ func (s *Server) handleCompleteMultipartUpload(ctx context.Context, w http.Respo
 		parts = append(parts, storage.PartInfo{PartNumber: p.PartNumber, ETag: "\"" + etag + "\""})
 	}
 
-	// Validate minimum part size for non-final parts
-	storedParts, _ := s.multipart.ListParts(ctx, uploadID)
+	// Validate minimum part size for non-final parts.
+	//
+	// The error from this listing was discarded, which made the map below empty,
+	// which made every size lookup miss, which disabled the check the map exists
+	// for: a client could complete an upload of 1-byte parts, and the failure that
+	// had disabled the check was itself invisible. A store that cannot list the
+	// parts cannot be asked whether they are big enough.
+	storedParts, err := s.multipart.ListParts(ctx, uploadID)
+	if err != nil {
+		writeError(w, r, mapStorageError(err, resourcePath(bucket, key)))
+		return
+	}
 	partSizes := map[int]int64{}
 	for _, p := range storedParts {
 		partSizes[p.PartNumber] = p.Size

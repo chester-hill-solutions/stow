@@ -42,32 +42,42 @@ func newStoreServer(t *testing.T, store storage.Store) *httptest.Server {
 	return ts
 }
 
-// objectPath builds a request path for a key, percent-encoding each segment the
+// objectRef names an object on the wire.
+//
+// The bucket/key pair appears in nearly every helper here. Carried as two
+// parameters it put four of them over the parameter limit, which is the ratchet
+// correctly reporting that the pair is one thing and should be said once.
+type objectRef struct {
+	bucket string
+	key    string
+}
+
+// path builds a request path for the object, percent-encoding each segment the
 // way a client does. PathEscape escapes the separators too, so the segments are
 // escaped individually and rejoined - which is also why the server has to decode
 // the copy-source header rather than trust the key it was sent.
-func objectPath(bucket, key string) string {
-	segments := strings.Split(key, "/")
+func (o objectRef) path() string {
+	segments := strings.Split(o.key, "/")
 	for i, segment := range segments {
 		segments[i] = url.PathEscape(segment)
 	}
-	return "/" + bucket + "/" + strings.Join(segments, "/")
+	return "/" + o.bucket + "/" + strings.Join(segments, "/")
 }
 
-func putOverWire(t *testing.T, ts *httptest.Server, bucket, key, body string) {
+func putOverWire(t *testing.T, ts *httptest.Server, ref objectRef, body string) {
 	t.Helper()
-	req, err := http.NewRequest(http.MethodPut, ts.URL+objectPath(bucket, key), strings.NewReader(body))
+	req, err := http.NewRequest(http.MethodPut, ts.URL+ref.path(), strings.NewReader(body))
 	if err != nil {
-		t.Fatalf("build put for %s/%s: %v", bucket, key, err)
+		t.Fatalf("build put for %s: %v", ref, err)
 	}
 	req.ContentLength = int64(len(body))
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
-		t.Fatalf("put %s/%s: %v", bucket, key, err)
+		t.Fatalf("put %s: %v", ref, err)
 	}
 	resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
-		t.Fatalf("put %s/%s = %d, want 200", bucket, key, resp.StatusCode)
+		t.Fatalf("put %s = %d, want 200", ref, resp.StatusCode)
 	}
 }
 
@@ -124,15 +134,15 @@ func deleteOverWire(t *testing.T, ts *httptest.Server, bucket string, keys ...st
 	return reported
 }
 
-func headStatusOverWire(t *testing.T, ts *httptest.Server, bucket, key string) int {
+func headStatusOverWire(t *testing.T, ts *httptest.Server, ref objectRef) int {
 	t.Helper()
-	req, err := http.NewRequest(http.MethodHead, ts.URL+objectPath(bucket, key), nil)
+	req, err := http.NewRequest(http.MethodHead, ts.URL+ref.path(), nil)
 	if err != nil {
-		t.Fatalf("build head for %s/%s: %v", bucket, key, err)
+		t.Fatalf("build head for %s: %v", ref, err)
 	}
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
-		t.Fatalf("head %s/%s: %v", bucket, key, err)
+		t.Fatalf("head %s: %v", ref, err)
 	}
 	resp.Body.Close()
 	return resp.StatusCode
@@ -163,31 +173,31 @@ func wireStores() map[string]func(t *testing.T) storage.Store {
 
 // copyOverWire issues a CopyObject naming src as an already-encoded copy-source
 // header value, exactly as an SDK builds it, and returns the status code.
-func copyOverWire(t *testing.T, ts *httptest.Server, dstBucket, dstKey, encodedSource string) int {
+func copyOverWire(t *testing.T, ts *httptest.Server, dst objectRef, encodedSource string) int {
 	t.Helper()
-	req, err := http.NewRequest(http.MethodPut, ts.URL+objectPath(dstBucket, dstKey), nil)
+	req, err := http.NewRequest(http.MethodPut, ts.URL+dst.path(), nil)
 	if err != nil {
-		t.Fatalf("build copy to %s/%s: %v", dstBucket, dstKey, err)
+		t.Fatalf("build copy to %s: %v", dst, err)
 	}
 	req.Header.Set("x-amz-copy-source", encodedSource)
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
-		t.Fatalf("copy to %s/%s: %v", dstBucket, dstKey, err)
+		t.Fatalf("copy to %s: %v", dst, err)
 	}
 	defer resp.Body.Close()
 	_, _ = io.ReadAll(resp.Body)
 	return resp.StatusCode
 }
 
-func getOverWire(t *testing.T, ts *httptest.Server, bucket, key string) (string, int) {
+func getOverWire(t *testing.T, ts *httptest.Server, ref objectRef) (string, int) {
 	t.Helper()
-	req, err := http.NewRequest(http.MethodGet, ts.URL+objectPath(bucket, key), nil)
+	req, err := http.NewRequest(http.MethodGet, ts.URL+ref.path(), nil)
 	if err != nil {
-		t.Fatalf("build get for %s/%s: %v", bucket, key, err)
+		t.Fatalf("build get for %s: %v", ref, err)
 	}
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
-		t.Fatalf("get %s/%s: %v", bucket, key, err)
+		t.Fatalf("get %s: %v", ref, err)
 	}
 	defer resp.Body.Close()
 	body, _ := io.ReadAll(resp.Body)
@@ -232,12 +242,12 @@ func TestCopyObjectDecodesTheCopySourceHeader(t *testing.T) {
 			createBucketOverWire(t, ts, "src")
 			createBucketOverWire(t, ts, "dst")
 			const want = "the original bytes"
-			putOverWire(t, ts, "src", tc.key, want)
+			putOverWire(t, ts, objectRef{"src", tc.key}, want)
 
-			if status := copyOverWire(t, ts, "dst", "copied.txt", "/src/"+tc.encoded); status != http.StatusOK {
+			if status := copyOverWire(t, ts, objectRef{"dst", "copied.txt"}, "/src/"+tc.encoded); status != http.StatusOK {
 				t.Fatalf("copy of %q (encoded %q) = %d, want 200", tc.key, tc.encoded, status)
 			}
-			got, status := getOverWire(t, ts, "dst", "copied.txt")
+			got, status := getOverWire(t, ts, objectRef{"dst", "copied.txt"})
 			if status != http.StatusOK {
 				t.Fatalf("get copy = %d, want 200", status)
 			}
@@ -254,20 +264,20 @@ func TestCopyObjectRejectsAnUnresolvableSource(t *testing.T) {
 	ts := newStoreServer(t, storage.NewMemoryStore())
 	createBucketOverWire(t, ts, "src")
 	createBucketOverWire(t, ts, "dst")
-	putOverWire(t, ts, "src", "present.txt", "bytes")
+	putOverWire(t, ts, objectRef{"src", "present.txt"}, "bytes")
 
-	if status := copyOverWire(t, ts, "dst", "copied.txt", "/src/absent%20key.txt"); status != http.StatusNotFound {
+	if status := copyOverWire(t, ts, objectRef{"dst", "copied.txt"}, "/src/absent%20key.txt"); status != http.StatusNotFound {
 		t.Fatalf("copy of a missing key = %d, want 404", status)
 	}
 }
 
 // rangeOverWire issues a GET with a Range header and returns the status, the
 // body, and the two headers a client uses to reconstruct what it received.
-func rangeOverWire(t *testing.T, ts *httptest.Server, bucket, key, spec string) (int, string, string) {
+func rangeOverWire(t *testing.T, ts *httptest.Server, ref objectRef, spec string) (int, string, string) {
 	t.Helper()
-	req, err := http.NewRequest(http.MethodGet, ts.URL+objectPath(bucket, key), nil)
+	req, err := http.NewRequest(http.MethodGet, ts.URL+ref.path(), nil)
 	if err != nil {
-		t.Fatalf("build ranged get: %v", err)
+		t.Fatalf("build ranged get for %s: %v", ref, err)
 	}
 	req.Header.Set("Range", spec)
 	resp, err := http.DefaultClient.Do(req)
@@ -332,9 +342,9 @@ func TestGetObjectRangeClampsAnEndPastTheLastByte(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			ts := newStoreServer(t, storage.NewMemoryStore())
 			createBucketOverWire(t, ts, "ranged")
-			putOverWire(t, ts, "ranged", "object.bin", body)
+			putOverWire(t, ts, objectRef{"ranged", "object.bin"}, body)
 
-			status, got, rangeHdr := rangeOverWire(t, ts, "ranged", "object.bin", tc.spec)
+			status, got, rangeHdr := rangeOverWire(t, ts, objectRef{"ranged", "object.bin"}, tc.spec)
 			if status != tc.wantStatus {
 				t.Fatalf("%s = %d, want %d (Content-Range %q)", tc.spec, status, tc.wantStatus, rangeHdr)
 			}
@@ -360,9 +370,9 @@ func TestGetObjectRangeClampsAnEndPastTheLastByte(t *testing.T) {
 func TestGetObjectRangeOverTheWholeObjectIsPartialContent(t *testing.T) {
 	ts := newStoreServer(t, storage.NewMemoryStore())
 	createBucketOverWire(t, ts, "ranged")
-	putOverWire(t, ts, "ranged", "object.bin", "short")
+	putOverWire(t, ts, objectRef{"ranged", "object.bin"}, "short")
 
-	status, body, rangeHdr := rangeOverWire(t, ts, "ranged", "object.bin", "bytes=0-999")
+	status, body, rangeHdr := rangeOverWire(t, ts, objectRef{"ranged", "object.bin"}, "bytes=0-999")
 	if status != http.StatusPartialContent {
 		t.Fatalf("status = %d, want 206", status)
 	}
@@ -389,8 +399,8 @@ func TestDeleteObjectsResponseNamesTheKeysItDeleted(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			ts := newStoreServer(t, newStore(t))
 			createBucketOverWire(t, ts, "wirebucket")
-			putOverWire(t, ts, "wirebucket", "gone/one", "value")
-			putOverWire(t, ts, "wirebucket", "gone/two", "value")
+			putOverWire(t, ts, objectRef{"wirebucket", "gone/one"}, "value")
+			putOverWire(t, ts, objectRef{"wirebucket", "gone/two"}, "value")
 
 			// The absent key is the tell. It was never deleted, so it must not
 			// appear; a complement implementation reports exactly this one.
@@ -403,7 +413,7 @@ func TestDeleteObjectsResponseNamesTheKeysItDeleted(t *testing.T) {
 			// And the named keys are genuinely gone, so the response is not
 			// merely plausible.
 			for _, key := range want {
-				if status := headStatusOverWire(t, ts, "wirebucket", key); status != http.StatusNotFound {
+				if status := headStatusOverWire(t, ts, objectRef{"wirebucket", key}); status != http.StatusNotFound {
 					t.Fatalf("head %s after reported deletion = %d, want 404", key, status)
 				}
 			}
