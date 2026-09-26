@@ -46,9 +46,16 @@ recording because the plan was wrong:
   from the range parse. It is listed in §4 as `C1.5` but was not found by the
   review that wrote this document.
 
-Still pending, in the §6.1 order: **M0.1** (test `tools/quality` and the seven
-untested JS gates), **M0.2**, **M0.3**, **M0.4**, **C2.1**, and ADR 0010
-decision 2.
+**Later delivered, after the table above was written:** **M0.1** (gate tests for
+`tools/quality` and a shared, tested ratchet policy for the four JS gates),
+**M0.2** (suppressions counted from ESLint rather than a regex),
+**M0.3** (`config/scan-roots.json` and a type check for the tests), **M0.4**
+(every authority operation enforced or declared ungated), and **C2.1**
+(`internal/atomicfile`).
+
+Still pending: M0.1's untested gates (`check-coverage`, `check-version`,
+`pack-platform-package`, `publish-if-absent`), **C2.2** (split the workspace
+manifest, `R-802`), and ADR 0010 decision 2 gating **C1.3**.
 
 ### 0.0.1 What landed underneath this document
 
@@ -610,6 +617,9 @@ MUST be a sum type, and the `Prepared` field and its repair loop MUST be deleted
 ### 3.5 Durability
 
 **R-801 — One atomic-write implementation with one guarantee.**
+**Delivered.** `internal/atomicfile.Write` is the single implementation; both
+backends delegate to it, which covers all five workspace call sites through one
+change.
 Two functions of the same name and intent offer different guarantees.
 `internal/storage/fs/fs_atomic.go:40-43` fsyncs the parent directory after
 rename but discards both the `os.Open` and `Sync` errors, so a failed sync
@@ -1062,7 +1072,7 @@ owns each concept. They share one shape, given in §4.1.
 | C1.5 Stop discarding the `ListParts` error | R-307 | 🟠 | <1 |
 | C1.6 Delete eleven swallowed durability errors | R-702 | 🟠 | 2 |
 | C1.7 Version assertion compares a value | R-309 | 🟠 | 1 |
-| C2.1 One `internal/atomicfile` | R-801 | 🟠 | 1 |
+| C2.1 One `internal/atomicfile` | R-801 | ✅ delivered | — |
 | C2.2 Split the workspace manifest | R-802 | 🟠 | 2 |
 | C2.3 Key lock MUST NOT span a network round trip | R-705 | 🟠 | 2–3 |
 | C2.4 Transactional batch prepare | R-703 | 🟠 | 1 |

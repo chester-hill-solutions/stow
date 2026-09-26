@@ -5,8 +5,9 @@ import (
 	"errors"
 	"fmt"
 	"os"
-	"path/filepath"
 	"time"
+
+	"github.com/chester-hill-solutions/stow-s3/internal/atomicfile"
 )
 
 // manifestVersion is the only on-disk manifest layout this build implements. A
@@ -118,35 +119,18 @@ func (m *Manifest) save() error {
 	return writeFileAtomic(m.path, append(raw, '\n'))
 }
 
-// writeFileAtomic writes through a temporary file in the destination directory
-// and renames it into place.
+// writeFileAtomic delegates to internal/atomicfile.
+//
+// It used to be a second implementation of the same thing, and a weaker one: it
+// renamed without syncing the parent directory, so every workspace object and
+// manifest write could be lost to a power cut that the filesystem backend
+// survived. It also chmod'ed the temporary file after the sync and after the
+// close, leaving a window in which the file was on disk with the wrong mode.
+//
+// All five callers in this package go through here, so the guarantee is now
+// shared rather than per-file.
 func writeFileAtomic(path string, data []byte) error {
-	dir := filepath.Dir(path)
-	if err := os.MkdirAll(dir, 0o755); err != nil {
-		return err
-	}
-	temp, err := os.CreateTemp(dir, ".tmp-*")
-	if err != nil {
-		return err
-	}
-	tempName := temp.Name()
-	defer os.Remove(tempName)
-
-	if _, err := temp.Write(data); err != nil {
-		temp.Close()
-		return err
-	}
-	if err := temp.Sync(); err != nil {
-		temp.Close()
-		return err
-	}
-	if err := temp.Close(); err != nil {
-		return err
-	}
-	if err := os.Chmod(tempName, 0o644); err != nil {
-		return err
-	}
-	return os.Rename(tempName, path)
+	return atomicfile.Write(path, data, 0o644)
 }
 
 // entry returns what the manifest knows about one key, if anything.
