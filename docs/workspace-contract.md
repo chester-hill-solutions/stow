@@ -101,10 +101,11 @@ saying which member lands in which phase is more useful than a promise:
 |---|---|---|
 | `Dir`, `Bucket`, `ID`, `Path`, `Close` | **Shipped** in Go | W1 |
 | The object surface, via the embedded runtime | **Shipped** in Go | W1 |
-| `open` / `resume` selected by one argument | Partial — `resume` is W4, with the registry | W4 |
-| `Destroy` | Not yet. `Close` is non-destructive today, so a workspace outlives its handle and nothing removes it | W3, with the registry |
+| `Destroy` | **Shipped** in Go, with the adoption guard it required | W3 |
+| `open` / `resume` selected by one argument | **Shipped** in Go, via the registry | W4 |
+| `Touch`, a registry on disk, and TTL collection | **Shipped** in Go, refusing live and adopted workspaces | W4 |
 | `Facade` | Not yet. A workspace speaks no S3 today | W5 |
-| TypeScript and Python surfaces | Not yet | W7, and Python's is W7's known exception |
+| TypeScript and Python surfaces | Not yet. The close/destroy split is settled and recorded in `docs/agent-dx-plan.md` §0.8; only the surface is missing | W7, and Python's is W7's known exception |
 
 A member that does not exist yet is a compile error for a caller who reads this
 document, which is the correct failure. None of them is a stub that returns
