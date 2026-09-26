@@ -273,8 +273,16 @@ func parseRange(hdr string, size int64) (start, end int64, err error) {
 			return 0, 0, errInvalidRange
 		}
 	}
-	if s < 0 || s >= size || e < s || e >= size {
+	if s < 0 || s >= size || e < s {
 		return 0, 0, errInvalidRange
+	}
+	// An end past the last byte is clamped, not refused. A recipient must treat an
+	// unsatisfiable end as the last byte, and S3 answers 206 with the remainder;
+	// stow answered 416, so a client asking for "the rest of this" by naming an
+	// offset it had guessed got a failure instead of the bytes. Only a range that
+	// *begins* past the end is unsatisfiable, and that stays a 416 above.
+	if e >= size {
+		e = size - 1
 	}
 	return s, e, nil
 }
