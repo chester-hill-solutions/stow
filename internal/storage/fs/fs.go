@@ -251,6 +251,9 @@ func (s *FilesystemStore) PutObject(_ context.Context, bucket, key string, body 
 	if err != nil {
 		return nil, err
 	}
+	if err := storage.VerifyChecksum(opts, data); err != nil {
+		return nil, err
+	}
 	recordVersion, err := storage.NewRecordVersion()
 	if err != nil {
 		return nil, err
@@ -262,7 +265,7 @@ func (s *FilesystemStore) PutObject(_ context.Context, bucket, key string, body 
 		ContentType:       opts.ContentType,
 		Metadata:          storage.CloneMetadata(opts.Metadata),
 		ETag:              etag,
-		ChecksumAlgorithm: opts.ChecksumAlgorithm,
+		ChecksumAlgorithm: storage.NormalizeChecksumAlgorithm(opts.ChecksumAlgorithm),
 		ChecksumValue:     opts.ChecksumValue,
 		LastModified:      now,
 	}

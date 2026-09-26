@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 
 	"github.com/chester-hill-solutions/stow-s3/internal/runthrough"
+	"github.com/chester-hill-solutions/stow-s3/internal/runtime"
 	"github.com/chester-hill-solutions/stow-s3/internal/storage"
 )
 
@@ -19,7 +20,7 @@ import (
 // AWS_* say. Keeping that construction inside this one branch is what makes it
 // checkable, so it is asserted in TestLocalModeBuildsNoUpstreamPath rather than
 // left as a claim in a comment.
-func buildStore(mode runthrough.Mode, backend, dataDir string, cfg runthrough.Config) (storage.Store, *runthrough.Adapter, error) {
+func buildStore(mode runthrough.Mode, backend runtime.Backend, dataDir string, cfg runthrough.Config) (storage.Store, *runthrough.Adapter, error) {
 	localStore := openLocalStore(backend, dataDir)
 	if mode != runthrough.ModeRunThrough {
 		return localStore, nil, nil

@@ -1,6 +1,7 @@
 package storage_test
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"strings"
@@ -345,4 +346,60 @@ func testListPartsPaginationMarkers(t *testing.T, store storage.Store) {
 
 func TestStoreListPartsPaginationMarkers(t *testing.T) {
 	withStores(t, testListPartsPaginationMarkers)
+}
+
+// A caller-supplied checksum is an integrity claim about the body. Verifying it
+// is part of the object model, not an optional extra, so it belongs in the
+// contract rather than in one backend's own tests.
+//
+// This case did not exist, which is why the workspace backend verified
+// checksums while memory and filesystem stored the algorithm and value verbatim
+// and accepted a corrupt body. The gap was in the suite, not in its absence.
+func TestStoreRejectsABodyThatContradictsItsChecksum(t *testing.T) {
+	withStores(t, func(t *testing.T, store storage.Store) {
+		ctx := context.Background()
+		if err := store.CreateBucket(ctx, "contract"); err != nil {
+			t.Fatalf("create bucket: %v", err)
+		}
+
+		body := []byte("the quick brown fox")
+		// Deliberately lower case. A caller may write the algorithm either way,
+		// so the contract is that the stored form is the normalized one; a
+		// backend that echoes the caller's casing makes the same request return
+		// different metadata depending on which store is underneath.
+		const requested = "crc32"
+		const algorithm = "CRC32"
+		correct, err := storage.ComputeChecksum(requested, body)
+		if err != nil {
+			t.Fatalf("compute checksum: %v", err)
+		}
+
+		// The happy path: a correct checksum is accepted and recorded.
+		meta, err := store.PutObject(ctx, "contract", "good", bytes.NewReader(body), storage.PutOptions{
+			ChecksumAlgorithm: requested,
+			ChecksumValue:     correct,
+		})
+		if err != nil {
+			t.Fatalf("put with a correct checksum: %v", err)
+		}
+		if meta.ChecksumAlgorithm != algorithm {
+			t.Errorf("ChecksumAlgorithm = %q, want the normalized %q", meta.ChecksumAlgorithm, algorithm)
+		}
+		if meta.ChecksumValue != correct {
+			t.Errorf("ChecksumValue = %q, want %q", meta.ChecksumValue, correct)
+		}
+
+		// The case that matters: a body that contradicts the claim is refused,
+		// and nothing is left behind under that key.
+		_, err = store.PutObject(ctx, "contract", "bad", bytes.NewReader(body), storage.PutOptions{
+			ChecksumAlgorithm: requested,
+			ChecksumValue:     "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=",
+		})
+		if !errors.Is(err, storage.ErrChecksumMismatch) {
+			t.Fatalf("put with a wrong checksum: err = %v, want ErrChecksumMismatch", err)
+		}
+		if _, err := store.HeadObject(ctx, "contract", "bad"); !errors.Is(err, storage.ErrObjectNotFound) {
+			t.Errorf("a rejected put left an object behind: err = %v, want ErrObjectNotFound", err)
+		}
+	})
 }
