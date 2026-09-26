@@ -117,4 +117,11 @@ check-version:
 check-install-surface:
 	node scripts/check-install-surface.mjs
 
-standards: format-check lint test-race check-go-quality check-file-size check-coverage check-version check-install-surface check-ts-quality check-generated
+# The gates under scripts/ are code, and a gate with no test is a gate whose
+# rules are never exercised in the modes they claim to handle. check-install-surface
+# shipped a rule that only misbehaved once every package was published, and the
+# default run never got there because two were still unpublished.
+check-scripts:
+	node --test scripts/*.test.mjs
+
+standards: format-check lint test-race check-go-quality check-file-size check-coverage check-version check-install-surface check-scripts check-ts-quality check-generated

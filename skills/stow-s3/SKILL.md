@@ -34,6 +34,16 @@ reads, error shapes.
 npm or PyPI, so those two commands fail with a 404. Do not try them first. The
 Go module is published and is the shortest working path.
 
+When the npm package is published it will be on **GitHub Packages**, not
+npmjs.org, and the bare command will still fail: this organisation owns nothing
+on npmjs, and a scope-specific registry in `.npmrc` beats `--registry`, so npm
+resolves against the wrong host and returns a 404 that reads like a naming
+problem. Add this to `.npmrc` first:
+
+```ini
+@chester-hill-solutions:registry=https://npm.pkg.github.com
+```
+
 ```bash
 go get github.com/chester-hill-solutions/stow-s3/pkg/stow   # Go, works now
 ```

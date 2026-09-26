@@ -32,6 +32,16 @@ then `export STOW_BIN="$PWD/bin/stow-s3"`, then `npm install && npm run build`
 in `packages/stow-s3` (TypeScript) or `pip install -e
 "packages/stow-s3-py[boto3]"` (Python). A published package carries its own
 binary and does not need `STOW_BIN`.
+When the npm package is published it will be on **GitHub Packages**, not
+npmjs.org, and the bare command will still fail: this organisation owns nothing
+on npmjs, and a scope-specific registry in `.npmrc` beats `--registry`, so npm
+resolves against the wrong host and returns a 404 that reads like a naming
+problem. Add this to `.npmrc` first:
+
+```ini
+@chester-hill-solutions:registry=https://npm.pkg.github.com
+```
+
 
 If the binary cannot be found or run, `stow-s3 doctor` reports which side is
 broken.
