@@ -102,6 +102,17 @@ type Options struct {
 	// every interface, so that S3 and a native caller cannot be granted
 	// different things.
 	//
+	// DisableMultipart reports that the bound store cannot serve multipart. It is
+	// opt-out rather than a positive flag because every store this repository
+	// ships can, and a caller who says nothing is describing a working one.
+	//
+	// It exists because the alternative was a capability that was decided by which
+	// constructor was called rather than by the store: OpenWithStore passed true
+	// unconditionally, so a caller-supplied store that implemented no multipart at
+	// all was advertised as supporting it and failed partway through an upload
+	// instead. The store is the thing that knows the answer.
+	DisableMultipart bool
+
 	// A nil pointer means every operation, and that is the default on purpose:
 	// it is what an Instance opened without one has always permitted, so adding
 	// the field changes no existing behaviour. Pass &authority.None() to permit
