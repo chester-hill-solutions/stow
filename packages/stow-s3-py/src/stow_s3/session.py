@@ -110,6 +110,7 @@ class Session:
     binary_version: str
     protocol_version: int
     capabilities: Any
+    owns_data_dir: bool
     _process: subprocess.Popen[bytes] = field(repr=False)
     _stdout_log: IO[bytes] | None = field(default=None, repr=False)
     _stderr_log: IO[bytes] | None = field(default=None, repr=False)
@@ -174,7 +175,13 @@ class Session:
         # already started; lifecycle state is the one thing that must change.
         object.__setattr__(self, "_closed", True)
         _stop_process(self._process)
-        shutil.rmtree(self.data_dir, ignore_errors=True)
+        # Only ever remove a directory this session created. A caller may pass
+        # their own data_dir, and the two failure paths in open_session already
+        # guard on owned_dir for exactly that reason; close() did not, so a
+        # supplied directory was deleted on the success path and preserved on
+        # the failure ones. The TypeScript client checks the same flag.
+        if self.owns_data_dir:
+            shutil.rmtree(self.data_dir, ignore_errors=True)
         for handle in (self._stdout_log, self._stderr_log):
             if handle is not None:
                 with contextlib.suppress(OSError, ValueError):
@@ -335,6 +342,7 @@ def open_session(
             binary_version=ready.binary_version,
             protocol_version=ready.protocol_version,
             capabilities=ready.capabilities,
+            owns_data_dir=owned_dir is not None,
             _process=process,
             _stdout_log=stdout_log,
             _stderr_log=stderr_log,

@@ -46,11 +46,37 @@ false, and they are the two that matter most:
 
 Neither is a missing feature. Both are present, wired, and covered by passing
 tests. They are the standing example of why the claims in this document are
-marked with evidence, and section 21.2 records what to do about it.
+marked with evidence, and [section 21.2](#212-run-through-measured-and-worse-than-untested)
+records what to do about it.
 
-Everything else in the list held up. Section 2 is a table with a verdict and a
-reference for each row, so a future reader can re-run the check rather than
-trust the table.
+Everything else in that list held up. Section 2 is a table with a verdict and a
+reference for each row, so a future reader can re-run the check rather than trust
+the table.
+
+### 0.2.1 This document was wrong five times, and the corrections are kept
+
+Measuring the *draft's* claims is not the same as verifying *this document's*.
+The first version of this file was merged having got five things wrong, all of
+them caught by the Phase 2 audit in [section 21.3](#213-coupling-audit-what-phase-2-found)
+rather than by review. They are recorded in place rather than quietly fixed,
+because "verify it" is not a property a document can claim about itself:
+
+| This document claimed | Actually |
+|---|---|
+| Python client does an unconditional `s3.create_bucket` (`__init__.py:13`) | That line is inside a **module docstring** — a usage example. The client contains no S3 call. Found by grepping for a string and reporting the hit without reading it |
+| WASM is a store (§1, §13, §24) | There are three Go stores — **memory, filesystem, workspace**. WASM is the *host*; `cmd/stow-wasm` calls `pkg/stow.Open`, which is the memory store |
+| The store/S3 coupling "is a naming problem" (§3.2) | `CompositeETag` is Amazon's multipart ETag algorithm and `PaginateMultipartUploads` is S3's marker algorithm, both in `internal/storage`. It is S3 *behaviour* |
+| `internal/storage` has no contract test (§13, §20) | It has `backend_contract_test.go`: 9 behaviours across all three stores. The real gap is that it has no *checksum* case — exactly where a real divergence ships |
+| "A filesystem-backed environment changes one line" (§12) | `pkg/stow.Options` has no `Store` field and `runtime/types.go:72` refuses non-memory, so a second constructor exists |
+
+Two of those five are the same mistake this document was written to prevent: a
+grep hit and a plausible inference, both reported as findings. The fifth is the
+cost of writing an API direction for a system that has not been refactored yet —
+`Store: stow.Memory(...)` is a target, and the draft described it as current.
+
+**The rule, stated once so it can be applied:** a line number is not a claim, and
+neither is a method name. Read the line, run the code, or mark it unverified.
+
 
 ### 0.3 Where the decisions already live
 
@@ -106,7 +132,7 @@ proliferating Stow implementations:
 | Agent workspace | filesystem | filesystem + S3 | task | strict | none |
 | Persistent local dev | filesystem | S3 | explicit | host-set | none |
 | Embedded application | memory | native | application | host-set | none |
-| Browser application | WASM | native | explicit | host-set | none |
+| Browser application | memory (in a WASM host) | native | explicit | host-set | none |
 | Read-through dev env | filesystem | S3 | explicit | host-set | read-through |
 | Mirrored dev env | filesystem | S3 | explicit | host-set | write-through + live authority |
 
@@ -178,25 +204,58 @@ The contract is `internal/storage.Store` (`internal/storage/store.go:9`). Two
 honest observations about it, because the primitive document should describe the
 real one:
 
-**The mechanism is clean.** No store implementation knows about HTTP, XML, S3
-status codes, or SigV4. The storage error vocabulary (`internal/storage/errors.go`)
-is object-model vocabulary — `ErrBucketNotFound`, `ErrPreconditionFailed`,
-`ErrChecksumMismatch`. Translation to S3 error codes happens above. This is the
-separation the store contract is for, and it largely holds.
+**The mechanism is clean, and it should be said plainly.** `internal/storage`
+imports nothing from the rest of the project — verified by grep, not by
+inspection. No store file contains an HTTP status code, an XML type, an AWS SDK
+type, SigV4, or `smithy`. `internal/s3api/errors.go:106` (`mapStorageError`) is a
+clean, single, upward-only translation table. This is the strongest thing in the
+codebase and it is the reason the layering is worth preserving.
 
-**The vocabulary is S3-shaped, and that is a real coupling.** The interface
-declares `ListObjectsV2` — the S3 API name, not a generic one — plus
-`CopyObject`, `DeleteObjects`, and **eight** methods dedicated to multipart
-upload. Multipart is arguably a legitimate object-model concept (streaming an
-object larger than memory) that S3 also happens to expose. `ListObjectsV2` is
-not: it names an S3 API generation inside the storage contract. The original
-draft of this document proposed a `Reset()` method; no such method exists, and
-the draft's interface omitted all eight multipart methods, which is how a
-document ends up describing a system that was never built.
+**The behaviour is S3-shaped, and this is real coupling — not naming.** The first
+draft of this document said the S3-shaped vocabulary "is a naming problem". That
+was wrong, and the audit in [section 21.3](#213-coupling-audit-what-phase-2-found)
+found the algorithms. In `internal/storage`:
 
-The distinction worth preserving: **stores must not know what protocol a request
-arrived on.** They currently do not. The S3-shaped *naming* is a smaller
-problem than S3-shaped *behaviour*, and it is a naming problem.
+| What | Where | Why it is S3, not object model |
+|---|---|---|
+| `CompositeETag` | `util.go:87` | Amazon's documented multipart ETag: md5 of concatenated part digests, `-N` suffix. Every store calls it, so the store **is** the S3 ETag format |
+| Quoted-hex ETag | `util.go:78` | `ObjectMeta.ETag` embeds HTTP entity-tag quoting; `preconditions.go:31` has to `strings.Trim(…, "\"")` to compare |
+| `ComputeChecksum` | `checksum.go:14` | Big-endian CRC32 + base64 is the S3 wire encoding, chosen in the store and reused by `s3api` |
+| `PaginateObjects` | `util.go:256` | S3's `ListObjectsV2` rule, including `CommonPrefixes` counting against `MaxKeys` — a different protocol would get different truncation from the same store |
+| `PaginateMultipartUploads` | `util.go:205` | S3's exact marker algorithm: sort by `(Key, Initiated, UploadID)`, derive `NextKeyMarker`/`NextUploadIDMarker` |
+| `matchesETagHeader` | `preconditions.go:18` | Parses `w/` weak prefixes, comma-separated lists, and `*` — that is RFC 9110 `If-Match` grammar, in the store |
+| `reservedBucketPrefixes` | `util.go:16` | `xn--`, `sthree-`, `amzn-s3-demo-`, `amzn_s3_demo_` — AWS virtual-hosted-bucket reserved prefixes |
+| S3 service limits | `util.go:51,103,154` | 1024-byte key cap, 10000-part cap, 1000 `MaxKeys` default |
+
+So the honest statement of invariant 3 is: **it holds for imports and control
+flow, and it is violated for behaviour.** The store layer implements S3's
+object-metadata wire representations, largely because that is where the bytes are
+hashed, and it enforces S3's service limits.
+
+That is a defensible place for some of it — an MD5 of the bytes has to be
+computed somewhere, and computing it in the store is the obvious place. It is
+not defensible as a permanent position, because it means a second interface gets
+S3's limits and S3's ETag format whether it wants them or not. The draft's claim
+that a store "does not know which protocol a request arrived on" is true of the
+call path and false of the contract.
+
+**The interface is also S3-shaped in its method names.** `ListObjectsV2` is the
+S3 API name, not a generic one, plus `CopyObject`, `DeleteObjects`, and **eight**
+multipart methods. Multipart is arguably a legitimate object-model concept
+(streaming an object larger than memory) that S3 also happens to expose.
+`ListObjectsV2` is not. The draft proposed a `Reset()` method; no such method
+exists, and the draft's interface omitted all eight multipart methods — which is
+how a document ends up describing a system that was never built.
+
+**One dead protocol surface.** `ListPartsPage` is implemented by all three stores
+and forwarded by `internal/runtime/adapter.go:216`, but it is **not** in
+`storage.Store`, and `internal/s3api/handlers_multipart.go:194` never calls it —
+it calls `ListParts` and hardcodes `MaxParts: 1000`. Meanwhile
+`internal/runtime/multipart.go:104` discovers it by type assertion. Since
+`runthrough.Adapter` does not implement it, run-through mode silently falls back
+to fetching every part and paginating in memory, unbounded, for a 10,000-part
+upload. The store contract test asserts a property production does not have.
+
 
 ### 3.3 Interfaces
 
@@ -498,39 +557,92 @@ interfaces differ *intentionally*, the difference is documented.
 The two clients obtain a bucket differently and neither difference is
 documented as deliberate:
 
-- `packages/stow-s3-py/src/stow_s3/__init__.py:13` — an unconditional
-  `s3.create_bucket(Bucket=bucket)`.
-- `packages/stow-s3/src/session.ts:137` — `CreateBucketCommand`, which against
-  real S3 is *not* idempotent outside `us-east-1`.
+> **Correction.** The first draft of this section claimed that
+> `packages/stow-s3-py/src/stow_s3/__init__.py:13` contained "an unconditional
+> `s3.create_bucket(Bucket=bucket)`". It does not. That line is inside the
+> module **docstring**, as a usage example. The Python client contains no S3
+> call at all. The draft arrived at it by grepping for `create_bucket` and
+> reporting the hit without checking whether it was code — the same
+> read-instead-of-measure failure this document exists to prevent, committed by
+> the document itself.
 
-Language ergonomics may differ. Primitive semantics should not. Specifically:
-what happens when the bucket already exists should be the same answer in both
-clients, and today it is not defined in either.
+The real divergence runs the other way, and it is worse:
+
+- **Python never creates a bucket.** `session.py:132` is explicit: "Creating the
+  bucket is left to the caller, so this is a name and nothing more."
+- **TypeScript creates it twice** — once server-side (`start.ts:316`, via
+  `buckets: [bucket]` at `session.ts:125`) and again client-side with a
+  `CreateBucketCommand` (`session.ts:137`), which is not idempotent against real
+  S3 outside `us-east-1`.
+- **The server was bent to accommodate the duplicate.**
+  `internal/s3api/handlers_bucket.go:36` tolerates a repeat:
+  `if err != nil && err != storage.ErrBucketExists`. Note that is `==`, not
+  `errors.Is`, so a *wrapped* `ErrBucketExists` would escape as `InternalError`.
+
+So: one client creates nothing, the other creates twice, and a protocol-layer
+exception exists solely so the second create is not an error. "What happens when
+the bucket already exists" is not merely undefined in both clients — in one it is
+a special case in the server.
+
+**A second, larger divergence: the two clients do not use the same store.**
+
+| Client | Backend for an ephemeral session |
+|---|---|
+| TypeScript `session.ts:117` | `backend: "memory"` |
+| Python `session.py:253` | `--backend filesystem` |
+
+Two implementations of one session contract, selecting different stores. Combined
+with [section 21.3](#213-coupling-audit-what-phase-2-found)'s findings that
+memory and filesystem skip checksum verification while workspace performs it, and
+that they differ in `ChecksumAlgorithm` casing and in how many times a body is
+copied — a cross-runtime conformance test on "the same session" would be testing
+two different systems. **§9's goal is currently unreachable**, and this is why.
+
 
 ---
 
 ## 10. Architectural invariants
 
+These are the target. Four of them are **not currently true**, and
+[section 21.3](#213-coupling-audit-what-phase-2-found) says which and why. An
+invariant list that silently claims a violated property is worse than no list,
+because it is checked by reading rather than by running.
+
 1. **One logical object model.** Every backend implements the same logical
-   object model.
+   object model. *Currently false: only `workspace` verifies checksums; the
+   backends also differ in `ChecksumAlgorithm` casing, body-copy count, and
+   derived `ContentType`.*
 2. **Interfaces do not own storage.** S3, native, and filesystem interfaces
-   translate into operations on the same namespace.
+   translate into operations on the same namespace. *Currently inverted:
+   `internal/s3api` imports `internal/runthrough` and finds policy by asserting
+   on the store, so the interface layer owns policy instead.*
 3. **Stores do not own protocols.** A store does not know which interface an
-   operation arrived on. *Currently holds in mechanism; partly violated in
-   vocabulary — see §3.2.*
+   operation arrived on. *True of imports and control flow; false of behaviour —
+   S3's ETag algorithm, base64 checksums, `If-Match` grammar, reserved bucket
+   prefixes, and the 1024/1000/10000 limits all live in `internal/storage`. See
+   §3.2.*
 4. **Policies compose.** Resource, lifetime, access, and upstream policies are
-   independently configurable wherever technically meaningful.
+   independently configurable wherever technically meaningful. *Currently
+   violated by the run-through cache being inside the store, which makes quota
+   accounting include upstream bytes.*
 5. **Dangerous authority is explicit.** Local→external mutation requires
    affirmative authority, separately from the policy that permits propagation.
-   *Decided in [ADR 0005](../adr/0005-live-write-requires-explicit-consent.md).*
+   *Decided in [ADR 0005](../adr/0005-live-write-requires-explicit-consent.md),
+   and holding.*
 6. **Capabilities are discoverable.** Consumers inspect rather than assume.
+   *Violated in the reporting path: readiness hardcodes `Multipart: true` and
+   ignores `runtime.Capabilities`; the browser client overwrites capabilities
+   with literals.*
 7. **Profiles are configuration.** Profiles must not become divergent
-   implementations. *With the safety-conditional exception in §4.*
+   implementations. *True for the CLI. False for `pkg/stow` (two constructors) and
+   for the browser path (a second persistence implementation). With the
+   safety-conditional exception in §4.*
 8. **One source of truth.** No synchronized duplicate representations of one
-   namespace.
+   namespace. *Holding.*
 9. **Failure is bounded.** A failed environment leaks no processes, temporary
    directories, credentials, multipart state, claims, locks, or upstream
-   mutations beyond documented semantics.
+   mutations beyond documented semantics. *Holding, as of this change — the
+   Python client leaked a caller-supplied directory and did not.*
 10. **Existing clients remain ordinary clients.** Software should not need to
     know it is talking to Stow. This is the invariant that makes §1's closing
     claim — *the application does not need to know what Stow is, it simply
@@ -571,6 +683,21 @@ A filesystem-backed environment changes one line. A read-through environment
 changes one line. The objective is that the internal architecture supports that
 decomposition — not that this exact spelling ships.
 
+**And it is not true of `pkg/stow` today, which the first draft missed.**
+`stow.Options` (`pkg/stow/types.go:20`) has three fields — `Backend`, `MaxBytes`,
+`MaxObjects` — and **no `Store` field**, so the `Store: stow.Memory(...)` shape
+above does not exist. The reason is one layer down: `internal/runtime/types.go:72`
+refuses any non-memory backend when no store is bound, so `pkg/stow` has to
+expose a *second* constructor, `stow.OpenWorkspace`. `pkg/stow/doc.go:3` states
+the consequence plainly — "Open exposes the memory-only embedded profile."
+
+That is the "a constructor argument deciding an object-model capability" shape,
+and it is the single change that would most directly deliver this section's
+promise. `Options` gaining a `Store` field is a small diff with a large payoff:
+it makes the embedded path composable rather than forked, and it is a precondition
+for §4's profiles existing on the embedded side at all.
+
+
 **Public API direction is the opposite constraint.** Do not expose the
 complexity. The common path stays this small:
 
@@ -592,18 +719,38 @@ second has failed.
 
 The test architecture should mirror the primitive.
 
-**Store conformance.** Every store runs the same suite: memory, filesystem,
-WASM, future backends.
+**Store conformance.** Every store runs the same suite.
 
-**What already exists:** `conformance/` — a shared corpus run across backends and
-runtimes, wired into `make test-conformance` and into CI.
+**What exists, and it is better than the first draft of this document claimed.**
+`internal/storage/backend_contract_test.go` is a real package-local contract
+suite: a `storeFactory` table over **memory, filesystem, and workspace**, with
+nine behaviours each — batch delete, missing-bucket error agreement, metadata
+aliasing, immutable version for equal content, multipart lookup, bucket deletion
+with an active upload, duplicate and unsorted completion parts, and
+`ListParts` pagination markers. `conformance/` adds a shared corpus run across
+backends *and* runtimes, wired into `make test-conformance` and CI.
 
-**What is missing, and it is the P0 in §20:** the conformance corpus is a
-separate package. `internal/storage` has no package-local contract test. A new
-store can satisfy the `Store` interface, compile, wire up, and never be run
-against the corpus — because nothing forces a store to *be* a store
-conformance-wise. Making the corpus the enforceable definition of a store means
-`go test ./internal/storage/...` fails for a store that does not pass it.
+The first draft said `internal/storage` had no contract test and proposed
+creating one as the P0. Both halves of that were wrong, and the correction
+matters more than the original: the suite exists, so the real question is where
+it has holes.
+
+**The hole is checksums, and it is a shipping divergence.**
+`grep -c Checksum internal/storage/backend_contract_test.go` returns **0**. And
+per [section 21.3](#213-coupling-audit-what-phase-2-found), only the
+workspace store verifies a caller-supplied checksum — memory and filesystem
+store the algorithm and value verbatim and never check them. So a corrupt body
+is accepted by two of three stores and rejected by the third, and the contract
+suite cannot see it. Adding a checksum case to the existing suite is a few lines
+and goes **red immediately**.
+
+**The second hole is subtler.** `TestStoreListPartsPaginationMarkers` calls
+`ListPartsPage` — but `ListPartsPage` is **not in `storage.Store`**. The test
+therefore passes on the three concrete types while asserting a property the
+*interface* does not have, which is why `internal/runtime/multipart.go:104` has
+to find it by type assertion and run-through mode silently does not have it. A
+contract suite that reaches past the interface it is a contract for is testing
+the implementations, not the contract.
 
 **Interface conformance.** S3 behaviour gets its own protocol suite, separate
 from store conformance — a store can be correct and its S3 rendering wrong.
@@ -614,7 +761,8 @@ behavioural tests. This is where invariant 9 gets enforced.
 **Composition tests.** Test the combinations, not just the components:
 store×interface, store×lifetime, store×quotas, store×upstream policy,
 interface×authentication, lifetime×failure mode. Section 21.2 is a worked
-example of what skipping this costs.
+example of what skipping this costs, and the two holes above are both
+composition failures wearing a store costume.
 
 ---
 
@@ -747,10 +895,26 @@ The architecture items map onto §0.11's W-items rather than competing with them
 | §1, §3, §4, §12 | **W5** | the S3 facade is the primitive made usable from generated code |
 | §13 store conformance | — | new; the cheapest real win in this document |
 
-**The one genuinely new P0, and it is small:** make store conformance
-enforceable (§13). It is a few hours' work, it makes §3.2's claims about stores
-verifiable rather than asserted, and it is the thing that stops the next store
-from being written against the interface instead of against the model.
+**The one genuinely new P0, and the first draft got it wrong.** It proposed making
+store conformance enforceable, on the stated premise that `internal/storage` had
+no contract test. It does — `backend_contract_test.go`, nine behaviours across
+all three stores. The real gap is narrower and sharper:
+
+> **Add a checksum case to the existing store contract suite.** It goes red
+> immediately, and it exposes that memory and filesystem accept corrupt bodies
+> while workspace rejects them.
+
+That is a few lines of test against a real integrity divergence that is shipping
+now, and it is the cheapest honest win in this document. The broader "make
+conformance the definition of a store" work is still worth doing — it just is
+not a blank page, and describing it as one would have sent someone to rebuild
+something that exists.
+
+**A second new item, from the audit:** the two clients select different backends
+for the same session contract (§9), and the Python client deleted a
+caller-supplied directory on close. The second is fixed; the first is not, and it
+is what currently makes §9 unreachable.
+
 
 ---
 
@@ -814,6 +978,88 @@ remember not to.
 
 A workspace with a read-through upstream is **W9**, and until this is fixed W9 is
 blocked rather than merely unscheduled.
+
+### 21.3 Coupling audit: what Phase 2 found
+
+Phase 2 of the migration plan in §19 was performed on 2026-09-26 rather than
+scheduled, and it changed this document twice: it corrected §3.2's "it is a naming
+problem", and it corrected §20's claim that no store contract suite existed.
+
+**What is genuinely clean, and should be stated as plainly as the findings:**
+
+- `internal/storage` imports nothing from the project. `internal/runthrough`
+  imports only `internal/storage`. No store file contains an HTTP status code, an
+  XML type, an AWS SDK type, SigV4, or `smithy`. `mapStorageError`
+  (`s3api/errors.go:106`) is a clean one-way translation table. **The dependency
+  direction is correct.**
+- The readiness protocol is **exemplary** and the doc undersold it. Three
+  implementations — `internal/ready/ready.go`, `packages/stow-s3/src/ready.ts`,
+  `packages/stow-s3-py/src/stow_s3/ready.py` — agree **field for field** on all
+  fourteen fields, all implement `ProtocolVersion = 1`, all reject unknown
+  versions, missing fields, and non-finite numbers, and both clients correctly
+  read `0` as "no limit reported" rather than "unlimited". Duplicated, and in
+  agreement. This is the model for §3.8.
+- CLI mode selection is configuration, not a fork, and the one
+  backend-conditional inside it (`main.go:171`) is a justified safety invariant.
+- The upstream/cache code is a **decorator above** the store, not inside it. No
+  file in `internal/storage/**` mentions upstream, cache, TTL, eviction, outbox,
+  or policy.
+
+**The findings, ranked by consequence.** Each was verified against the tree
+rather than inferred:
+
+1. **The resource policy is structurally blind to the upstream relationship.**
+   Because the cache lives *inside* the store, `runtime.Instance.usage` is
+   bootstrapped from `|local ∪ cache ∪ upstream|` (`runtime/state.go:98` walks
+   `ListObjectsV2`, and in production that store *is* the run-through adapter),
+   and every later `objectSize()` routes through `HeadObject` → `resolveObject` →
+   possibly the cache. So `state.go:102` can return `ErrQuotaExceeded` **at
+   startup** because of upstream state. A relationship is being charged as
+   resource usage. This is the concrete, shipping cost of the `Store +
+   UpstreamPolicy` shape §3.7 says was not chosen.
+2. **Only the workspace store verifies checksums.** `workspace/objects.go:54`
+   calls `verifyChecksum`; `memory.go` and `fs/fs.go` contain **zero**
+   occurrences and store the algorithm and value verbatim. A corrupt body is
+   accepted by two of three stores. This falsifies invariant 1 and is invisible to
+   the contract suite, which has no checksum case.
+3. **The interface layer owns policy.** `internal/s3api/admin.go:12` imports
+   `internal/runthrough` and reaches the outbox through **16** structural type
+   assertions on `s.store.(…)`. The layering violation runs **upward**, which is
+   the direction §3.3 does not look for. `s3api.Config` even carries `Mode`,
+   `CachePolicy`, `WritePolicy`, and `UpstreamHost` purely to echo them into
+   `/_stow/status`.
+4. **Multipart availability is a constructor flag, and readiness lies about
+   it.** `runtime/adapter.go:46` passes `multipartEnabled = true`
+   unconditionally while `runtime/instance.go:41` passes `false` — even though
+   `MemoryStore` fully implements multipart. Meanwhile `main.go:70` hardcodes
+   `Multipart: true` in the readiness message and never consults
+   `runtime.Capabilities`, which already computes both. Invariant 6 implemented
+   by assuming.
+5. **The two clients pick different backends** for the same session contract
+   (§9), and the Python client's `close()` deleted a caller-supplied directory.
+   **Fixed** in this change, with a test that goes red on the old code.
+6. **`ListPartsPage` is outside `storage.Store`** (§3.2), so run-through mode
+   silently takes the unbounded-memory path while the contract suite asserts the
+   capability exists.
+7. **Default quota depends on which constructor the embedder chose.**
+   `--max-bytes 0` means *unlimited* on the server (`runtime_store.go:22`) and
+   *64 MiB* in `pkg/stow.Open` (`runtime/types.go:22`). Same class as §2's
+   `MaxRequestBytes` gap and belongs beside it.
+8. **Workspace and browser are profile forks.** `OpenWorkspace`
+   (`pkg/stow/workspace.go:78`) is a bespoke constructor; the browser path
+   (`packages/stow-s3/src/persistent-embedded.ts:38`) is a complete second
+   persistence implementation in TypeScript, with its own state machine, layered
+   on the WASM runtime — and it **overwrites the runtime's reported capabilities**
+   with literals, including `multipart: false`. §4 and §7 do not currently hold
+   for either.
+
+**What this does to the invariants.** Invariant 1 is false (finding 2).
+Invariant 2 is half-wrong: interfaces do not own storage, but they now own
+*policy* (finding 3). Invariant 3 holds for imports and is violated for behaviour
+(§3.2). Invariant 7 does not hold for workspace or browser (finding 8). That is
+four of ten, and the point of recording it is that the remaining six are the ones
+worth defending.
+
 
 ---
 
@@ -893,7 +1139,7 @@ the invariants by construction.
                           Store
                            │
                 ┌──────────┼──────────┐
-              Memory   Filesystem   WASM/other
+              Memory   Filesystem   Workspace
 ```
 
 Everything above is composable. Everything below is conformant.
