@@ -204,24 +204,16 @@ func getOverWire(t *testing.T, ts *httptest.Server, ref objectRef) (string, int)
 	return string(body), resp.StatusCode
 }
 
-// The x-amz-copy-source header carries a percent-encoded key, and the server has
-// to decode it.
+// The x-amz-copy-source header carries a percent-encoded key and the server
+// decodes it, so a key containing a space, a plus, a percent sign or a slash is
+// copyable. Every SDK encodes the key, so an undecoded header means the server
+// looks for a key spelled with the escapes still in it.
 //
-// The compat contract says so - "URL-encoded key segments" - and parseCopySource
-// split the header on the first slash and used both halves verbatim. Every SDK
-// percent-encodes the key, so a key containing a space, a plus, a percent sign
-// or a slash could not be copied at all: the server looked for a key literally
-// spelled with the escapes in it and answered NoSuchKey for an object that
-// existed. No test issued a CopyObject, so the operation had no coverage at all.
-//
-// Decoding has to happen after the bucket is split off, not before. A key whose
-// slash is encoded as %2F would otherwise become a separator and the split would
-// land in the wrong place, so a key with a real slash would work and a key
-// containing an encoded one would not.
-//
-// The plus is the case that distinguishes the two unescape functions: in a path
-// segment + is a literal plus, so a key spelled "a+b" must not come back as
-// "a b". QueryUnescape would rewrite it.
+// Two entries carry the constraints. "encoded slash" fails if the server decodes
+// before splitting the bucket off, because %2F would then become the separator -
+// and that mistake passes "real slash", so the pair is what detects it. "literal
+// plus" fails if the server uses QueryUnescape, because in a path segment a plus
+// is not an encoded space.
 func TestCopyObjectDecodesTheCopySourceHeader(t *testing.T) {
 	cases := []struct {
 		name    string
@@ -289,21 +281,16 @@ func rangeOverWire(t *testing.T, ts *httptest.Server, ref objectRef, spec string
 	return resp.StatusCode, string(body), resp.Header.Get("Content-Range")
 }
 
-// A range whose end runs past the last byte is clamped, not refused.
+// A range whose end runs past the last byte is clamped, not refused. RFC 9110
+// requires a recipient to treat an unsatisfiable end as the last byte, and a GET
+// for bytes=0-99 of a 50-byte object answers 206 with all 50 bytes. Clients ask
+// for "the rest of this" by naming an offset they inferred rather than measured,
+// so this is reachable without doing anything unusual.
 //
-// RFC 9110 says a recipient must treat an unsatisfiable *end* as if it were the
-// last byte, and S3 does exactly that: a GET for bytes=0-99 of a 50-byte object
-// answers 206 with all 50 bytes. Stow answered 416 instead, so any client that
-// asked for "the rest of this file" by naming an offset it had guessed got a
-// failure rather than the remainder. HTTP clients do this routinely - a
-// resumable download that knows a length, a media server answering a seek - so
-// this was reachable without doing anything unusual.
-//
-// The suffix form already clamped, and the start-past-the-end case is correctly
-// a 416: S3 refuses a range that begins beyond the object but clamps one that
-// merely ends too far. The distinction is the whole content of this case, so
-// both directions are pinned - clamping the start as well would turn a 416 into a
-// silently empty 206 and be a different bug.
+// The clamping cases and the refusing cases are both here because the two
+// directions are one decision: S3 refuses a range that begins past the object and
+// clamps one that merely ends too far. Clamping the start as well would turn
+// every 416 below into a silently empty 206.
 func TestGetObjectRangeClampsAnEndPastTheLastByte(t *testing.T) {
 	const body = "01234567890123456789012345678901234567890123456789" // 50 bytes
 	if len(body) != 50 {
@@ -385,15 +372,9 @@ func TestGetObjectRangeOverTheWholeObjectIsPartialContent(t *testing.T) {
 }
 
 // The <Deleted> entries in a multi-object delete response name the keys that
-// were deleted.
-//
-// This is the assertion that would have caught the workspace backend's
-// complement, and it belongs at the S3 surface rather than only in the store
-// contract: the handler copies the store's return value straight into the
-// response body, so a store that reports the survivors produces a response
-// naming objects still on disk and omitting the ones that are gone. The
-// store-level case proves the return value; this one proves the wire inherits
-// it.
+// were deleted. The handler copies the store's return value into the response
+// body, so this runs against all three stores: the store contract case proves
+// what a backend returns, and only this proves the wire inherits it.
 func TestDeleteObjectsResponseNamesTheKeysItDeleted(t *testing.T) {
 	for name, newStore := range wireStores() {
 		t.Run(name, func(t *testing.T) {

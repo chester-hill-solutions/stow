@@ -102,13 +102,10 @@ func (s *Server) handleCompleteMultipartUpload(ctx context.Context, w http.Respo
 		parts = append(parts, storage.PartInfo{PartNumber: p.PartNumber, ETag: "\"" + etag + "\""})
 	}
 
-	// Validate minimum part size for non-final parts.
-	//
-	// The error from this listing was discarded, which made the map below empty,
-	// which made every size lookup miss, which disabled the check the map exists
-	// for: a client could complete an upload of 1-byte parts, and the failure that
-	// had disabled the check was itself invisible. A store that cannot list the
-	// parts cannot be asked whether they are big enough.
+	// Validate minimum part size for non-final parts. A store that cannot list the
+	// parts cannot be asked whether they are big enough, so this error is reported
+	// rather than treated as an empty listing: an empty map would make every size
+	// lookup miss and silently pass every part.
 	storedParts, err := s.multipart.ListParts(ctx, uploadID)
 	if err != nil {
 		writeError(w, r, mapStorageError(err, resourcePath(bucket, key)))
@@ -287,10 +284,10 @@ func parseRange(hdr string, size int64) (start, end int64, err error) {
 		return 0, 0, errInvalidRange
 	}
 	// An end past the last byte is clamped, not refused. A recipient must treat an
-	// unsatisfiable end as the last byte, and S3 answers 206 with the remainder;
-	// stow answered 416, so a client asking for "the rest of this" by naming an
-	// offset it had guessed got a failure instead of the bytes. Only a range that
-	// *begins* past the end is unsatisfiable, and that stays a 416 above.
+	// unsatisfiable end as the last byte, and clients that ask for "the rest of
+	// this" routinely name an offset they inferred rather than measured. Only a
+	// range that *begins* past the end is unsatisfiable, which the check above
+	// rejects.
 	if e >= size {
 		e = size - 1
 	}

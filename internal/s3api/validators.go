@@ -78,15 +78,14 @@ func metadataSize(m map[string]string) int {
 
 // parseCopySource splits an x-amz-copy-source header into its bucket and key.
 //
-// The header carries a percent-encoded key, because a key may contain characters
-// that cannot travel in a path unescaped. The split therefore happens on the raw
-// header and each half is decoded afterwards, never the other way round: decoding
-// first would turn an encoded %2F inside a key into a separator, and the split
-// would land in the middle of the key.
+// The key is percent-encoded, so the split happens on the raw header and each
+// half is decoded afterwards, never the other way round: decoding first would
+// turn an encoded %2F inside a key into a separator and land the split inside the
+// key, making a key with a real slash work and a key with an encoded one fail.
 //
-// It is PathUnescape and not QueryUnescape, because in a path segment a plus is
-// a literal plus rather than an encoded space. Using the query form would
-// silently rewrite a key spelled "a+b" into "a b" and copy the wrong object.
+// It is PathUnescape and not QueryUnescape because in a path segment a plus is a
+// literal plus rather than an encoded space, and the query form would rewrite a
+// key spelled "a+b" into "a b" and copy the wrong object without complaining.
 func parseCopySource(src string) (bucket, key string, err error) {
 	src = strings.TrimPrefix(src, "/")
 	parts := strings.SplitN(src, "/", 2)

@@ -45,13 +45,13 @@ func completeOnePart(t *testing.T, store storage.Store, body []byte) string {
 // A completion with exactly one part is a single-part object, and S3 gives it a
 // plain MD5 — the part's own ETag, verbatim. The `-{partCount}` suffix belongs to
 // genuinely multipart objects, where it is the digest of the concatenated part
-// digests. A single-part completion suffixed `-1` is a different value from what
-// S3 returns, and it is the value the client carries into every conditional
-// write it attempts afterwards.
+// digests, so md5(md5(body))-1 is a different value from what S3 returns and the
+// client carries it into every conditional write it attempts afterwards.
 //
-// This case did not exist, which is why two of the three backends returned
-// md5(md5(body))-1 here and only the third returned the part's ETag. The rule
-// was in three places and correct in one of them.
+// This is the case that pins the rule for all three backends at once. The
+// multi-part case below pins the other half, and both are needed: an
+// implementation that always used CompositeETag would pass neither check on its
+// own reasoning.
 func TestStoreSinglePartCompletionETagIsThePartETag(t *testing.T) {
 	withStores(t, func(t *testing.T, store storage.Store) {
 		body := []byte("a single part body")
@@ -120,13 +120,9 @@ func TestStoreCompletionETagMatchesTheSameBytesPutDirectly(t *testing.T) {
 
 // Completing with no parts assembles nothing and publishes a zero-byte object
 // under the caller's key, silently discarding whatever was uploaded. S3 rejects
-// it, and the rejection belongs to all three backends.
-//
-// This case did not exist, which is why the emptiness check was written out
-// twice — in the memory and filesystem backends — and the third backend had
-// none. A client completing an upload with an empty part list therefore got a
-// 500 on two stores and a zero-byte object on the third: the same request, three
-// answers, none of them S3's.
+// it, and the rejection belongs to all three backends — an implementation that
+// answers 500 on one store and 200 on another is worse than one that is wrong
+// everywhere, because the choice of store decides the outcome.
 func TestStoreRejectsEmptyMultipartCompletion(t *testing.T) {
 	withStores(t, func(t *testing.T, store storage.Store) {
 		ctx := context.Background()

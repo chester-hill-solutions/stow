@@ -166,8 +166,8 @@ func TestCompleteMultipartUploadReportsAFailedPartListing(t *testing.T) {
 	}
 }
 
-// The minimum part size is still enforced, which is the check the swallowed
-// error was disabling. Two 16-byte parts, neither of them final, must be refused.
+// The minimum part size is enforced on non-final parts: two 16-byte parts, the
+// first of which is not final, are refused.
 func TestCompleteMultipartUploadEnforcesTheMinimumPartSize(t *testing.T) {
 	ts := newStoreServer(t, storage.NewMemoryStore())
 	createBucketOverWire(t, ts, "uploads")

@@ -99,12 +99,10 @@ func CompositeETag(partETags []string) string {
 // ascending order, with no duplicate part numbers, and that there is at least
 // one of them.
 //
-// The empty case is here rather than in each backend because it was written out
-// in two of the three and missing from the third, so the same request against
-// two stores produced a 500 on one and a zero-byte object on the other. It
-// returns ErrInvalidPart because that is the sentinel the S3 surface maps; the
-// unmapped ErrInvalidUpload fell through to a 500, which misreports a malformed
-// request as a server fault and invites a retry that can never succeed.
+// An empty completion returns ErrInvalidPart rather than ErrInvalidUpload
+// because ErrInvalidPart is the sentinel the S3 surface maps; ErrInvalidUpload is
+// unmapped and would reach a client as a 500, which reports a malformed request
+// as a server fault and invites a retry that cannot succeed.
 func ValidateMultipartPartNumbers(parts []PartInfo) error {
 	if len(parts) == 0 {
 		return ErrInvalidPart
@@ -130,10 +128,8 @@ func ValidateMultipartPartNumbers(parts []PartInfo) error {
 // digests. So one part is not "a multipart object with a count of one": it is
 // the part.
 //
-// This rule lived in three places and was correct in one of them, with two
-// backends returning md5(md5(body))-1 where S3 returns md5(body). A client
-// hands that value back on its next conditional write, so the error is not
-// cosmetic — it is a self-inflicted 412 on every subsequent request.
+// A client returns this value on its next conditional write, so the two forms
+// are not interchangeable behind the API.
 func CompletionETag(partETags []string) string {
 	if len(partETags) == 1 {
 		return partETags[0]

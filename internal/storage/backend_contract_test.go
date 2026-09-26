@@ -89,17 +89,12 @@ func requireMultipart(t *testing.T, store storage.Store) storage.MultipartStore 
 
 // A batch delete returns the keys it deleted.
 //
-// DeleteObjects had no doc comment on the Store interface, so the meaning of its
-// []string return was unspecified and three implementations chose. Two returned
-// the keys they deleted; the workspace backend returned the keys that
-// survived. The S3 handler emits this slice as <Deleted>, so on that backend a
-// multi-object delete reported the objects still on disk as deleted and said
-// nothing at all about the ones it had actually removed - a client that trusted
-// the response would believe the opposite of what happened.
-//
-// A key that was not there is not an error and is not reported as deleted, which
-// is S3's behaviour and the reason the complement is not simply the same set in
-// a different order.
+// DeleteObjects returns a []string whose meaning is not visible in its
+// signature, and the S3 handler emits it as <Deleted>, so a backend that returns
+// the survivors produces a response naming objects still on disk and omitting
+// the ones that are gone. A key that was not there is neither an error nor a
+// deletion, which is S3's behaviour and why the two lists are not the same set
+// in a different order.
 func TestStoreBatchDeleteReturnsTheKeysItDeleted(t *testing.T) {
 	withStores(t, func(t *testing.T, store storage.Store) {
 		ctx := context.Background()
@@ -126,9 +121,8 @@ func TestStoreBatchDeleteReturnsTheKeysItDeleted(t *testing.T) {
 			}
 		}
 
-		// A key reported as deleted is gone. This is the assertion that would
-		// have caught the complement: it passes on the two backends that were
-		// right and fails on the one that was not.
+		// A key reported as deleted is gone, so the list cannot be satisfied by
+		// reporting the complement.
 		for _, key := range want {
 			if _, err := store.HeadObject(ctx, "batch", key); !errors.Is(err, storage.ErrObjectNotFound) {
 				t.Fatalf("head %s after reported deletion = %v, want ErrObjectNotFound", key, err)
@@ -140,13 +134,10 @@ func TestStoreBatchDeleteReturnsTheKeysItDeleted(t *testing.T) {
 	})
 }
 
-// A batch delete that fails partway keeps the keys it already deleted.
-//
-// This is the other half of the same unspecified return value: two backends
-// returned their partial progress alongside the error and the third returned
-// nil, so a caller that wanted to retry only the remainder could not tell what
-// the first pass had already removed. Losing that list turns a recoverable
-// partial failure into a second round of deletions against keys that are gone.
+// A batch delete that fails partway keeps the keys it already deleted, so a
+// caller retrying the remainder can skip what already succeeded. Without that
+// list a recoverable partial failure becomes a second round of deletions
+// against keys that are gone.
 func TestStoreBatchDeleteReportsProgressBeforeAFailure(t *testing.T) {
 	withStores(t, func(t *testing.T, store storage.Store) {
 		ctx := context.Background()
