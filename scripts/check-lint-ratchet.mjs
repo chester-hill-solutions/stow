@@ -3,6 +3,7 @@ import { execFileSync } from "node:child_process";
 import { readFileSync, writeFileSync } from "node:fs";
 import { dirname, join, relative, resolve } from "node:path";
 import { readPreviousBaseline } from "./baseline-history.mjs";
+import { compareKeys, expandedKeys } from "./ratchet.mjs";
 
 const repoRoot = resolve(import.meta.dirname, "..");
 const packageRoot = resolve(repoRoot, "packages/stow-s3");
@@ -64,20 +65,12 @@ try {
   console.error(error.message);
   process.exit(2);
 }
-if (previous) {
-  const expanded = rules.filter((rule) => (baseline.counts?.[rule] ?? 0) > (previous.counts?.[rule] ?? 0));
-  if (expanded.length) {
-    console.error(`TypeScript lint baseline expanded: ${expanded.join(", ")}`);
-    process.exit(1);
-  }
+const expanded = expandedKeys(baseline.counts ?? {}, previous?.counts, rules);
+if (expanded.length) {
+  console.error(`TypeScript lint baseline expanded: ${expanded.join(", ")}`);
+  process.exit(1);
 }
-const regressions = [];
-const stale = [];
-for (const rule of rules) {
-  const allowed = baseline.counts?.[rule] ?? 0;
-  if (counts[rule] > allowed) regressions.push(`${rule}: ${counts[rule]} > ${allowed}`);
-  if (counts[rule] < allowed) stale.push(`${rule}: ${counts[rule]} < ${allowed}; lower the baseline`);
-}
+const { regressions, stale } = compareKeys(counts, baseline.counts ?? {}, rules);
 if (regressions.length || stale.length) {
   console.error("TypeScript lint ratchet violation");
   for (const item of regressions) console.error(`  new debt: ${item}`);

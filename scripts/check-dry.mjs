@@ -3,6 +3,7 @@ import { execFileSync } from "node:child_process";
 import { existsSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { readPreviousBaseline } from "./baseline-history.mjs";
+import { compareKeys, expandedKeys } from "./ratchet.mjs";
 
 const repoRoot = resolve(import.meta.dirname, "..");
 const packageRoot = resolve(repoRoot, "packages/stow-s3");
@@ -64,18 +65,13 @@ try {
   console.error(error.message);
   process.exit(2);
 }
-if (previous && (baseline.clones > previous.clones || baseline.duplicatedLines > previous.duplicatedLines || baseline.percentage > previous.percentage)) {
-  console.error("TypeScript DRY baseline expanded");
+const KEYS = ["clones", "duplicatedLines", "percentage"];
+const expanded = expandedKeys(baseline, previous, KEYS);
+if (expanded.length) {
+  console.error(`TypeScript DRY baseline expanded: ${expanded.join(", ")}`);
   process.exit(1);
 }
-const regressions = [];
-for (const key of ["clones", "duplicatedLines", "percentage"]) {
-  if (current[key] > baseline[key]) regressions.push(`${key}: ${current[key]} > ${baseline[key]}`);
-}
-const stale = [];
-for (const key of ["clones", "duplicatedLines", "percentage"]) {
-  if (current[key] < baseline[key]) stale.push(`${key}: ${current[key]} < ${baseline[key]}; lower the baseline`);
-}
+const { regressions, stale } = compareKeys(current, baseline, KEYS);
 if (regressions.length || stale.length) {
   console.error("TypeScript DRY ratchet violation");
   for (const item of regressions) console.error(`  new debt: ${item}`);

@@ -2,6 +2,7 @@
 import { readFileSync, readdirSync, statSync, writeFileSync } from "node:fs";
 import { join, relative, resolve } from "node:path";
 import { readPreviousBaseline } from "./baseline-history.mjs";
+import { compareIdentities, expandedKeys } from "./ratchet.mjs";
 
 const repoRoot = resolve(import.meta.dirname, "..");
 const baselinePath = resolve(repoRoot, "scripts/baselines/file-size.json");
@@ -49,14 +50,19 @@ try {
   console.error(error.message);
   process.exit(2);
 }
-if (previous && (baseline.maximum > previous.maximum || (baseline.violations ?? []).length > (previous.violations ?? []).length)) {
-  console.error("File-size baseline expanded");
+const expanded = expandedKeys(
+  { maximum: baseline.maximum, entries: (baseline.violations ?? []).length },
+  previous ? { maximum: previous.maximum, entries: (previous.violations ?? []).length } : null,
+  ["maximum", "entries"],
+);
+if (expanded.length) {
+  console.error(`File-size baseline expanded: ${expanded.join(", ")}`);
   process.exit(1);
 }
-const actual = new Set(violations.map((item) => item.identity));
-const allowed = new Set((baseline.violations ?? []).map((item) => item.identity));
-const added = [...actual].filter((item) => !allowed.has(item));
-const stale = [...allowed].filter((item) => !actual.has(item));
+const { added, stale } = compareIdentities(
+  violations.map((item) => item.identity),
+  (baseline.violations ?? []).map((item) => item.identity),
+);
 if (added.length || stale.length) {
   console.error("File-size ratchet violation");
   for (const item of added) console.error(`  new oversized file: ${item}`);

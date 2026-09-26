@@ -3,6 +3,7 @@ import { readFileSync, readdirSync, statSync, writeFileSync } from "node:fs";
 import { createRequire } from "node:module";
 import { join, relative, resolve } from "node:path";
 import { readPreviousBaseline } from "./baseline-history.mjs";
+import { compareIdentities, expandedKeys } from "./ratchet.mjs";
 
 const require = createRequire(import.meta.url);
 const ts = require("../packages/stow-s3/node_modules/typescript");
@@ -84,9 +85,6 @@ if (process.argv.includes("--baseline")) {
 }
 
 const baseline = JSON.parse(readFileSync(baselinePath, "utf8"));
-const allowed = new Set(baseline.violations ?? []);
-const newViolations = violations.filter((item) => !allowed.has(item));
-const staleEntries = [...allowed].filter((item) => !violations.includes(item));
 let previous = null;
 try {
   previous = readPreviousBaseline(repoRoot, "scripts/baselines/type-escapes.json");
@@ -94,10 +92,16 @@ try {
   console.error(error.message);
   process.exit(2);
 }
-if (previous && (baseline.violations ?? []).length > (previous.violations ?? []).length) {
-  console.error("TypeScript escape baseline increased");
+const expanded = expandedKeys(
+  { entries: (baseline.violations ?? []).length },
+  previous ? { entries: (previous.violations ?? []).length } : null,
+  ["entries"],
+);
+if (expanded.length) {
+  console.error(`TypeScript escape baseline increased: ${expanded.join(", ")}`);
   process.exit(1);
 }
+const { added: newViolations, stale: staleEntries } = compareIdentities(violations, baseline.violations ?? []);
 if (newViolations.length || staleEntries.length || forbidden.length || expectErrorsWithoutDescription.length) {
   console.error("TypeScript escape ratchet violation");
   for (const item of newViolations) console.error(`  new: ${item}`);
