@@ -179,33 +179,6 @@ func TestListObjectsV2Prefix(t *testing.T) {
 	}
 }
 
-func TestGetObjectConditionalPrecondition(t *testing.T) {
-	env := newTestEnv(t)
-	ctx := context.Background()
-	bucket := uniqueBucket(t, "get-conditional")
-	createBucket(ctx, t, env.Client, bucket)
-	put, err := env.Client.PutObject(ctx, &s3.PutObjectInput{
-		Bucket: aws.String(bucket),
-		Key:    aws.String("key"),
-		Body:   strings.NewReader("body"),
-	})
-	if err != nil {
-		t.Fatalf("PutObject: %v", err)
-	}
-	_, err = env.Client.GetObject(ctx, &s3.GetObjectInput{
-		Bucket:      aws.String(bucket),
-		Key:         aws.String("key"),
-		IfNoneMatch: put.ETag,
-	})
-	if err == nil {
-		t.Fatal("expected conditional GET failure")
-	}
-	var responseErr *smithyhttp.ResponseError
-	if !errors.As(err, &responseErr) || responseErr.HTTPStatusCode() != http.StatusPreconditionFailed {
-		t.Fatalf("expected 412, got %v", err)
-	}
-}
-
 func TestDeleteObject(t *testing.T) {
 	env := newTestEnv(t)
 	ctx := context.Background()

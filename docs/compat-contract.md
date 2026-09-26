@@ -36,6 +36,19 @@ Local mutations commit before upstream propagation. A durable per-key outbox sto
 
 The SDK profile includes atomic `If-None-Match: *` and `If-Match` conditional writes, conditional GET/HEAD validators, Content-MD5, CRC32, CRC32C, SHA-1, and SHA-256. Header names, encodings, response headers, multipart behavior, and error codes are normative in the shared corpus; unknown checksum algorithms fail clearly.
 
+Conditional **writes** and conditional **reads** do not fail the same way, and conflating them is a divergence from S3 that this contract previously carried:
+
+| Request | Condition | Response |
+|---|---|---|
+| `PUT` / `COPY` | `If-None-Match: *` and the key exists | `412 PreconditionFailed` |
+| `PUT` / `COPY` | `If-None-Match: *` and the key does not exist | `200` (the create proceeds) |
+| `PUT` | `If-Match: <etag>` and it does not match | `412 PreconditionFailed` |
+| `GET` / `HEAD` | `If-None-Match` matches the current validator | `304 Not Modified` |
+| `GET` / `HEAD` | `If-None-Match` does not match | `200` with the body |
+| `GET` / `HEAD` | `If-Match` does not match | `412 PreconditionFailed` |
+
+A matching `If-None-Match` on a read is a **successful answer carrying no body**, not a failed request. AWS S3 and MinIO both return `304`, and `aws-sdk-go-v2` surfaces it as a `NotModified` API error with `StatusCode: 304` rather than as a `GetObjectOutput` — so a client written against real S3 already knows to expect that shape. The corpus case `conditional-get-if-none-match-not-modified` pins the **status only**. A 304 carries no body and therefore no S3 error code, so the name each SDK invents is its own artifact rather than a wire property: `aws-sdk-go-v2` reports `NotModified`, `@aws-sdk/client-s3` reports `Unknown`. Pinning either would make the shared corpus unsatisfiable by the other runtime, and it is shared precisely so that every runtime is held to the same observable behaviour.
+
 ### 0.6 Backends and versioning
 
 Filesystem is the default. Memory is an explicitly selected ephemeral backend with the same behavioral contract. The old sidecar format is not migrated; startup warns and continues with the new atomic format. The package is 0.2.0 while the package remains pre-1.0; the existing major-version rule is amended as recorded in ADR 0002. The npm version, binary version, and status version use one source.

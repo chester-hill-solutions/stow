@@ -125,7 +125,7 @@
       }
     },
     {
-      "id": "conditional-get-if-none-match-rejects-existing",
+      "id": "conditional-get-if-none-match-not-modified",
       "operation": "conditionalGet",
       "bucket": "contract-conditional-get",
       "key": "key.txt",
@@ -138,8 +138,7 @@
         }
       ],
       "expect": {
-        "status": 412,
-        "errorCode": "PreconditionFailed"
+        "status": 304
       }
     },
     {

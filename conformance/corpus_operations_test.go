@@ -107,7 +107,12 @@ func runCorpusConditionalGet(corpusContext *sharedCorpusContext) {
 		IfMatch:     optionalString(testCase.IfMatch),
 		IfNoneMatch: optionalString(testCase.IfNoneMatch),
 	})
-	if testCase.Expect.Status >= http.StatusBadRequest {
+	// Anything other than 200 arrives from the SDK as an error, and 304 is the
+	// case that is easy to get wrong: Not Modified is a successful answer that
+	// carries no body, so the SDK reports it as a NotModified API error rather
+	// than a GetObjectOutput. Measured against aws-sdk-go-v2, which is also what
+	// a caller of a real S3 endpoint sees.
+	if testCase.Expect.Status != http.StatusOK {
 		assertCorpusError(corpusContext.t, err, testCase.Expect)
 		return
 	}

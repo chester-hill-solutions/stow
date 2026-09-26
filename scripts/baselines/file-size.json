@@ -2,8 +2,8 @@
   "maximum": 500,
   "violations": [
     {
-      "identity": "conformance/local_test.go:784",
-      "lines": 784
+      "identity": "conformance/local_test.go:757",
+      "lines": 757
     }
   ]
 }

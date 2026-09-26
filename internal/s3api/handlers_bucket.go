@@ -9,7 +9,6 @@ import (
 	"net/url"
 	"strconv"
 	"strings"
-	"time"
 
 	"github.com/chester-hill-solutions/stow-s3/internal/storage"
 )
@@ -203,6 +202,13 @@ func (s *Server) handleGetObject(ctx context.Context, w http.ResponseWriter, r *
 	}
 	defer rc.Close()
 	if err := checkReadPreconditions(r.Header, meta); err != nil {
+		if errors.Is(err, errNotModified) {
+			// Validators only. A 304 has no body, so the representation
+			// metadata that describes one must not be sent with it.
+			setValidators(w, meta)
+			w.WriteHeader(http.StatusNotModified)
+			return
+		}
 		writeError(w, r, mapStorageError(err, resourcePath(bucket, key)))
 		return
 	}
@@ -227,6 +233,13 @@ func (s *Server) handleHeadObject(ctx context.Context, w http.ResponseWriter, r 
 		return
 	}
 	if err := checkReadPreconditions(r.Header, meta); err != nil {
+		if errors.Is(err, errNotModified) {
+			// Validators only. A 304 has no body, so the representation
+			// metadata that describes one must not be sent with it.
+			setValidators(w, meta)
+			w.WriteHeader(http.StatusNotModified)
+			return
+		}
 		writeError(w, r, mapStorageError(err, resourcePath(bucket, key)))
 		return
 	}
@@ -332,151 +345,4 @@ func (s *Server) handleCopyObject(ctx context.Context, w http.ResponseWriter, r 
 		LastModified: formatTime(meta.LastModified),
 		ETag:         meta.ETag,
 	})
-}
-
-func setChecksumHeader(w http.ResponseWriter, meta *storage.ObjectMeta) {
-	if meta.ChecksumAlgorithm == "" || meta.ChecksumValue == "" {
-		return
-	}
-	w.Header().Set("x-amz-checksum-"+strings.ToLower(meta.ChecksumAlgorithm), meta.ChecksumValue)
-}
-
-func setObjectHeaders(w http.ResponseWriter, meta *storage.ObjectMeta) {
-	if meta.ContentType != "" {
-		w.Header().Set("Content-Type", meta.ContentType)
-	} else {
-		w.Header().Set("Content-Type", "application/octet-stream")
-	}
-	w.Header().Set("Content-Length", strconv.FormatInt(meta.Size, 10))
-	w.Header().Set("ETag", meta.ETag)
-	setChecksumHeader(w, meta)
-	w.Header().Set("Last-Modified", meta.LastModified.UTC().Format(http.TimeFormat))
-	for k, v := range meta.Metadata {
-		w.Header().Set(k, v)
-	}
-}
-
-func extractMetadata(h http.Header) map[string]string {
-	out := make(map[string]string)
-	for k, vals := range h {
-		lower := strings.ToLower(k)
-		if strings.HasPrefix(lower, "x-amz-meta-") {
-			out[k] = vals[0]
-		}
-	}
-	if len(out) == 0 {
-		return nil
-	}
-	return out
-}
-
-func metadataSize(m map[string]string) int {
-	n := 0
-	for k, v := range m {
-		n += len(k) + len(v)
-	}
-	return n
-}
-
-func validBucketName(name string) bool {
-	return storage.ValidBucketName(name)
-}
-
-func parseCopySource(src string) (bucket, key string, err error) {
-	src = strings.TrimPrefix(src, "/")
-	parts := strings.SplitN(src, "/", 2)
-	if len(parts) != 2 {
-		return "", "", errInvalidCopySource
-	}
-	return parts[0], parts[1], nil
-}
-
-var errInvalidCopySource = &copySourceError{"Invalid copy source"}
-
-type copySourceError struct{ msg string }
-
-func (e *copySourceError) Error() string { return e.msg }
-
-func etagHeaderMatchesStrong(header, actual string) bool {
-	return etagHeaderMatchesMode(header, actual, false)
-}
-
-func etagHeaderMatchesWeak(header, actual string) bool {
-	return etagHeaderMatchesMode(header, actual, true)
-}
-
-func etagHeaderMatchesMode(header, actual string, weak bool) bool {
-	for _, candidate := range strings.Split(header, ",") {
-		candidate = strings.TrimSpace(candidate)
-		if candidate == "*" {
-			return true
-		}
-		candidateValue := candidate
-		if strings.HasPrefix(strings.ToLower(candidateValue), "w/") {
-			if !weak {
-				continue
-			}
-			candidateValue = candidateValue[2:]
-		}
-		if strings.EqualFold(strings.Trim(candidateValue, "\""), strings.Trim(actual, "\"")) {
-			return true
-		}
-	}
-	return false
-}
-
-func checkReadPreconditions(h http.Header, meta *storage.ObjectMeta) error {
-	if match := h.Get("If-Match"); match != "" && !etagHeaderMatchesStrong(match, meta.ETag) {
-		return storage.ErrPreconditionFailed
-	}
-	if noneMatch := h.Get("If-None-Match"); noneMatch != "" && etagHeaderMatchesWeak(noneMatch, meta.ETag) {
-		return storage.ErrPreconditionFailed
-	}
-	if raw := h.Get("If-Modified-Since"); raw != "" {
-		when, err := time.Parse(http.TimeFormat, raw)
-		if err != nil {
-			return storage.ErrPreconditionFailed
-		}
-		if !meta.LastModified.After(when) {
-			return storage.ErrPreconditionFailed
-		}
-	}
-	if raw := h.Get("If-Unmodified-Since"); raw != "" {
-		when, err := time.Parse(http.TimeFormat, raw)
-		if err != nil {
-			return storage.ErrPreconditionFailed
-		}
-		if meta.LastModified.After(when) {
-			return storage.ErrPreconditionFailed
-		}
-	}
-	return nil
-}
-
-func checkCopyPreconditions(h http.Header, meta *storage.ObjectMeta) error {
-	if match := h.Get("x-amz-copy-source-if-match"); match != "" && !etagHeaderMatchesStrong(match, meta.ETag) {
-		return storage.ErrPreconditionFailed
-	}
-	if noneMatch := h.Get("x-amz-copy-source-if-none-match"); noneMatch != "" && etagHeaderMatchesWeak(noneMatch, meta.ETag) {
-		return storage.ErrPreconditionFailed
-	}
-	if raw := h.Get("x-amz-copy-source-if-modified-since"); raw != "" {
-		when, err := time.Parse(http.TimeFormat, raw)
-		if err != nil {
-			return storage.ErrPreconditionFailed
-		}
-		if !meta.LastModified.After(when) {
-			return storage.ErrPreconditionFailed
-		}
-	}
-	if raw := h.Get("x-amz-copy-source-if-unmodified-since"); raw != "" {
-		when, err := time.Parse(http.TimeFormat, raw)
-		if err != nil {
-			return storage.ErrPreconditionFailed
-		}
-		if meta.LastModified.After(when) {
-			return storage.ErrPreconditionFailed
-		}
-	}
-	return nil
 }

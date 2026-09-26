@@ -92,7 +92,16 @@ jobs:
       - name: Build binary and WASM artifact
         run: make build build-wasm
       - name: Install package dependencies
-        run: npm ci
+        # --omit=optional, matching make test-node. The four platform carrier
+        # packages are the only optionalDependencies and they are installed for a
+        # consumer, never in this tree: the release packs them from build
+        # artifacts. A plain `npm ci` installs them anyway, and
+        # resolveStowBinary checks findBundledBinary() FIRST, so the suite would
+        # silently test the published binary instead of the one just built from
+        # this branch. It did, for as long as this line said `npm ci` - a change
+        # to the server could not fail the TypeScript suite, which is the worst
+        # property a gate can have.
+        run: npm ci --omit=optional
         working-directory: packages/stow-s3
       - name: Build and test package
         run: npm test

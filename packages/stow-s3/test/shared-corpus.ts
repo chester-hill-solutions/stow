@@ -154,7 +154,12 @@ async function runConditionalGet(client: S3Client, testCase: CorpusCase): Promis
     IfMatch: testCase.ifMatch,
     IfNoneMatch: testCase.ifNoneMatch,
   }));
-  if (testCase.expect.status >= 400) {
+  // Anything other than 200 arrives as an error, and 304 is the case that is
+  // easy to get wrong: Not Modified is a successful answer carrying no body, so
+  // the SDK reports it rather than returning a GetObjectOutput. Verified
+  // against @aws-sdk/client-s3, which is also what a caller of a real S3
+  // endpoint sees.
+  if (testCase.expect.status !== 200) {
     await assertCorpusError(action, testCase.expect);
     return;
   }
