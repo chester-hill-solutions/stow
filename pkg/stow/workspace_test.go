@@ -195,6 +195,66 @@ func TestOpenWorkspaceRequiresADirectory(t *testing.T) {
 	}
 }
 
+// A read-only authority can open a workspace, and the workspace it gets genuinely
+// refuses to change anything.
+//
+// The workspace bucket is bootstrapped during construction, so it must not be
+// evaluated against the grant being issued - otherwise ReadOnly, which withholds
+// bucket.create, cannot open a workspace at all. Both halves are asserted,
+// because opening is necessary and not sufficient: widening ReadOnly to include
+// bucket.create would satisfy the first half and hand a read-only workspace the
+// ability to create buckets.
+func TestOpenWorkspaceAcceptsAReadOnlyAuthorityAndRefusesWrites(t *testing.T) {
+	dir := t.TempDir()
+	readOnly := stow.ReadOnly()
+
+	ws, err := stow.OpenWorkspace(stow.WorkspaceOptions{Dir: dir, Authority: &readOnly})
+	if err != nil {
+		t.Fatalf("OpenWorkspace with a read-only authority: %v", err)
+	}
+	defer func() {
+		if err := ws.Close(); err != nil {
+			t.Errorf("close workspace: %v", err)
+		}
+	}()
+
+	ctx := context.Background()
+
+	// The workspace is usable: its own bucket exists and can be read.
+	if _, err := ws.ListObjects(ctx, ws.Bucket(), stow.ListOptions{}); err != nil {
+		t.Errorf("ListObjects on a read-only workspace = %v, want success", err)
+	}
+
+	// A file the host wrote is readable, which is the half of the promise that
+	// matters: an agent that can only read is still useful.
+	path := filepath.Join(dir, "output", "report.txt")
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	if err := os.WriteFile(path, []byte("written by the host"), 0o644); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	object, err := ws.GetObject(ctx, ws.Bucket(), "output/report.txt")
+	if err != nil {
+		t.Fatalf("GetObject on a host-written file through a read-only workspace: %v", err)
+	}
+	if string(object.Data) != "written by the host" {
+		t.Errorf("GetObject = %q, want %q", object.Data, "written by the host")
+	}
+
+	// And it cannot change anything. Put, delete, and bucket creation are each
+	// refused, because a grant that leaks one of them leaks the read-only claim.
+	if _, err := ws.PutObject(ctx, ws.Bucket(), "written.txt", []byte("x"), stow.PutOptions{}); err == nil {
+		t.Error("PutObject succeeded through a read-only workspace")
+	}
+	if err := ws.DeleteObject(ctx, ws.Bucket(), "output/report.txt"); err == nil {
+		t.Error("DeleteObject succeeded through a read-only workspace")
+	}
+	if err := ws.CreateBucket(ctx, "another"); err == nil {
+		t.Error("CreateBucket succeeded through a read-only workspace")
+	}
+}
+
 // TestOpenRefusesTheWorkspaceBackend closes the trap the API is shaped to
 // avoid: there is a BackendWorkspace constant, and Open cannot serve it, so it
 // says so rather than handing back a memory runtime that would lose the bytes.

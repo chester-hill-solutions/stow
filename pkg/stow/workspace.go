@@ -132,7 +132,18 @@ func OpenWorkspace(options WorkspaceOptions) (*Workspace, error) {
 		session: session,
 	}
 	ws.now = options.Now
-	if err := ws.Runtime.CreateBucket(context.Background(), ws.bucket); err != nil {
+	// The workspace bucket is bootstrapped through the store rather than through
+	// the runtime, because it is a construction step and not a caller operation.
+	// The runtime carries the authority the caller asked for, so routing this
+	// through it would evaluate the grant against the act of issuing it - and a
+	// read-only authority, which withholds bucket.create, could not open a
+	// workspace at all.
+	//
+	// The store returns early for the workspace bucket, so this materialises
+	// nothing; it only keeps the grant from being consulted about a bucket the
+	// workspace is made of. Widening ReadOnly instead would hand a read-only
+	// workspace the ability to create buckets it has no use for.
+	if err := store.CreateBucket(context.Background(), ws.bucket); err != nil {
 		_ = ws.Close()
 		return nil, fmt.Errorf("stow: create workspace bucket: %w", err)
 	}
