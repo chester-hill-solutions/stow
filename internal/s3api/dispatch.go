@@ -5,6 +5,8 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
+
+	"github.com/chester-hill-solutions/stow-s3/internal/storage"
 )
 
 func (s *Server) dispatch(ctx context.Context, w http.ResponseWriter, r *http.Request, route routeInfo) {
@@ -54,6 +56,9 @@ func (s *Server) dispatchBucket(ctx context.Context, w http.ResponseWriter, r *h
 			return
 		}
 		if q.Has("uploads") {
+			if s.requireMultipart(w, r, "/"+bucket) {
+				return
+			}
 			s.handleListMultipartUploads(ctx, w, r, bucket, q)
 			return
 		}
@@ -94,6 +99,12 @@ func (s *Server) dispatchObject(ctx context.Context, w http.ResponseWriter, r *h
 
 func (s *Server) dispatchMultipartObject(ctx context.Context, w http.ResponseWriter, r *http.Request, route routeInfo) bool {
 	q := r.URL.Query()
+	if !isMultipartRequest(r, q) {
+		return false
+	}
+	if s.requireMultipart(w, r, resourcePath(route.bucket, route.key)) {
+		return true
+	}
 	bucket, key := route.bucket, route.key
 	if r.Method == http.MethodPost && q.Has("uploads") {
 		s.handleCreateMultipartUpload(ctx, w, r, bucket, key)
@@ -116,6 +127,28 @@ func (s *Server) dispatchMultipartObject(ctx context.Context, w http.ResponseWri
 		return true
 	}
 	return false
+}
+
+// isMultipartRequest reports whether a request addresses an upload rather than
+// the object itself, so a store without multipart can be refused before the
+// route is dispatched.
+func isMultipartRequest(r *http.Request, q url.Values) bool {
+	if q.Has("uploadId") {
+		return true
+	}
+	return r.Method == http.MethodPost && q.Has("uploads") ||
+		r.Method == http.MethodPut && q.Has("partNumber")
+}
+
+// requireMultipart writes the refusal and reports whether it did. The capability
+// is read from the store, so the answer is known before a byte is read rather
+// than partway through an upload.
+func (s *Server) requireMultipart(w http.ResponseWriter, r *http.Request, resource string) bool {
+	if s.multipart != nil {
+		return false
+	}
+	writeError(w, r, mapStorageError(storage.ErrMultipartUnsupported, resource))
+	return true
 }
 
 func unsupportedSemanticMarker(r *http.Request, q url.Values) (code, message string, ok bool) {

@@ -3,8 +3,6 @@ package stow
 import (
 	"errors"
 	"time"
-
-	"github.com/chester-hill-solutions/stow-s3/internal/authority"
 )
 
 type Backend string
@@ -39,9 +37,13 @@ type Options struct {
 	// Authority is what this environment permits, enforced below every
 	// interface so an embedded caller and an S3 client are granted the same
 	// things. A nil pointer permits everything, which is what an embedded
-	// runtime has always done; pass &authority.None() to start with nothing and
-	// grant as you go.
-	Authority *authority.Authority
+	// runtime has always done.
+	//
+	// To start with nothing and grant as you go, take the address of a value:
+	//
+	//	readOnly := stow.ReadOnly()
+	//	rt, err := stow.Open(stow.Options{Authority: &readOnly})
+	Authority *Authority
 }
 
 type Capabilities struct {

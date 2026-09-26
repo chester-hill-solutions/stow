@@ -35,12 +35,12 @@ func Open(options Options) (*Runtime, error) {
 		// Reset is not offered for a supplied store. It would have to rebuild
 		// something the caller owns, and "empty the caller's storage" is not a
 		// reasonable thing to do to a directory somebody handed you.
-		// The store knows whether it can serve multipart, and the environment
-		// reports that rather than being told true by the constructor it
-		// happened to be opened with.
-		runtimeOptions.DisableMultipart = !suppliesMultipart(options.Store)
+		//
+		// Whether the store can serve multipart is not passed here: adaptStore
+		// returns a value that implements the internal MultipartStore only when
+		// the caller's does, and the runtime discovers that by asking.
 		instance, err = stowruntime.OpenWithStore(
-			runtimeOptions, &storeAdapter{store: options.Store}, nil,
+			runtimeOptions, adaptStore(options.Store), nil,
 		)
 	}
 	if err != nil {

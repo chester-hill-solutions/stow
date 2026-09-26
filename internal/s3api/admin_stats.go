@@ -26,7 +26,12 @@ func listAllAdminObjects(ctx context.Context, store storage.Store, bucket string
 	}
 }
 
-func listAllAdminUploads(ctx context.Context, store storage.Store, bucket string) ([]storage.MultipartUpload, error) {
+// listAllAdminUploads pages every in-flight upload in a bucket. A store that
+// cannot serve multipart has none, which is a count of zero rather than a fault.
+func listAllAdminUploads(ctx context.Context, store storage.MultipartStore, bucket string) ([]storage.MultipartUpload, error) {
+	if store == nil {
+		return nil, nil
+	}
 	var uploads []storage.MultipartUpload
 	keyMarker := ""
 	uploadIDMarker := ""

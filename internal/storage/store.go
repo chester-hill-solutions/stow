@@ -5,7 +5,11 @@ import (
 	"io"
 )
 
-// Store is the core object storage interface.
+// Store is the core object storage interface: the object model, and nothing else.
+//
+// Multipart is deliberately not a member. It is how one protocol happens to
+// stream an object larger than memory, and requiring it of every store put that
+// protocol's shape into the object model. It is the optional interface below.
 type Store interface {
 	CreateBucket(ctx context.Context, name string) error
 	DeleteBucket(ctx context.Context, name string) error
@@ -20,6 +24,16 @@ type Store interface {
 	CopyObject(ctx context.Context, srcBucket, srcKey, dstBucket, dstKey string) (*ObjectMeta, error)
 	ListObjectsV2(ctx context.Context, bucket string, opts ListOptions) (*ListResult, error)
 
+	Close() error
+}
+
+// MultipartStore is the optional extension: a store that can stream an object
+// larger than memory.
+//
+// It is whole rather than write-only because a consumer that reconciles in-flight
+// uploads when it opens must be able to ask what is in flight. A write-only
+// implementation would force the reader to invent that answer.
+type MultipartStore interface {
 	CreateMultipartUpload(ctx context.Context, bucket, key string) (*MultipartUpload, error)
 	GetMultipartUpload(ctx context.Context, uploadID string) (*MultipartUpload, error)
 	UploadPart(ctx context.Context, uploadID string, partNumber int, body io.Reader) (*PartInfo, error)
@@ -28,5 +42,4 @@ type Store interface {
 	ListParts(ctx context.Context, uploadID string) ([]PartInfo, error)
 	ValidateMultipartUpload(ctx context.Context, uploadID, bucket, key string) error
 	ListMultipartUploads(ctx context.Context, bucket string, opts MultipartListOptions) (*MultipartListResult, error)
-	Close() error
 }

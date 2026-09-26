@@ -78,7 +78,7 @@ Three reorderings against the 15-phase list:
 | Read-through never reads through | `internal/runthrough/adapter.go:305`; measured: upstream-only bucket → `bucket not found`, 0 upstream calls | 23% of production Go is non-functional. W9 blocked. |
 | Quotas blind to upstream | `internal/runtime/state.go:98` walks the store, which in production *is* the run-through adapter | Startup can return `ErrQuotaExceeded` because of upstream state. |
 | Only 1 of 3 stores verifies checksums | `workspace/objects.go:54` calls `verifyChecksum`; `memory.go` and `fs/fs.go` have **zero** occurrences | A corrupt body is accepted by two of three stores. **Shipping.** |
-| Capability duplication | `cmd/stow-s3/main.go:70-77` recomputes `Persistent`/`Multipart`/`Upstream`; `runtime/instance.go:80` already computes them; `runtime.Capabilities` never consulted | Invariant 6 implemented by assuming. Also readiness hardcodes `Multipart: true` where `pkg/stow` passes `false`. |
+| Capability duplication | `cmd/stow-s3/main.go:70-77` recomputes `Persistent`/`Multipart`/`Upstream`; `runtime/instance.go:80` already computes them; `runtime.Capabilities` never consulted | Invariant 6 implemented by assuming. Also readiness hardcodes `Multipart: true` where `pkg/stow` passes `false`. **Fixed:** `bindNativeRuntimeStore` returns `runtime.Capabilities` and the payload reports them; `isPersistentBackend` is unexported again. |
 | Two clients, two backends | `session.ts:117` `memory` vs `session.py:253` `filesystem` | §9 cross-runtime conformance is currently unreachable. |
 | `ListPartsPage` outside the interface | Not in `storage.Store`; found by assertion at `runtime/multipart.go:104`; `runthrough.Adapter` lacks it | Run-through silently takes unbounded-memory pagination. Contract suite asserts a property the interface doesn't have. |
 | S3 conditional writes | Open issue **#11**: `If-None-Match: *` returns 200, silently overwriting | Correctness bug in the advertised surface. |
@@ -132,7 +132,19 @@ SigV4 authenticates, then maps the authenticated principal to an `Authority`.
 - an operation refused for a given `Authority` is refused identically through S3, native, and WASM
 - `DevBypass` (`internal/s3api/auth.go:14`) cannot widen authority
 - a test asserts the native path refuses what the S3 path refuses
+
 **Blocks:** M1.4, M2.1, M2.4, M3.1, M4.1. **Effort:** 3–4 days.
+**Status: enforcement point and one reachable narrowing knob. Not a per-principal
+translator.** `runtime.Instance` holds one `Authority` for the whole environment
+and `s3api.AuthFunc` is `func(*http.Request) error` — it authenticates without
+surfacing a principal. A per-request `Authority` therefore needs either a
+per-request environment (M3.1) or a second predicate in the adapter, and the
+second is what this item exists to remove. What landed instead: `--read-only` on
+`stow-s3 serve`, which narrows the environment to `authority.ReadOnly()` and is
+enforced below every interface, so the S3 surface, an in-process caller and the
+admin surface are refused alike. The 403 mapping in `s3api/errors.go` is
+reachable in production as a result. Treat the hole as **narrowed, not closed**:
+an operator can now turn authority down, and cannot yet vary it per caller.
 **Note:** the invariant is `Allowed(op) = Environment.Authority.Allows(op)`.
 One predicate, called below the interfaces, never in an adapter.
 

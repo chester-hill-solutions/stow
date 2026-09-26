@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/chester-hill-solutions/stow-s3/internal/auth"
+	"github.com/chester-hill-solutions/stow-s3/internal/authority"
 	"github.com/chester-hill-solutions/stow-s3/internal/parentwatch"
 	"github.com/chester-hill-solutions/stow-s3/internal/ready"
 	"github.com/chester-hill-solutions/stow-s3/internal/runthrough"
@@ -27,12 +28,13 @@ import (
 
 // readyDetails is what the readiness announcement needs to describe the server.
 type readyDetails struct {
-	endpoint string
-	mode     string
-	backend  runtime.Backend
-	limits   nativeStorageLimits
-	creds    auth.Credentials
-	banner   string
+	endpoint     string
+	mode         string
+	backend      runtime.Backend
+	capabilities runtime.Capabilities
+	limits       nativeStorageLimits
+	creds        auth.Credentials
+	banner       string
 	// region is the region the server actually verifies signatures against, so
 	// a client that honors the reported region signs correctly.
 	region string
@@ -59,7 +61,13 @@ func announceStartup(readyFd int, details readyDetails) {
 }
 
 func writeReadyMessage(fd int, details readyDetails) {
-	message := ready.New(ready.Input{
+	if err := ready.WriteToFd(fd, readyMessage(details)); err != nil {
+		log.Fatalf("write ready message: %v", err)
+	}
+}
+
+func readyMessage(details readyDetails) ready.Message {
+	return ready.New(ready.Input{
 		Endpoint:      details.endpoint,
 		Region:        details.region,
 		AccessKeyID:   details.creds.AccessKeyID,
@@ -68,12 +76,11 @@ func writeReadyMessage(fd int, details readyDetails) {
 		Backend:       string(details.backend),
 		BinaryVersion: version.Version,
 		Capabilities: ready.Capabilities{
-			// The runtime's own predicate, not a comparison of the flag string.
-			// These two agreed only because the CLI could select two backends;
-			// a third backend is exactly where a private string comparison
-			// starts lying.
-			Persistent:        runtime.IsPersistentBackend(details.backend),
-			Multipart:         true,
+			// The runtime's own answers. It used to publish a persistence claim of
+			// its own and a hardcoded multipart=true beside it, and the two agreed
+			// only because the CLI could select two backends.
+			Persistent:        details.capabilities.Persistent,
+			Multipart:         details.capabilities.Multipart,
 			Upstream:          details.mode == string(runthrough.ModeRunThrough),
 			ConditionalWrites: true,
 			PresignedURLs:     true,
@@ -82,9 +89,6 @@ func writeReadyMessage(fd int, details readyDetails) {
 			MaxRequestBytes:   s3api.DefaultMaxRequestBytes,
 		},
 	})
-	if err := ready.WriteToFd(fd, message); err != nil {
-		log.Fatalf("write ready message: %v", err)
-	}
 }
 
 // parseBackend is the one place the --backend flag becomes a typed backend.
@@ -245,6 +249,7 @@ func serve(args []string) {
 	modeFlag := flags.String("mode", "auto", "Operational mode: local, run-through, or auto (default)")
 	regionFlag := flags.String("region", auth.DefaultRegion, "Region the server verifies signatures against and reports in the readiness message")
 	allowLiveWrites := flags.Bool("allow-live-writes", false, "Propagate writes to upstream S3")
+	readOnly := flags.Bool("read-only", false, "Serve reads and lists only: writes, deletes, bucket changes and upstream access are refused")
 	cacheDir := flags.String("cache-dir", "", "Run-through cache directory (default: <data-dir>/cache)")
 	cacheMaxBytes := flags.Int64("cache-max-bytes", -1, "Maximum separate cache bytes (0 disables the limit; -1 uses environment)")
 	cacheMaxObjects := flags.Int64("cache-max-objects", -1, "Maximum separate cache objects (0 disables the limit; -1 uses environment)")
@@ -289,6 +294,16 @@ func serve(args []string) {
 	if err != nil {
 		log.Fatal(err)
 	}
+	// The environment's authority, decided once here and enforced by the runtime
+	// below every interface, so a read-only server refuses writes for an S3
+	// client, an in-process caller and the admin surface alike. A nil pointer
+	// permits everything, which is what this server has always done.
+	var granted *authority.Authority
+	if *readOnly {
+		narrowed := authority.ReadOnly()
+		granted = &narrowed
+		log.Printf("read-only: writes, deletes, bucket changes and upstream access are refused")
+	}
 	if err := validateLiveWriteBackend(mode, backend, rtCfg); err != nil {
 		log.Fatal(err)
 	}
@@ -309,7 +324,7 @@ func serve(args []string) {
 	}
 
 	storeLimits := nativeStorageLimits{maxBytes: *maxBytes, maxObjects: *maxObjects}
-	boundStore, err := bindNativeRuntimeStore(store, backend, adapter, storeLimits)
+	boundStore, capabilities, err := bindNativeRuntimeStore(store, backend, adapter, storeLimits, granted)
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -382,13 +397,14 @@ func serve(args []string) {
 
 	endpoint := "http://" + addr
 	announceStartup(*readyFd, readyDetails{
-		endpoint: endpoint,
-		mode:     string(mode),
-		backend:  backend,
-		limits:   storeLimits,
-		creds:    creds,
-		banner:   runthrough.StartupBanner(rtCfg, mode),
-		region:   region,
+		endpoint:     endpoint,
+		mode:         string(mode),
+		backend:      backend,
+		capabilities: capabilities,
+		limits:       storeLimits,
+		creds:        creds,
+		banner:       runthrough.StartupBanner(rtCfg, mode),
+		region:       region,
 	})
 
 	sigCh := make(chan os.Signal, 1)

@@ -226,7 +226,7 @@ func (s *Server) writeInspect(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		count := len(objects)
-		uploads, uploadErr := listAllAdminUploads(ctx, s.store, b.Name)
+		uploads, uploadErr := listAllAdminUploads(ctx, s.multipart, b.Name)
 		if uploadErr != nil {
 			writeAdminError(w, http.StatusInternalServerError, "inspection is temporarily unavailable")
 			return
@@ -345,7 +345,7 @@ func (s *Server) writeMetrics(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	for _, bucket := range buckets {
-		uploads, err := listAllAdminUploads(r.Context(), s.store, bucket.Name)
+		uploads, err := listAllAdminUploads(r.Context(), s.multipart, bucket.Name)
 		if err != nil {
 			writeAdminError(w, http.StatusInternalServerError, "metrics are temporarily unavailable")
 			return

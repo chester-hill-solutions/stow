@@ -59,6 +59,7 @@ type Config struct {
 type Server struct {
 	config     Config
 	store      storage.Store
+	multipart  storage.MultipartStore
 	auth       AuthFunc
 	httpServer *http.Server
 	listener   net.Listener
@@ -96,9 +97,11 @@ func New(cfg Config) (*Server, error) {
 		cfg.MaxRequestBytes = DefaultMaxRequestBytes
 	}
 	authFn := cfg.Auth
+	multipart, _ := cfg.Store.(storage.MultipartStore)
 	return &Server{
 		config:    cfg,
 		store:     cfg.Store,
+		multipart: multipart,
 		auth:      authFn,
 		baseHost:  baseHost,
 		ready:     make(chan struct{}),
