@@ -17,6 +17,7 @@ func Open(options Options) (*Runtime, error) {
 		Backend:    stowruntime.Backend(options.Backend),
 		MaxBytes:   options.MaxBytes,
 		MaxObjects: options.MaxObjects,
+		Authority:  options.Authority,
 	})
 	if err != nil {
 		return nil, mapError(err)
@@ -115,6 +116,9 @@ func (r *Runtime) Usage() Usage {
 	usage := r.inner.Usage()
 	return Usage{Bytes: usage.Bytes, Objects: usage.Objects}
 }
+
+// Authority reports what this environment permits.
+func (r *Runtime) Authority() Authority { return r.inner.Authority() }
 
 func (r *Runtime) Capabilities() Capabilities {
 	capabilities := r.inner.Capabilities()

@@ -54,6 +54,12 @@ type WorkspaceOptions struct {
 	// the bound.
 	MaxBytes   int64
 	MaxObjects int64
+	// Authority is what the workspace permits, enforced below every interface so
+	// the filesystem surface and the S3 surface cannot be granted different
+	// things. A nil pointer permits everything, which is what a workspace has
+	// always done; pass &stow.ReadOnly() to hand out a workspace an agent can
+	// read but not change.
+	Authority *Authority
 	// TTL is the collection window the workspace records for itself. A later
 	// collector reclaims a workspace whose session is gone; until that exists
 	// the value is recorded in the workspace manifest and honoured by nothing,
@@ -98,6 +104,7 @@ func OpenWorkspace(options WorkspaceOptions) (*Workspace, error) {
 		Backend:    runtime.BackendWorkspace,
 		MaxBytes:   options.MaxBytes,
 		MaxObjects: options.MaxObjects,
+		Authority:  options.Authority,
 	}, store, nil)
 	if err != nil {
 		_ = store.Close()

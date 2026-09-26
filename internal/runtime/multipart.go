@@ -5,11 +5,15 @@ import (
 	"context"
 	"io"
 
+	"github.com/chester-hill-solutions/stow-s3/internal/authority"
 	"github.com/chester-hill-solutions/stow-s3/internal/storage"
 )
 
 func (i *Instance) CreateMultipartUpload(ctx context.Context, bucket, key string) (*storage.MultipartUpload, error) {
 	if err := i.checkContext(ctx); err != nil {
+		return nil, err
+	}
+	if err := i.check(authority.ObjectWrite); err != nil {
 		return nil, err
 	}
 	i.mu.Lock()
@@ -47,6 +51,9 @@ func (i *Instance) GetMultipartUpload(ctx context.Context, uploadID string) (*st
 	if err := i.checkContext(ctx); err != nil {
 		return nil, err
 	}
+	if err := i.check(authority.ObjectRead); err != nil {
+		return nil, err
+	}
 	i.mu.Lock()
 	defer i.mu.Unlock()
 	if err := i.checkMultipartOpen(); err != nil {
@@ -62,6 +69,9 @@ func (i *Instance) GetMultipartUpload(ctx context.Context, uploadID string) (*st
 
 func (i *Instance) UploadPart(ctx context.Context, uploadID string, partNumber int, body io.Reader) (*storage.PartInfo, error) {
 	if err := i.checkContext(ctx); err != nil {
+		return nil, err
+	}
+	if err := i.check(authority.ObjectWrite); err != nil {
 		return nil, err
 	}
 	data, err := io.ReadAll(body)
@@ -96,6 +106,9 @@ func (i *Instance) ListPartsPage(ctx context.Context, uploadID string, opts stor
 	if err := i.checkContext(ctx); err != nil {
 		return nil, err
 	}
+	if err := i.check(authority.ObjectRead); err != nil {
+		return nil, err
+	}
 	i.mu.Lock()
 	defer i.mu.Unlock()
 	if err := i.checkMultipartOpen(); err != nil {
@@ -121,6 +134,9 @@ func (i *Instance) ListPartsPage(ctx context.Context, uploadID string, opts stor
 
 func (i *Instance) CompleteMultipartUpload(ctx context.Context, uploadID string, parts []storage.PartInfo) (*storage.ObjectMeta, error) {
 	if err := i.checkContext(ctx); err != nil {
+		return nil, err
+	}
+	if err := i.check(authority.ObjectWrite); err != nil {
 		return nil, err
 	}
 	i.mu.Lock()
@@ -175,6 +191,9 @@ func (i *Instance) AbortMultipartUpload(ctx context.Context, uploadID string) er
 	if err := i.checkContext(ctx); err != nil {
 		return err
 	}
+	if err := i.check(authority.ObjectWrite); err != nil {
+		return err
+	}
 	i.mu.Lock()
 	defer i.mu.Unlock()
 	if err := i.checkMultipartOpen(); err != nil {
@@ -200,6 +219,9 @@ func (i *Instance) ListParts(ctx context.Context, uploadID string) ([]storage.Pa
 	if err := i.checkContext(ctx); err != nil {
 		return nil, err
 	}
+	if err := i.check(authority.ObjectRead); err != nil {
+		return nil, err
+	}
 	i.mu.Lock()
 	defer i.mu.Unlock()
 	if err := i.checkMultipartOpen(); err != nil {
@@ -216,6 +238,9 @@ func (i *Instance) ValidateMultipartUpload(ctx context.Context, uploadID, bucket
 	if err := i.checkContext(ctx); err != nil {
 		return err
 	}
+	if err := i.check(authority.ObjectRead); err != nil {
+		return err
+	}
 	i.mu.Lock()
 	defer i.mu.Unlock()
 	if err := i.checkMultipartOpen(); err != nil {
@@ -226,6 +251,9 @@ func (i *Instance) ValidateMultipartUpload(ctx context.Context, uploadID, bucket
 
 func (i *Instance) ListMultipartUploads(ctx context.Context, bucket string, opts storage.MultipartListOptions) (*storage.MultipartListResult, error) {
 	if err := i.checkContext(ctx); err != nil {
+		return nil, err
+	}
+	if err := i.check(authority.ObjectList); err != nil {
 		return nil, err
 	}
 	i.mu.Lock()
