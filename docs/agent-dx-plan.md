@@ -557,10 +557,14 @@ W14 honest rather than a status table.
 ### What a new session should read first
 
 1. This section, for the ordering.
-2. Section 0.6, for the eleven inherited defects. Several look like new work and
+2. `docs/architecture/stow-environment.md`, for the shape the work is shaping:
+   the eight dimensions a Stow environment is composed from, and which existing
+   subsystems map onto which. It is subordinate to this section — its section 20
+   reconciles the two orderings rather than making a third.
+3. Section 0.6, for the eleven inherited defects. Several look like new work and
    are not.
-3. Section 0.7, for why the strategy is distribution rather than the concept.
-4. `docs/workspace-contract.md`, for the surface being built and its exact
+4. Section 0.7, for why the strategy is distribution rather than the concept.
+5. `docs/workspace-contract.md`, for the surface being built and its exact
    wording. The conformance cases in its section 8 are the acceptance spec, and
    WS-01 and WS-02 are the two that decide whether the product claim is true.
 
