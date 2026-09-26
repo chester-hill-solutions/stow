@@ -25,10 +25,15 @@ import (
 type Workspace struct {
 	*Runtime
 
-	dir    string
-	bucket string
-	id     string
-	store  *workspace.Store
+	dir       string
+	bucket    string
+	id        string
+	store     *workspace.Store
+	session   *workspace.Session
+	registry  *workspace.Registry
+	now       func() time.Time
+	closed    bool
+	destroyed bool
 }
 
 // WorkspaceOptions configures a workspace.
@@ -54,6 +59,10 @@ type WorkspaceOptions struct {
 	// the value is recorded in the workspace manifest and honoured by nothing,
 	// which is why it is documented as advisory here rather than promised.
 	TTL time.Duration
+	// RegistryDir places the machine's workspace registry. Empty takes the
+	// default under the user's configuration directory. Tests set it so they
+	// never touch a real one.
+	RegistryDir string
 	// Now is injectable for tests.
 	Now func() time.Time
 }
@@ -95,16 +104,32 @@ func OpenWorkspace(options WorkspaceOptions) (*Workspace, error) {
 		return nil, fmt.Errorf("stow: open workspace: %w", err)
 	}
 
+	// A live session holds an advisory lock for as long as this handle exists.
+	// It is what lets a collector establish that nobody is using the workspace
+	// rather than guess, and the kernel releases it even if this process is
+	// killed outright.
+	session, err := workspace.AcquireSession(store.Root())
+	if err != nil {
+		_ = store.Close()
+		return nil, fmt.Errorf("stow: claim workspace: %w", err)
+	}
+
 	ws := &Workspace{
 		Runtime: &Runtime{inner: instance},
 		dir:     store.Root(),
 		bucket:  store.WorkspaceBucket(),
 		id:      store.ID(),
 		store:   store,
+		session: session,
 	}
+	ws.now = options.Now
 	if err := ws.Runtime.CreateBucket(context.Background(), ws.bucket); err != nil {
 		_ = ws.Close()
 		return nil, fmt.Errorf("stow: create workspace bucket: %w", err)
+	}
+	if err := ws.register(options.RegistryDir, int64(options.TTL.Seconds())); err != nil {
+		_ = ws.Close()
+		return nil, err
 	}
 	return ws, nil
 }
@@ -123,6 +148,60 @@ func (w *Workspace) ID() string { return w.id }
 // without an S3 round trip, so a host can print a real path for a caller.
 func (w *Workspace) Path(key string) (string, bool) {
 	return w.store.Path(w.bucket, key)
+}
+
+// Close releases the handle. It is the non-destructive half of the split in
+// ADR 0009 section 3: the process and the client go away, and the bytes do not.
+//
+// It also releases the session lock, which is what makes the workspace
+// collectable again. Closing twice is not an error.
+func (w *Workspace) Close() error {
+	if w.closed {
+		return nil
+	}
+	w.closed = true
+	var firstErr error
+	if err := w.session.Release(); err != nil {
+		firstErr = err
+	}
+	if err := w.Runtime.Close(); err != nil && firstErr == nil {
+		firstErr = err
+	}
+	return firstErr
+}
+
+// assertOpen refuses work on a closed handle, so a lifecycle mistake is a named
+// error rather than a confusing failure from underneath.
+func (w *Workspace) assertOpen() error {
+	if w.closed {
+		return ErrClosed
+	}
+	return nil
+}
+
+// Destroy removes the workspace directory, and only if stow created it.
+//
+// This is the explicit half of the lifecycle split in ADR 0009 section 3:
+// Close releases the handle, Destroy removes the bytes. A workspace stow
+// *adopted* — one pointed at a directory the caller already had, which is the
+// documented way to use one — is refused, because its contents are the caller's
+// and not stow's to delete. A refusal leaves the workspace intact and usable.
+//
+// A workspace that is already gone is not an error: destroy is idempotent.
+func (w *Workspace) Destroy(ctx context.Context) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if err := w.store.Destroy(); err != nil {
+		return err
+	}
+	w.destroyed = true
+	// The bytes are gone, so the name they were filed under must go too, or the
+	// registry accumulates entries that resolve to nothing.
+	if w.registry != nil {
+		return w.registry.Forget(w.id)
+	}
+	return nil
 }
 
 // generatedBucketName returns a bucket name unlikely to collide with another

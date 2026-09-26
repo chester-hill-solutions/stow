@@ -273,3 +273,102 @@ func TestAdoptingAnExistingDirectory(t *testing.T) {
 		t.Error("listing offered the workspace manifest as an object")
 	}
 }
+
+// newOwnedWorkspace opens a workspace whose directory stow created.
+//
+// t.TempDir() returns a directory that already exists, which makes it an
+// *adopted* workspace. That is the documented way to use one and it is correct,
+// but it is the wrong fixture for the Destroy happy path, so ownership has to be
+// arranged deliberately.
+func newOwnedWorkspace(t *testing.T) (*stow.Workspace, string) {
+	t.Helper()
+	root := filepath.Join(t.TempDir(), "workspace")
+	ws, err := stow.OpenWorkspace(stow.WorkspaceOptions{Dir: root})
+	if err != nil {
+		t.Fatalf("OpenWorkspace: %v", err)
+	}
+	return ws, root
+}
+
+// TestDestroyRemovesAWorkspaceStowCreated is the happy path for the explicit
+// half of the lifecycle split.
+func TestDestroyRemovesAWorkspaceStowCreated(t *testing.T) {
+	ws, root := newOwnedWorkspace(t)
+	ctx := context.Background()
+	if _, err := ws.PutObject(ctx, ws.Bucket(), "output/report.txt", []byte("bytes"), stow.PutOptions{}); err != nil {
+		t.Fatalf("PutObject: %v", err)
+	}
+	if err := ws.Destroy(ctx); err != nil {
+		t.Fatalf("Destroy: %v", err)
+	}
+	if _, err := os.Lstat(root); !errors.Is(err, os.ErrNotExist) {
+		t.Errorf("the workspace directory survived Destroy: %v", err)
+	}
+}
+
+// TestDestroyRefusesAnAdoptedWorkspace is the case that decides the design, and
+// it is the reason the manifest records ownership at all.
+//
+// A workspace is meant to be pointed at a directory the caller already has. If
+// adoption and destruction were both permitted, the documented way to use this
+// package would be a way to delete someone's project.
+func TestDestroyRefusesAnAdoptedWorkspace(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "thesis.md"), []byte("a year of work"), 0o644); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	ws := openWorkspace(t, dir)
+	if err := ws.Destroy(context.Background()); err == nil {
+		t.Fatal("Destroy on an adopted workspace was permitted")
+	} else if !strings.Contains(err.Error(), "adopted") {
+		t.Errorf("the refusal does not explain itself: %v", err)
+	}
+	if _, err := os.Lstat(filepath.Join(dir, "thesis.md")); err != nil {
+		t.Fatalf("the refusal destroyed the caller's file: %v", err)
+	}
+}
+
+// TestDestroyIsIdempotent keeps a retry possible after a partial failure.
+func TestDestroyIsIdempotent(t *testing.T) {
+	ws, root := newOwnedWorkspace(t)
+	ctx := context.Background()
+	if err := ws.Destroy(ctx); err != nil {
+		t.Fatalf("first Destroy: %v", err)
+	}
+	if err := ws.Destroy(ctx); err != nil {
+		t.Errorf("second Destroy = %v, want success: an absent workspace is the requested state", err)
+	}
+	if _, err := os.Lstat(root); !errors.Is(err, os.ErrNotExist) {
+		t.Errorf("the directory reappeared: %v", err)
+	}
+}
+
+// TestCloseThenDestroy covers the intended order, and the one that is easy to
+// get wrong: closing is non-destructive, so the bytes are still there to be
+// destroyed deliberately afterwards.
+func TestCloseThenDestroy(t *testing.T) {
+	ws, root := newOwnedWorkspace(t)
+	ctx := context.Background()
+	if _, err := ws.PutObject(ctx, ws.Bucket(), "keep.txt", []byte("still here"), stow.PutOptions{}); err != nil {
+		t.Fatalf("PutObject: %v", err)
+	}
+	if err := ws.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+	if _, err := os.Lstat(filepath.Join(root, "keep.txt")); err != nil {
+		t.Fatalf("Close removed the bytes, so Destroy had nothing to do: %v", err)
+	}
+
+	// Reopen the same directory and destroy it, which is what a caller does
+	// when the workspace outlived the process that made it.
+	reopened, err := stow.OpenWorkspace(stow.WorkspaceOptions{Dir: root})
+	if err != nil {
+		t.Fatalf("reopen: %v", err)
+	}
+	if err := reopened.Destroy(ctx); err != nil {
+		t.Errorf("Destroy after a reopen: %v", err)
+	}
+	if _, err := os.Lstat(root); !errors.Is(err, os.ErrNotExist) {
+		t.Errorf("the workspace survived an explicit destroy: %v", err)
+	}
+}

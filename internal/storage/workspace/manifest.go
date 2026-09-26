@@ -35,6 +35,13 @@ type Manifest struct {
 	LastUsed    time.Time                           `json:"last_used"`
 	TTLSeconds  int64                               `json:"ttl_seconds"`
 	Buckets     map[string]map[string]ManifestEntry `json:"buckets"`
+	// Owned records whether stow created the workspace directory or adopted one
+	// that already existed. It is the only thing that makes Destroy safe: a
+	// workspace is *meant* to be pointed at a caller's existing directory, so the
+	// presence of a manifest is not evidence that the contents are stow's to
+	// delete. An adopted workspace can be read, written and closed; removing it
+	// is the caller's business.
+	Owned bool `json:"owned"`
 
 	path string
 }

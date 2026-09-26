@@ -374,6 +374,130 @@ old one — the wedge is "starts with nothing," and an in-process runtime with n
 listener, no port, no credentials, and no process is exactly what starts with
 nothing.
 
+### 0.8 W3 correction: the breaking change does not apply to a session
+
+Recorded 2026-09-25, after implementing `Destroy` in Go.
+
+This plan said W3 would make `close()` non-destructive in the TypeScript and
+Python clients and replace the "leaks no processes or directories across 100
+sequential sessions" assertion in the same diff. **That was wrong, and following
+it would have made things worse.**
+
+The session profile is **memory-backed** (`packages/stow-s3/src/session.ts:117`).
+Its objects live in the child server's heap, and the child is reaped on close —
+so the bytes are already gone before the data directory is. Deleting that
+directory on close destroys nothing of value, which is exactly why ADR 0004's
+dispose-on-scope-exit is still correct for that profile.
+
+Making the session's `close()` non-destructive would therefore:
+
+- preserve nothing, because there is nothing durable to preserve;
+- break a documented contract for no benefit;
+- and **make the property that test protects strictly worse** — 100 sessions
+  would leave 100 directories on disk instead of none.
+
+So the split is profile-specific, and the plan conflated the two:
+
+| Profile | Backend | `close()` | `destroy()` |
+|---|---|---|---|
+| S3 session (TypeScript, Python) | memory, child process | disposes, as ADR 0004 says | unnecessary; the bytes are already gone |
+| Workspace (Go, and the clients in W7) | persistent files | releases the handle, deletes nothing | removes the directory |
+
+`resume` is likewise W4, and belongs to the workspace, not the session.
+
+What the clients still need from W3 is only the *vocabulary* — a `destroy` that
+is explicit rather than implied — so that when the workspace surface lands in
+TypeScript and Python under W7, the semantics are already settled and identical
+across the three languages. That is a naming and API-shape task, not a
+behavioural break.
+
+### 0.9 Adoption is why `Destroy` needs an ownership record
+
+`Destroy` turned out to need a decision the ADRs had not made, and it is worth
+stating because it is the kind of thing that is obvious in hindsight and
+catastrophic if missed.
+
+A workspace is *designed* to be pointed at a directory the caller already has —
+`openWorkspace({ dir: process.cwd() })` is the documented way to use one. So
+"this directory contains a stow manifest" is not evidence that its contents
+belong to stow. Had `Destroy` keyed on the manifest, the documented way to use
+this package would have been a way to delete someone's project.
+
+The manifest therefore records whether stow **created** the directory or
+**adopted** it, decided before anything is created and preserved across reopens.
+Two defences then have to agree, and they are deliberately redundant:
+
+1. **Ownership** is primary. An adopted workspace can be read, written and
+   closed; removing it is the caller's business.
+2. **The protected-path check** is the backstop, ported from ADR 0006. It is the
+   layer that still holds when a workspace legitimately lives somewhere that has
+   since become someone's home or working directory, or when a caller guesses a
+   path another stow process once used.
+
+Two bugs were caught by writing the tests before trusting the logic, both worth
+recording:
+
+- The ownership decision was **inverted** on reopen, which made a workspace stow
+  created quietly undeletable the second time it was opened — silently, because
+  nothing exercised that path.
+- The test helper used `t.TempDir()`, which **already exists**, so every
+  "stow created" case was actually exercising adoption. A helper written for one
+  purpose silently made another purpose untestable. `newOwnedStore` now exists
+  specifically to arrange ownership, and says why.
+
+`Destroy` is also **idempotent by success rather than by refusal**: a second call
+returns nil, because a workspace that is gone is the state the caller asked for.
+Reporting "there is nothing there" as an error would make a retry after a
+partial failure impossible, and a caller that cannot retry a delete cannot clean
+up reliably.
+
+### 0.10 W4: liveness is established, never assumed
+
+Added 2026-09-25, with the registry and TTL collector.
+
+ADR 0009 §2 requires that collection "never" touch a live workspace, and adds
+the hard part: the collector must be able to *establish* that a workspace is
+unused, not assume it. Three designs were available and one was chosen:
+
+| Design | Why not |
+|---|---|
+| A heartbeat the owner refreshes | A heartbeat is stale in exactly the direction that deletes somebody's work — a frozen process stops refreshing, and the collector concludes nobody is there. It is a guess with a timestamp on it |
+| A recorded owner PID | PID reuse, and no way to tell a reused PID from the original. Needs a process start time, which is per-platform, to be safe at all |
+| **An advisory file lock** | **Chosen.** The kernel releases it when the holding process dies, including on `SIGKILL` and an OOM kill. "Is anyone using this?" is answered by the operating system, and there is no stale state to clean up and no window in which a dead process still looks alive |
+
+A second acquisition while one is held is refused rather than queued, and a
+probe answers "not live" when no lock file exists — so the probe is
+side-effect free and never leaves a lock behind that would block a real session.
+
+Two refusals are the substance of the feature, and their order is the design:
+
+1. **Liveness first.** A workspace that is merely *old* is never removed while
+   somebody is in it.
+2. **Ownership second.** An *adopted* workspace is never removed, ever, by a
+   sweep. It is checked before the age check precisely because the failure would
+   be catastrophic rather than merely wrong: adopting a directory is a documented
+   feature, so an age-based sweep that could delete one would be reachable by
+   waiting.
+3. **Age last**, and only for workspaces this machine created, with a TTL that
+   was explicitly recorded. An absent TTL means "no opinion" and is never
+   treated as expired.
+
+On Windows the standard library has no advisory file lock, and adding a
+dependency for one is not worth it. Rather than fall back to a heartbeat — the
+option this design exists to avoid — `Collect` refuses to run and says so. That
+is the same posture as the parent-death watch's `ErrUnsupported`: a workspace
+that cannot be reasoned about safely is left alone.
+
+`Collect` reports **every** decision, not only the removals, because "nothing
+was collected" and "three were skipped because they are in use" are different
+answers and a caller diagnosing a leaked workspace has to tell them apart.
+
+Worth recording: the TTL was only testable once the clock became injectable.
+`Touch` originally used the wall clock, so the behaviour could have been
+verified only by sleeping for an hour — and the first version of the test
+asserted that a touched workspace was *never* collected, which is wrong. Touch
+postpones; it does not exempt.
+
 ## 1. Product outcome
 
 > **Amended by revision 2.** The outcome is a bounded artifact workspace, not a
@@ -1442,8 +1566,8 @@ Phase 0 gates the rest rather than running beside it.
 | W15 | **P0** | Clean-install proof in CI | W14 | An empty container, no credentials, no npmrc, runs a real agent-shaped workload through the published package. Fails on a 404. Queries registries over HTTP, never via `npm view` |
 | W0 | P0 | Workspace backend | — | **Done.** Both same-bytes directions pass; 74% covered; runs the shared backend contract suite |
 | W1 | P0 | Expose it through `pkg/stow` | W0 | **Done.** `stow.OpenWorkspace`, in-process, no injected store; `pkg/stow` at 76% |
-| W3 | P0 | Workspace lifecycle: `open`, `close`, `destroy`, `resume` | W1 | `close()` is non-destructive, `destroy()` deletes, resume by ID returns the same workspace. Replaces the "leaks nothing" assertion in the same diff |
-| W4 | P0 | Session registry and TTL collector | W3 | A dead session's workspace is reclaimed; a live one, and a live cwd, never is |
+| W3 | P0 | `Destroy`, and the close/destroy split | W1 | **Go done.** `stow.Workspace.Destroy` removes the directory and refuses one stow *adopted*. The TypeScript and Python **sessions** are deliberately unchanged — see the correction below |
+| W4 | P0 | Session registry and TTL collector | W3 | **Go done.** A dead session's workspace is reclaimed; a live one, and an adopted one, never are. Liveness is an OS-held advisory lock, not a guess — see §0.10 |
 | W2 | P1 | Finish the S3 compatibility contract | — | Virtual-hosted style runs in the corpus and the client stops hardcoding `forcePathStyle` |
 | W10 | P1 | Error codes SDKs already understand | W2 | `versions` and `location` return `NotImplemented` (0.6 defect 4) |
 | W6 | P1 | Quotas a host can actually set | W1 | Bytes, objects, request rate, wall clock, audit log, and a **raisable** `MaxRequestBytes` (0.6 defect 3) |
