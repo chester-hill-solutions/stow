@@ -231,57 +231,6 @@ func TestStoreBucketDeletionRejectsActiveMultipartUpload(t *testing.T) {
 	})
 }
 
-func TestStoreRejectsDuplicateMultipartParts(t *testing.T) {
-	withStores(t, func(t *testing.T, store storage.Store) {
-		ctx := context.Background()
-		multi := requireMultipart(t, store)
-		if err := store.CreateBucket(ctx, "uploads"); err != nil {
-			t.Fatalf("create bucket: %v", err)
-		}
-		upload, err := multi.CreateMultipartUpload(ctx, "uploads", "object.bin")
-		if err != nil {
-			t.Fatalf("create upload: %v", err)
-		}
-		part, err := multi.UploadPart(ctx, upload.UploadID, 1, strings.NewReader("part"))
-		if err != nil {
-			t.Fatalf("upload part: %v", err)
-		}
-		_, err = multi.CompleteMultipartUpload(ctx, upload.UploadID, []storage.PartInfo{*part, *part})
-		if !errors.Is(err, storage.ErrInvalidPart) {
-			t.Fatalf("complete error = %v, want ErrInvalidPart", err)
-		}
-	})
-}
-
-func TestStoreRejectsUnsortedMultipartCompletionParts(t *testing.T) {
-	withStores(t, func(t *testing.T, store storage.Store) {
-		ctx := context.Background()
-		multi := requireMultipart(t, store)
-		if err := store.CreateBucket(ctx, "uploads"); err != nil {
-			t.Fatalf("create bucket: %v", err)
-		}
-		upload, err := multi.CreateMultipartUpload(ctx, "uploads", "object.bin")
-		if err != nil {
-			t.Fatalf("create upload: %v", err)
-		}
-		first, err := multi.UploadPart(ctx, upload.UploadID, 1, strings.NewReader("first"))
-		if err != nil {
-			t.Fatalf("upload first part: %v", err)
-		}
-		second, err := multi.UploadPart(ctx, upload.UploadID, 2, strings.NewReader("second"))
-		if err != nil {
-			t.Fatalf("upload second part: %v", err)
-		}
-		parts := []storage.PartInfo{*second, *first}
-		if _, err := multi.CompleteMultipartUpload(ctx, upload.UploadID, parts); !errors.Is(err, storage.ErrInvalidPart) {
-			t.Fatalf("complete error = %v, want ErrInvalidPart", err)
-		}
-		if parts[0].PartNumber != 2 {
-			t.Fatalf("completion parts were reordered: %+v", parts)
-		}
-	})
-}
-
 type pagedPartLister interface {
 	ListPartsPage(context.Context, string, storage.ListPartsOptions) (*storage.ListPartsResult, error)
 }

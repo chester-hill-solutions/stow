@@ -103,9 +103,6 @@ func (s *FilesystemStore) UploadPart(_ context.Context, uploadID string, partNum
 }
 
 func (s *FilesystemStore) CompleteMultipartUpload(_ context.Context, uploadID string, parts []storage.PartInfo) (*storage.ObjectMeta, error) {
-	if len(parts) == 0 {
-		return nil, storage.ErrInvalidUpload
-	}
 	if err := storage.ValidateMultipartPartNumbers(parts); err != nil {
 		return nil, err
 	}
@@ -133,7 +130,7 @@ func (s *FilesystemStore) CompleteMultipartUpload(_ context.Context, uploadID st
 		partETags = append(partETags, storedETag)
 		combined = append(combined, data...)
 	}
-	etag := storage.CompositeETag(partETags)
+	etag := storage.CompletionETag(partETags)
 	recordVersion, err := storage.NewRecordVersion()
 	if err != nil {
 		return nil, err
