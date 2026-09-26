@@ -76,12 +76,12 @@ export type AwsSdkV3ConfigOptions = (AwsSdkV3ConfigBase & {
     accessKeyId: string;
     secretAccessKey: string;
     sessionToken?: string;
-    provider?: never;
+    provider?: AwsCredentialIdentityProvider;
 }) | (AwsSdkV3ConfigBase & {
     provider: AwsCredentialIdentityProvider;
-    accessKeyId?: never;
-    secretAccessKey?: never;
-    sessionToken?: never;
+    accessKeyId?: string;
+    secretAccessKey?: string;
+    sessionToken?: string;
 });
 export type ConnectOptions = AwsSdkV3ConfigOptions;
 export interface StowConnection {

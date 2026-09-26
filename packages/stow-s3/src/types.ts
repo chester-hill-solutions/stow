@@ -77,18 +77,27 @@ type AwsSdkV3ConfigBase = {
   forcePathStyle?: boolean;
 };
 
+// Either static credentials or a credential provider, and the two may be supplied
+// together: a provider wins. buildAwsSdkV3Config has always resolved it that way
+// and a test asserts the precedence.
+//
+// The arms used to forbid the combination with `provider?: never` and
+// `accessKeyId?: never`, which made behaviour the implementation performs
+// unreachable from the public type. One of the two is still required - a caller
+// who supplies neither is told so by StowCredentialsError rather than by the SDK,
+// several frames later.
 export type AwsSdkV3ConfigOptions =
   | (AwsSdkV3ConfigBase & {
       accessKeyId: string;
       secretAccessKey: string;
       sessionToken?: string;
-      provider?: never;
+      provider?: AwsCredentialIdentityProvider;
     })
   | (AwsSdkV3ConfigBase & {
       provider: AwsCredentialIdentityProvider;
-      accessKeyId?: never;
-      secretAccessKey?: never;
-      sessionToken?: never;
+      accessKeyId?: string;
+      secretAccessKey?: string;
+      sessionToken?: string;
     });
 
 export type ConnectOptions = AwsSdkV3ConfigOptions;

@@ -9,6 +9,7 @@ import { S3Client } from "@aws-sdk/client-s3";
 import {
   buildAwsSdkV3Config,
   createStowInstance,
+  StowCredentialsError,
   verifyObjectReadable,
 } from "../dist/instance.js";
 import { startStow } from "../dist/start.js";
@@ -287,6 +288,25 @@ describe("fixture client lifecycle", () => {
 });
 
 describe("optional SDK credentials", () => {
+  it("refuses a configuration whose credentials are empty strings", () => {
+    // The realistic shape of this mistake, and it needs no cast to express:
+    // environment variables that are unset reach a caller as "" rather than
+    // undefined, so the type is satisfied and the credentials are still useless.
+    assert.throws(
+      () =>
+        buildAwsSdkV3Config({
+          endpoint: "http://127.0.0.1:9000",
+          accessKeyId: process.env.AWS_ACCESS_KEY_ID ?? "",
+          secretAccessKey: process.env.AWS_SECRET_ACCESS_KEY ?? "",
+        }),
+      (error: unknown) => {
+        assert.ok(error instanceof StowCredentialsError);
+        assert.match((error as Error).message, /accessKeyId and secretAccessKey/);
+        return true;
+      },
+    );
+  });
+
   it("preserves static credentials and passes through a session token or provider", () => {
     const tokenConfig = buildAwsSdkV3Config({
       endpoint: "http://127.0.0.1:9000",

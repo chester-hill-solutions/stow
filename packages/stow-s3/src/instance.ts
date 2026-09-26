@@ -21,18 +21,45 @@ import type {
 
 export const DEFAULT_REGION = "us-east-1";
 
+// StowCredentialsError is thrown when a caller supplies neither static
+// credentials nor a credential provider.
+//
+// The type asks for one of the two, so this is unreachable from TypeScript and
+// exists for JavaScript callers and for values that arrived as `any`. It used to
+// be reachable in a worse way: the configuration was built with an empty
+// credentials object and handed to the AWS SDK, which failed later - at request
+// time, several frames away, with a message about credential resolution. Being
+// told what is wrong beats inferring it.
+export class StowCredentialsError extends Error {
+  constructor() {
+    super(
+      "no credentials: supply accessKeyId and secretAccessKey, or a provider function",
+    );
+    this.name = "StowCredentialsError";
+  }
+}
+
 export function buildAwsSdkV3Config(
   options: AwsSdkV3ConfigOptions,
 ): S3ClientConfig {
-  const credentials = "provider" in options && options.provider
-    ? options.provider
-    : {
-        accessKeyId: options.accessKeyId,
-        secretAccessKey: options.secretAccessKey,
-        ...(options.sessionToken === undefined
-          ? {}
-          : { sessionToken: options.sessionToken }),
-      };
+  // A provider wins over static credentials. The type used to forbid supplying
+  // both, which made the precedence below unreachable from the public API while
+  // the implementation performed it and a test depended on it.
+  const provider = "provider" in options ? options.provider : undefined;
+  let credentials: S3ClientConfig["credentials"];
+  if (provider) {
+    credentials = provider;
+  } else if (options.accessKeyId && options.secretAccessKey) {
+    credentials = {
+      accessKeyId: options.accessKeyId,
+      secretAccessKey: options.secretAccessKey,
+      ...(options.sessionToken === undefined
+        ? {}
+        : { sessionToken: options.sessionToken }),
+    };
+  } else {
+    throw new StowCredentialsError();
+  }
 
   return {
     endpoint: options.endpoint,

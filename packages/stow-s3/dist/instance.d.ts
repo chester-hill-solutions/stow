@@ -1,6 +1,9 @@
 import { type S3ClientConfig } from "@aws-sdk/client-s3";
 import type { AwsSdkV3ConfigOptions, ConnectOptions, StowConnection, StowInstance, StowMode } from "./types.js";
 export declare const DEFAULT_REGION = "us-east-1";
+export declare class StowCredentialsError extends Error {
+    constructor();
+}
 export declare function buildAwsSdkV3Config(options: AwsSdkV3ConfigOptions): S3ClientConfig;
 export interface StowInstanceOptions {
     endpoint: string;

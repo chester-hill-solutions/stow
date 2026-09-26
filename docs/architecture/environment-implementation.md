@@ -159,16 +159,31 @@ Verified by reading or executing at `1982104`, on 2026-09-26:
     precedence. **The type is wrong, not the test**: behaviour the implementation
     performs and its tests assert was unreachable from the public type.
 
-  This is why M0.3 is not simply "one SCAN_ROOTS". Unifying the roots is the
-  cheap half; the expensive half is that doing it turns on a gate that has been
-  reporting success over thirteen files it never read. Widening
-  `AwsSdkV3ConfigOptions` to admit the combination is an API decision, because the
-  union is what currently lets `buildAwsSdkV3Config` narrow to non-optional
-  credentials in its else branch — widening it to a flat type pushes the "neither
-  supplied" case into the implementation, where it currently produces an object
-  with `undefined` credentials for the SDK to reject later. That needs a decision
-  about what a caller with no credentials should get, and it does not belong in a
-  commit about root lists.
+  **Resolved for the credentials half; the rest is recorded.** The union cannot be
+  widened naively, because it is what lets `buildAwsSdkV3Config` narrow to
+  non-optional credentials in its else branch. The decision taken: a caller who
+  supplies neither static credentials nor a provider is now told so by
+  `StowCredentialsError` at construction, rather than receiving a config whose
+  `credentials` is `{}` for the AWS SDK to reject several frames later. Verified
+  before changing anything — `Stow.awsSdkV3Config({ endpoint })` produced
+  `{"credentials":{}}` and returned normally. The union keeps requiring one of the
+  two while admitting both together, and the precedence the tests assert is now
+  expressible from the public type.
+
+  Turning the gate on then surfaced four more errors in two more files, which is
+  the point of turning it on: `test/session-lifecycle.test.ts:34,57` pass
+  `{ skip: boolean }` where the installed `@types/node` wants a different
+  `TestOptions` shape, `test/session.test.ts:78` dereferences
+  `GetObjectCommand` output's `Body` without asserting it is present, and
+  `test/wasm-assets.test.ts:7` imports a `.mjs` build script that has no
+  declaration. All three predate this document and none is visible to any current
+  gate, because the tests compile to nothing.
+
+  So M0.3 is not "one SCAN_ROOTS". Unifying the roots is the cheap half; the
+  expensive half is that doing it turns on a gate that has been reporting success
+  over thirteen files it never read, and each layer it reveals was hiding the
+  next. `tsconfig.test.json` is written and not wired, because a gate that fails is
+  worse than a gate that is honestly absent.
 
 **Not verified, and therefore not claimed:**
 
@@ -939,7 +954,7 @@ Ordered by §6. Effort is a lower bound in days.
 |---|---|---|
 | M0.1 Test `tools/quality` and the seven untested JS gates | R-1001 | 2–3 |
 | M0.2 Delete the suppression regex; use ESLint's directive parsing | R-1002 | <1 |
-| M0.3 One `SCAN_ROOTS` for file-size, lint, and duplication. **Blocked**: doing it turns on a gate that finds 4 real type errors in 13 unchecked test files — see §0.2 | R-1003 | 1–2, was <1 |
+| M0.3 One `SCAN_ROOTS` for file-size, lint, and duplication. **Partly done**: the credentials half of the blocker is fixed and 4 test type errors remain in 3 files — see §0.2 | R-1003 | 1–2, was <1 |
 | M0.4 Anti-recurrence: every `authority.Defined()` operation enforced or documented-ungated | R-101 | <1 |
 
 ### M1 — Environment core
