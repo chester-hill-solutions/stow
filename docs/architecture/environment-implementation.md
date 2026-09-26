@@ -134,6 +134,41 @@ Verified by reading or executing at `1982104`, on 2026-09-26:
   (`internal/storage/backend_contract_test.go:358`), added because memory and
   filesystem "stored the algorithm and value verbatim." R-302 does **not** need to
   add it.
+- **Thirteen test files are outside TypeScript type checking entirely.** Found on
+  2026-09-26 while doing M0.3, by noticing that the four gates disagree about
+  where the TypeScript is. `packages/stow-s3/tsconfig.json` includes
+  `src/**/*.ts` and nothing else, and `npm test` runs the suite through
+  `tsx --test`, which strips types without checking them. Verified rather than
+  inferred: `const wrong: number = "not a number"` in a test file passes
+  `tsc --noEmit` with no diagnostic. So `strict` and `noUncheckedIndexedAccess`
+  protect the shipped code and not the code that tests it, while the lint ratchet
+  counts findings across the whole package and the type-escape gate scans `src`
+  and `test` — three gates, three different notions of the same fact.
+
+  Adding a `tsconfig.test.json` that includes `test/**/*.ts` surfaces four
+  diagnostics in two files, and both are real rather than noise:
+
+  - `test/ownership.test.ts:11` imports a `.ts` extension, which `tsx` allows and
+    `tsc` does not without `allowImportingTsExtensions`. Mechanical.
+  - `test/lifecycle.test.ts:317,324,332` passes `accessKeyId`, `secretAccessKey`
+    **and** a `provider` to `buildAwsSdkV3Config` and
+    `Stow.awsSdkV3Config`, and asserts that the provider wins. The public type
+    `AwsSdkV3ConfigOptions` forbade exactly that combination with
+    `provider?: never` and `accessKeyId?: never`, while `src/instance.ts:27`
+    resolves the conflict in favour of the provider and a test depends on that
+    precedence. **The type is wrong, not the test**: behaviour the implementation
+    performs and its tests assert was unreachable from the public type.
+
+  This is why M0.3 is not simply "one SCAN_ROOTS". Unifying the roots is the
+  cheap half; the expensive half is that doing it turns on a gate that has been
+  reporting success over thirteen files it never read. Widening
+  `AwsSdkV3ConfigOptions` to admit the combination is an API decision, because the
+  union is what currently lets `buildAwsSdkV3Config` narrow to non-optional
+  credentials in its else branch — widening it to a flat type pushes the "neither
+  supplied" case into the implementation, where it currently produces an object
+  with `undefined` credentials for the SDK to reject later. That needs a decision
+  about what a caller with no credentials should get, and it does not belong in a
+  commit about root lists.
 
 **Not verified, and therefore not claimed:**
 
@@ -904,7 +939,7 @@ Ordered by §6. Effort is a lower bound in days.
 |---|---|---|
 | M0.1 Test `tools/quality` and the seven untested JS gates | R-1001 | 2–3 |
 | M0.2 Delete the suppression regex; use ESLint's directive parsing | R-1002 | <1 |
-| M0.3 One `SCAN_ROOTS` for file-size, lint, and duplication | R-1003 | <1 |
+| M0.3 One `SCAN_ROOTS` for file-size, lint, and duplication. **Blocked**: doing it turns on a gate that finds 4 real type errors in 13 unchecked test files — see §0.2 | R-1003 | 1–2, was <1 |
 | M0.4 Anti-recurrence: every `authority.Defined()` operation enforced or documented-ungated | R-101 | <1 |
 
 ### M1 — Environment core
