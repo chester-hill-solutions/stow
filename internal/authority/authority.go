@@ -233,3 +233,43 @@ func Defined() []Operation {
 	sort.Slice(out, func(i, j int) bool { return out[i] < out[j] })
 	return out
 }
+
+// Ungated names the operations that are defined but not checked anywhere, each
+// with the reason it is not yet wired.
+//
+// An operation nobody enforces is a permission that is described and not
+// granted, which is the shape a false claim of enforcement takes: the set is
+// closed, the constant is exported, and a caller narrowing an Authority appears
+// to withhold something the code never consults. Enumerating them is what makes
+// that visible — a new Operation with no check site fails the enforcement test
+// unless it is added here with a reason, so the gap is a decision on record
+// rather than an omission.
+//
+// The set is a floor, not a target. Each entry below is work already specified;
+// see docs/architecture/environment-implementation.md R-101 and ADR 0010.
+//
+//   - EnvironmentDestroy and UpstreamRead/UpstreamWrite are enforced by M1.3,
+//     which is reopened: its criteria were closed as met while three of four
+//     failed and the fourth was vacuous, because the principal-to-authority
+//     translator the criterion assumed does not exist.
+//   - EnvironmentPromote is not implemented at all. It is deleted rather than
+//     wired until M4.3, because a permission for an operation with no
+//     implementation is a claim about behaviour that does not exist.
+var Ungated = map[Operation]string{
+	EnvironmentDestroy: "M1.3 is reopened; enforced there, not here",
+	EnvironmentPromote: "M4.3. Deleted rather than wired until it has an implementation",
+	UpstreamRead:       "M1.3 is reopened; enforced there, not here",
+	UpstreamWrite:      "M1.3 is reopened; enforced there, not here",
+}
+
+// UngatedOperations lists the defined operations with no enforcement site, in the
+// same order as Defined.
+func UngatedOperations() []Operation {
+	var out []Operation
+	for _, op := range Defined() {
+		if _, ok := Ungated[op]; ok {
+			out = append(out, op)
+		}
+	}
+	return out
+}
