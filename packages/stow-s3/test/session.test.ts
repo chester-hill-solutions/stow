@@ -75,6 +75,10 @@ describe("stow session", session, () => {
       const fetched = await env.s3.send(
         new GetObjectCommand({ Bucket: env.bucket, Key: "input.json" }),
       );
+      // Body is optional in the SDK's output type, so it is asserted rather than
+      // assumed. A GET that returned no body would otherwise fail here as
+      // "cannot read transformToString of undefined", naming the wrong thing.
+      assert.ok(fetched.Body, "GetObject returned no body");
       return fetched.Body.transformToString();
     });
     assert.equal(seen, '{"task":"summarize"}');

@@ -31,7 +31,7 @@ async function assertRemoved(directories: string[]): Promise<void> {
 }
 
 describe("session lifecycle", session, () => {
-  it("leaks no processes or directories across 100 sequential sessions", async () => {
+  it("leaks no processes or directories across 100 sequential sessions", { timeout: 300_000 }, async () => {
     const processesBefore = childProcessCount();
     const directories: string[] = [];
 
@@ -52,9 +52,9 @@ describe("session lifecycle", session, () => {
     // Each session's own directory rather than a snapshot of /tmp, so a
     // concurrently running suite cannot make this flaky.
     await assertRemoved(directories);
-  }, { timeout: 300_000 });
+  });
 
-  it("gives 100 parallel sessions unique endpoints, buckets, and credentials", async () => {
+  it("gives 100 parallel sessions unique endpoints, buckets, and credentials", { timeout: 300_000 }, async () => {
     const processesBefore = childProcessCount();
     const sessions = await Promise.all(Array.from({ length: 100 }, () => openStow()));
     const directories = sessions.map((env) => env.dataDir);
@@ -81,5 +81,5 @@ describe("session lifecycle", session, () => {
 
     assert.equal(childProcessCount(), processesBefore, "no process may survive the parallel run");
     await assertRemoved(directories);
-  }, { timeout: 300_000 });
+  });
 });

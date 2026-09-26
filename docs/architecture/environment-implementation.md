@@ -170,20 +170,21 @@ Verified by reading or executing at `1982104`, on 2026-09-26:
   two while admitting both together, and the precedence the tests assert is now
   expressible from the public type.
 
-  Turning the gate on then surfaced four more errors in two more files, which is
-  the point of turning it on: `test/session-lifecycle.test.ts:34,57` pass
-  `{ skip: boolean }` where the installed `@types/node` wants a different
-  `TestOptions` shape, `test/session.test.ts:78` dereferences
-  `GetObjectCommand` output's `Body` without asserting it is present, and
-  `test/wasm-assets.test.ts:7` imports a `.mjs` build script that has no
-  declaration. All three predate this document and none is visible to any current
-  gate, because the tests compile to nothing.
+  Turning the gate on then surfaced four more errors in three files, and **one of
+  them was a live defect rather than a type nit.** `test/session-lifecycle.test.ts`
+  wrote both of its 100-session stress tests as `it(name, async () => {...}, { timeout:
+  300_000 })` — function second, options third, which is the reverse of
+  `test(name, options, fn)`. The 300-second timeout had therefore never been
+  applied to either test, on the two slowest tests in the suite, added for exactly
+  the case where they get slow. The other two were a `GetObject` body dereferenced
+  without a presence check, and a `.mjs` build script imported with no declaration;
+  both fixed, the latter with a four-line `.d.mts` rather than by enabling `allowJs`
+  across the package.
 
   So M0.3 is not "one SCAN_ROOTS". Unifying the roots is the cheap half; the
-  expensive half is that doing it turns on a gate that has been reporting success
-  over thirteen files it never read, and each layer it reveals was hiding the
-  next. `tsconfig.test.json` is written and not wired, because a gate that fails is
-  worse than a gate that is honestly absent.
+  expensive half is that doing it turns on a gate that had been reporting success
+  over thirteen files it never read, and each layer it revealed was hiding the
+  next. `tsconfig.test.json` is wired into `check:standards` and the gate is green.
 
 **Not verified, and therefore not claimed:**
 
@@ -954,7 +955,7 @@ Ordered by §6. Effort is a lower bound in days.
 |---|---|---|
 | M0.1 Test `tools/quality` and the seven untested JS gates | R-1001 | 2–3 |
 | M0.2 Delete the suppression regex; use ESLint's directive parsing | R-1002 | <1 |
-| M0.3 One `SCAN_ROOTS` for file-size, lint, and duplication. **Partly done**: the credentials half of the blocker is fixed and 4 test type errors remain in 3 files — see §0.2 | R-1003 | 1–2, was <1 |
+| M0.3 One `SCAN_ROOTS` for file-size, lint, and duplication. **Test half done** — `tsconfig.test.json` is wired and green, and found a live defect; the shared root list across the Go and JS gates is still to do | R-1003 | <1 remaining |
 | M0.4 Anti-recurrence: every `authority.Defined()` operation enforced or documented-ungated | R-101 | <1 |
 
 ### M1 — Environment core
