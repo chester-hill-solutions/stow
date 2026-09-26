@@ -629,15 +629,40 @@ synced, so every workspace object and manifest write is exposed to power-loss
 loss that the filesystem backend survives. A single `internal/atomicfile.Write`
 MUST perform temp → fsync → rename → fsync parent and MUST return the errors.
 
-**R-802 — `HEAD` MUST NOT write durably.**
-`internal/storage/workspace/objects.go:138` `HeadObject` reaches `resolve`, which
-treats a stale or absent entry as adoptable and calls `record` →
-`manifest.save()`. The first `HEAD` on a host-written file takes the write lock
-and rewrites the entire manifest, which is marshalled whole
-(`workspace/manifest.go:110`) on every `PutObject` (`objects.go:89`) — so an agent
-that writes 500 files and lists them pays 500 full-manifest rewrites, O(n) each.
-Adoption MUST write only the object index, and the identity document MUST NOT be
-rewritten per object.
+**R-802 — Adoption MUST write only the object index.**
+Measured on 2026-09-26: 20 `HEAD`s against 20 host-written files produce 20
+persisted index entries, so 20 whole-manifest rewrites, each serialising a
+document that grows as it goes — O(n²) bytes written for n adopted files. Every
+`HEAD` also takes the write lock, and `derive` reads the file in full to compute
+an ETag, so a read of a large object reads the whole object.
+
+Adoption itself is correct and stays: a workspace whose files need registering
+before they can be read is not a working directory. What is wrong is the cost, and
+it comes from the manifest being one document. `manifest.json` mixes identity
+(`workspace_id`, `bucket`, `created`, `last_used`, `ttl_seconds`, `owned`) with the
+index (`buckets`), and the identity half is rewritten on every single object
+adoption although it changes once per workspace.
+
+**This needs a decision, and it is a data-shape one rather than a refactor.**
+`manifest.json` is at `manifestVersion = 1`, and the stated policy is that a file
+written by a newer revision is *refused* rather than migrated on read. Splitting
+the document therefore has two defensible answers and no obviously safe one:
+
+- **Bump to version 2 and refuse version 1.** Consistent with the policy already
+  stated, and honest — a version-1 workspace is a layout this build does not
+  implement. It also means every existing workspace stops opening, which for a
+  store whose selling point is disposability may be acceptable and for a developer
+  mid-task is not.
+- **Hold version 1 and treat a missing index file as empty.** Nothing refuses to
+  open, and the bytes are safe: `manifest.go` already says the filesystem, not the
+  manifest, is the source of truth for what exists. The cost is that recorded
+  checksums, ETags and metadata are re-derived once by reading the files, and that
+  is a *silent* discard of data the previous build chose to record. "Silent" is the
+  word that has to be earned rather than assumed here.
+
+What is not in question: the identity document must stop being rewritten per
+object, and the write path must stop being the read path's cost. `record` is
+already the single funnel for persistence, so the split lands in one place.
 
 **R-803 — The readiness contract MUST have one fixture.**
 Four parsers implement one protocol: `internal/ready/ready.go`,
@@ -1073,7 +1098,7 @@ owns each concept. They share one shape, given in §4.1.
 | C1.6 Delete eleven swallowed durability errors | R-702 | 🟠 | 2 |
 | C1.7 Version assertion compares a value | R-309 | 🟠 | 1 |
 | C2.1 One `internal/atomicfile` | R-801 | ✅ delivered | — |
-| C2.2 Split the workspace manifest | R-802 | 🟠 | 2 |
+| C2.2 Split the workspace manifest | R-802 | 🔴 **decision needed** — version bump or silent re-derive, see R-802 | 1–2 |
 | C2.3 Key lock MUST NOT span a network round trip | R-705 | 🟠 | 2–3 |
 | C2.4 Transactional batch prepare | R-703 | 🟠 | 1 |
 | C2.5 Bounded upstream reads and streaming cache fill | R-707 | 🟠 | 2 |
