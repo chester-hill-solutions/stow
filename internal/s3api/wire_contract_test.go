@@ -12,6 +12,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"slices"
 	"strings"
 	"testing"
@@ -41,9 +42,24 @@ func newStoreServer(t *testing.T, store storage.Store) *httptest.Server {
 	return ts
 }
 
+// objectPath builds a request path for a key, percent-encoding each segment the
+// way a client does. PathEscape escapes the separators too, so the segments are
+// escaped individually and rejoined - which is also why the server has to decode
+// the copy-source header rather than trust the key it was sent.
+func objectPath(bucket, key string) string {
+	segments := strings.Split(key, "/")
+	for i, segment := range segments {
+		segments[i] = url.PathEscape(segment)
+	}
+	return "/" + bucket + "/" + strings.Join(segments, "/")
+}
+
 func putOverWire(t *testing.T, ts *httptest.Server, bucket, key, body string) {
 	t.Helper()
-	req, _ := http.NewRequest(http.MethodPut, ts.URL+"/"+bucket+"/"+key, strings.NewReader(body))
+	req, err := http.NewRequest(http.MethodPut, ts.URL+objectPath(bucket, key), strings.NewReader(body))
+	if err != nil {
+		t.Fatalf("build put for %s/%s: %v", bucket, key, err)
+	}
 	req.ContentLength = int64(len(body))
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
@@ -57,7 +73,10 @@ func putOverWire(t *testing.T, ts *httptest.Server, bucket, key, body string) {
 
 func createBucketOverWire(t *testing.T, ts *httptest.Server, bucket string) {
 	t.Helper()
-	req, _ := http.NewRequest(http.MethodPut, ts.URL+"/"+bucket, nil)
+	req, err := http.NewRequest(http.MethodPut, ts.URL+"/"+bucket, nil)
+	if err != nil {
+		t.Fatalf("build create bucket %s: %v", bucket, err)
+	}
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
 		t.Fatalf("create bucket %s: %v", bucket, err)
@@ -107,7 +126,10 @@ func deleteOverWire(t *testing.T, ts *httptest.Server, bucket string, keys ...st
 
 func headStatusOverWire(t *testing.T, ts *httptest.Server, bucket, key string) int {
 	t.Helper()
-	req, _ := http.NewRequest(http.MethodHead, ts.URL+"/"+bucket+"/"+key, nil)
+	req, err := http.NewRequest(http.MethodHead, ts.URL+objectPath(bucket, key), nil)
+	if err != nil {
+		t.Fatalf("build head for %s/%s: %v", bucket, key, err)
+	}
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
 		t.Fatalf("head %s/%s: %v", bucket, key, err)
@@ -136,6 +158,106 @@ func wireStores() map[string]func(t *testing.T) storage.Store {
 			}
 			return store
 		},
+	}
+}
+
+// copyOverWire issues a CopyObject naming src as an already-encoded copy-source
+// header value, exactly as an SDK builds it, and returns the status code.
+func copyOverWire(t *testing.T, ts *httptest.Server, dstBucket, dstKey, encodedSource string) int {
+	t.Helper()
+	req, err := http.NewRequest(http.MethodPut, ts.URL+objectPath(dstBucket, dstKey), nil)
+	if err != nil {
+		t.Fatalf("build copy to %s/%s: %v", dstBucket, dstKey, err)
+	}
+	req.Header.Set("x-amz-copy-source", encodedSource)
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("copy to %s/%s: %v", dstBucket, dstKey, err)
+	}
+	defer resp.Body.Close()
+	_, _ = io.ReadAll(resp.Body)
+	return resp.StatusCode
+}
+
+func getOverWire(t *testing.T, ts *httptest.Server, bucket, key string) (string, int) {
+	t.Helper()
+	req, err := http.NewRequest(http.MethodGet, ts.URL+objectPath(bucket, key), nil)
+	if err != nil {
+		t.Fatalf("build get for %s/%s: %v", bucket, key, err)
+	}
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("get %s/%s: %v", bucket, key, err)
+	}
+	defer resp.Body.Close()
+	body, _ := io.ReadAll(resp.Body)
+	return string(body), resp.StatusCode
+}
+
+// The x-amz-copy-source header carries a percent-encoded key, and the server has
+// to decode it.
+//
+// The compat contract says so - "URL-encoded key segments" - and parseCopySource
+// split the header on the first slash and used both halves verbatim. Every SDK
+// percent-encodes the key, so a key containing a space, a plus, a percent sign
+// or a slash could not be copied at all: the server looked for a key literally
+// spelled with the escapes in it and answered NoSuchKey for an object that
+// existed. No test issued a CopyObject, so the operation had no coverage at all.
+//
+// Decoding has to happen after the bucket is split off, not before. A key whose
+// slash is encoded as %2F would otherwise become a separator and the split would
+// land in the wrong place, so a key with a real slash would work and a key
+// containing an encoded one would not.
+//
+// The plus is the case that distinguishes the two unescape functions: in a path
+// segment + is a literal plus, so a key spelled "a+b" must not come back as
+// "a b". QueryUnescape would rewrite it.
+func TestCopyObjectDecodesTheCopySourceHeader(t *testing.T) {
+	cases := []struct {
+		name    string
+		key     string
+		encoded string
+	}{
+		{"space", "with space.txt", "with%20space.txt"},
+		{"literal plus", "a+b.txt", "a%2Bb.txt"},
+		{"percent", "100%.txt", "100%25.txt"},
+		{"encoded slash", "dir/inner.txt", "dir%2Finner.txt"},
+		{"real slash", "dir/plain.txt", "dir/plain.txt"},
+		{"encoded slash and space", "dir/a b+c%.txt", "dir%2Fa%20b%2Bc%25.txt"},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			ts := newStoreServer(t, storage.NewMemoryStore())
+			createBucketOverWire(t, ts, "src")
+			createBucketOverWire(t, ts, "dst")
+			const want = "the original bytes"
+			putOverWire(t, ts, "src", tc.key, want)
+
+			if status := copyOverWire(t, ts, "dst", "copied.txt", "/src/"+tc.encoded); status != http.StatusOK {
+				t.Fatalf("copy of %q (encoded %q) = %d, want 200", tc.key, tc.encoded, status)
+			}
+			got, status := getOverWire(t, ts, "dst", "copied.txt")
+			if status != http.StatusOK {
+				t.Fatalf("get copy = %d, want 200", status)
+			}
+			if got != want {
+				t.Fatalf("copied body = %q, want %q", got, want)
+			}
+		})
+	}
+}
+
+// A key that does not exist is still NoSuchKey after decoding, so the fix cannot
+// be "decode and accept anything".
+func TestCopyObjectRejectsAnUnresolvableSource(t *testing.T) {
+	ts := newStoreServer(t, storage.NewMemoryStore())
+	createBucketOverWire(t, ts, "src")
+	createBucketOverWire(t, ts, "dst")
+	putOverWire(t, ts, "src", "present.txt", "bytes")
+
+	if status := copyOverWire(t, ts, "dst", "copied.txt", "/src/absent%20key.txt"); status != http.StatusNotFound {
+		t.Fatalf("copy of a missing key = %d, want 404", status)
 	}
 }
 
