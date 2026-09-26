@@ -27,6 +27,16 @@ not on npm or PyPI, so `npm install` and `pip install` will fail with a 404. Do
 not spend a turn discovering that. The Go module *is* published and is the
 shortest path today.
 
+When the npm package is published it will be on **GitHub Packages**, not
+npmjs.org, and the bare command still will not work: this organisation owns
+nothing on npmjs, and a scope-specific registry in `.npmrc` beats `--registry`,
+so npm resolves against the wrong host and returns a 404 that reads like a
+naming problem. Write this into `.npmrc` first:
+
+```ini
+@chester-hill-solutions:registry=https://npm.pkg.github.com
+```
+
 Go, published and installable now:
 
 ```bash

@@ -51,6 +51,22 @@ the release pipeline that will publish them is built and green, but `@chester-hi
 is not on npm and `stow-s3` is not on PyPI. `npm install @chester-hill-solutions/stow-s3` and
 `pip install stow-s3` will fail with a 404 today.
 
+**The npm package will live on GitHub Packages, not npmjs.org, so the bare
+install command will not work when it is published.** This organisation owns
+nothing on npmjs — the scope does not exist there — and a scope-specific
+registry in `.npmrc` overrides `--registry`, so npm will silently resolve against
+the wrong host and report a 404 that looks like a naming problem. Route the scope
+explicitly, and commit that line so it cannot be forgotten:
+
+```ini
+# .npmrc
+@chester-hill-solutions:registry=https://npm.pkg.github.com
+```
+
+Then `npm install @chester-hill-solutions/stow-s3` resolves. PyPI has no such
+step. This is recorded now, while the packages are still private, so the publish
+step is a visibility flip rather than a documentation change under time pressure.
+
 The Go module is published and installs today:
 
 ```bash

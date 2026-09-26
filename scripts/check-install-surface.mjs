@@ -55,33 +55,34 @@ const SURFACE = [
 // or the gate cannot see it, which is the intended pressure.
 const DOCS = ["README.md", "site/agent.md", "site/llms.txt", "skills/stow-s3/SKILL.md"];
 
-const problems = [];
+const DISCLAIMER = /not published|not yet|not on npm|not on PyPI|404/i;
 
-for (const entry of SURFACE) {
-  if (!existsSync(resolve(root, entry.path))) {
-    problems.push(`${entry.ecosystem} ${entry.name} claims a repo path that does not exist: ${entry.path}`);
-  }
-}
+// docProblems is the whole rule, as a pure function of a declaration and a
+// document's text, so it can be tested in every mode it has.
+//
+// It is pure because the bug it used to have was only reachable in a mode
+// nothing exercised. The gate demanded a disclaimer for a PUBLISHED target
+// unconditionally, which was right while some target was still unpublished and
+// became a demand for a false statement the moment all of them were published -
+// the exact moment the rule was supposed to stop mattering. With npm and PyPI
+// still unpublished that branch never ran, so the gate had never once been
+// asked whether it would pass in the state it is meant to end in. A mode that
+// is not exercised is not tested code, however green it is today.
+export function docProblems(surface, doc, text) {
+  const problems = [];
+  const disclaimed = DISCLAIMER.test(text);
+  // A disclaimer is owed only while something is actually unreachable. Once
+  // every target is published there is nothing to warn about, and asking for
+  // one anyway would force "not published" into four documents forever.
+  const anyUnpublished = surface.some((entry) => !entry.published);
 
-for (const doc of DOCS) {
-  const full = resolve(root, doc);
-  if (!existsSync(full)) {
-    problems.push(`install-surface doc missing: ${doc}`);
-    continue;
-  }
-  const text = readFileSync(full, "utf8");
-
-  for (const entry of SURFACE) {
+  for (const entry of surface) {
     const mentioned = text.includes(entry.name) || text.includes(entry.command);
-    // A doc that says a package is installable has to name it. A doc that is
-    // honest about it not being published has to say so near the mention, so a
-    // reader cannot see the install line without the caveat.
-    const disclaimed = /not published|not yet|not on npm|not on PyPI|404/i.test(text);
 
     if (entry.published && !mentioned) {
       problems.push(`${doc} does not mention the published ${entry.ecosystem} target ${entry.name}`);
     }
-    if (entry.published && !disclaimed) {
+    if (anyUnpublished && entry.published && !disclaimed) {
       problems.push(
         `${doc} mentions ${entry.name} but never says the other packages are unpublished; ` +
           "an agent reading it will try an install that 404s",
@@ -99,16 +100,38 @@ for (const doc of DOCS) {
   // same string. They diverged once already: the module was renamed to stow-s3
   // while the remote was still stow, so the documented `go get` could not
   // resolve and the documented repository URL did not exist.
-  const goModule = SURFACE.find((entry) => entry.ecosystem === "go").name;
-  const repoPath = goModule.split("/pkg/")[0];
-  for (const match of text.matchAll(/github\.com\/chester-hill-solutions\/[A-Za-z0-9._-]+/g)) {
-    if (match[0] !== repoPath) {
-      problems.push(
-        `${doc} references ${match[0]} but the Go module lives at ${repoPath}; ` +
-          "one of the two is stale and no published version of the other can resolve",
-      );
+  const goEntry = surface.find((entry) => entry.ecosystem === "go");
+  if (goEntry) {
+    const repoPath = goEntry.name.split("/pkg/")[0];
+    for (const match of text.matchAll(/github\.com\/chester-hill-solutions\/[A-Za-z0-9._-]+/g)) {
+      if (match[0] !== repoPath) {
+        problems.push(
+          `${doc} references ${match[0]} but the Go module lives at ${repoPath}; ` +
+            "one of the two is stale and no published version of the other can resolve",
+        );
+      }
     }
   }
+  return problems;
+}
+
+export { SURFACE, DOCS };
+
+const problems = [];
+
+for (const entry of SURFACE) {
+  if (!existsSync(resolve(root, entry.path))) {
+    problems.push(`${entry.ecosystem} ${entry.name} claims a repo path that does not exist: ${entry.path}`);
+  }
+}
+
+for (const doc of DOCS) {
+  const full = resolve(root, doc);
+  if (!existsSync(full)) {
+    problems.push(`install-surface doc missing: ${doc}`);
+    continue;
+  }
+  problems.push(...docProblems(SURFACE, doc, readFileSync(full, "utf8")));
 }
 
 if (process.argv.includes("--online")) {
