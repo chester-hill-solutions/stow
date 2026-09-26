@@ -4,6 +4,8 @@ import (
 	"errors"
 	"fmt"
 	"time"
+
+	"github.com/chester-hill-solutions/stow-s3/internal/authority"
 )
 
 type Backend string
@@ -95,6 +97,17 @@ type Options struct {
 	Backend    Backend
 	MaxBytes   int64
 	MaxObjects int64
+
+	// Authority is what this environment permits. It is enforced here, below
+	// every interface, so that S3 and a native caller cannot be granted
+	// different things.
+	//
+	// A nil pointer means every operation, and that is the default on purpose:
+	// it is what an Instance opened without one has always permitted, so adding
+	// the field changes no existing behaviour. Pass &authority.None() to permit
+	// nothing. The pointer is what makes those two states distinguishable — a
+	// bare Authority cannot tell "unset" from "explicitly empty".
+	Authority *authority.Authority
 }
 
 type Capabilities struct {

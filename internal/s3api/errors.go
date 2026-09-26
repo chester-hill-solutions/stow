@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"time"
 
+	"github.com/chester-hill-solutions/stow-s3/internal/authority"
 	"github.com/chester-hill-solutions/stow-s3/internal/runtime"
 	"github.com/chester-hill-solutions/stow-s3/internal/storage"
 )
@@ -103,39 +104,71 @@ func bodyReadError(err error, resource string, limit int64) s3Error {
 	}
 }
 
+// storageErrorCase maps one sentinel to the S3 error a client should see.
+//
+// This was a fourteen-case if/else chain, and adding the authority refusal
+// pushed it over the complexity limit. A table is the right shape for it anyway:
+// the entries differ only in which sentinel they match and what they say, so a
+// new mapping is a new row rather than a new branch, and the order — which
+// matters, because the first match wins — is visible at a glance.
+type storageErrorCase struct {
+	sentinel   error
+	code       string
+	message    string
+	statusCode int
+}
+
+var storageErrorCases = []storageErrorCase{
+	{storage.ErrBucketNotFound, "NoSuchBucket", "The specified bucket does not exist", http.StatusNotFound},
+	{storage.ErrInvalidBucketName, "InvalidBucketName", "The specified bucket name is not valid", http.StatusBadRequest},
+	{storage.ErrObjectNotFound, "NoSuchKey", "The specified key does not exist", http.StatusNotFound},
+	{storage.ErrBucketNotEmpty, "BucketNotEmpty", "The bucket you tried to delete is not empty", http.StatusConflict},
+	{storage.ErrInvalidKey, "InvalidArgument", "Invalid object key", http.StatusBadRequest},
+	{storage.ErrInvalidPart, "InvalidPart", "One or more of the specified parts could not be found", http.StatusBadRequest},
+	{storage.ErrUploadNotFound, "NoSuchUpload", "The specified multipart upload does not exist", http.StatusNotFound},
+	{storage.ErrNoSuchUpload, "NoSuchUpload", "The specified multipart upload does not exist", http.StatusNotFound},
+	{storage.ErrPreconditionFailed, "PreconditionFailed", "At least one of the pre-conditions you specified did not hold", http.StatusPreconditionFailed},
+	{runtime.ErrQuotaExceeded, "InsufficientStorage", "The runtime storage quota was exceeded", http.StatusInsufficientStorage},
+	{runtime.ErrClosed, "ServiceUnavailable", "The runtime is closed", http.StatusServiceUnavailable},
+	{runtime.ErrInvalidListLimit, "InvalidArgument", "The list limit is invalid", http.StatusBadRequest},
+	{runtime.ErrMultipartUnsupported, "NotImplemented", "Multipart operations are not supported by this runtime profile", http.StatusNotImplemented},
+}
+
 func mapStorageError(err error, resource string) s3Error {
-	switch {
-	case isRequestTooLarge(err):
+	// Two cases have to read the error rather than merely recognise it, so they
+	// stay ahead of the table.
+	if isRequestTooLarge(err) {
 		var tooLarge *http.MaxBytesError
 		_ = errors.As(err, &tooLarge)
 		return requestTooLargeError(resource, tooLarge.Limit)
-	case errors.Is(err, storage.ErrBucketNotFound):
-		return s3Error{Code: "NoSuchBucket", Message: "The specified bucket does not exist", Resource: resource, StatusCode: http.StatusNotFound}
-	case errors.Is(err, storage.ErrInvalidBucketName):
-		return s3Error{Code: "InvalidBucketName", Message: "The specified bucket name is not valid", Resource: resource, StatusCode: http.StatusBadRequest}
-	case errors.Is(err, storage.ErrObjectNotFound):
-		return s3Error{Code: "NoSuchKey", Message: "The specified key does not exist", Resource: resource, StatusCode: http.StatusNotFound}
-	case errors.Is(err, storage.ErrBucketNotEmpty):
-		return s3Error{Code: "BucketNotEmpty", Message: "The bucket you tried to delete is not empty", Resource: resource, StatusCode: http.StatusConflict}
-	case errors.Is(err, storage.ErrInvalidKey):
-		return s3Error{Code: "InvalidArgument", Message: "Invalid object key", Resource: resource, StatusCode: http.StatusBadRequest}
-	case errors.Is(err, storage.ErrInvalidPart):
-		return s3Error{Code: "InvalidPart", Message: "One or more of the specified parts could not be found", Resource: resource, StatusCode: http.StatusBadRequest}
-	case errors.Is(err, storage.ErrUploadNotFound), errors.Is(err, storage.ErrNoSuchUpload):
-		return s3Error{Code: "NoSuchUpload", Message: "The specified multipart upload does not exist", Resource: resource, StatusCode: http.StatusNotFound}
-	case errors.Is(err, storage.ErrPreconditionFailed):
-		return s3Error{Code: "PreconditionFailed", Message: "At least one of the pre-conditions you specified did not hold", Resource: resource, StatusCode: http.StatusPreconditionFailed}
-	case errors.Is(err, runtime.ErrQuotaExceeded):
-		return s3Error{Code: "InsufficientStorage", Message: "The runtime storage quota was exceeded", Resource: resource, StatusCode: http.StatusInsufficientStorage}
-	case errors.Is(err, runtime.ErrClosed):
-		return s3Error{Code: "ServiceUnavailable", Message: "The runtime is closed", Resource: resource, StatusCode: http.StatusServiceUnavailable}
-	case errors.Is(err, runtime.ErrInvalidListLimit):
-		return s3Error{Code: "InvalidArgument", Message: "The list limit is invalid", Resource: resource, StatusCode: http.StatusBadRequest}
-	case errors.Is(err, runtime.ErrMultipartUnsupported):
-		return s3Error{Code: "NotImplemented", Message: "Multipart operations are not supported by this runtime profile", Resource: resource, StatusCode: http.StatusNotImplemented}
-	default:
-		return s3Error{Code: "InternalError", Message: "internal storage error", Resource: resource, StatusCode: http.StatusInternalServerError}
 	}
+	var denied *authority.ErrNotAuthorized
+	if errors.As(err, &denied) {
+		// A refusal is 403 AccessDenied, which is what S3 returns and what an
+		// SDK feature-gate expects. Falling through to InternalError would
+		// misreport a permission decision as a server fault and invite a retry
+		// of something that can never succeed.
+		//
+		// The message names the operation and nothing about the environment, so
+		// a caller learns what it may not do without learning what it may.
+		return s3Error{
+			Code:       "AccessDenied",
+			Message:    fmt.Sprintf("Access Denied: %s is not permitted by this environment", denied.Operation),
+			Resource:   resource,
+			StatusCode: http.StatusForbidden,
+		}
+	}
+	for _, mapping := range storageErrorCases {
+		if errors.Is(err, mapping.sentinel) {
+			return s3Error{
+				Code:       mapping.code,
+				Message:    mapping.message,
+				Resource:   resource,
+				StatusCode: mapping.statusCode,
+			}
+		}
+	}
+	return s3Error{Code: "InternalError", Message: "internal storage error", Resource: resource, StatusCode: http.StatusInternalServerError}
 }
 
 func writeXML(w http.ResponseWriter, r *http.Request, status int, v any) {
