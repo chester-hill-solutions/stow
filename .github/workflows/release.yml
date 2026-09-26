@@ -176,14 +176,22 @@ jobs:
     with:
       dry_run: false
       provider: auto
-      # Skips rather than fails when no live provider is configured, so a
-      # release is possible without live credentials. A skipped gate is not a
-      # passed gate, so the release job records which one happened and says so
-      # in the release notes. This was `true`, which made every release
-      # impossible: the gate hard-fails on absent STOW_LIVE_* secrets, and a
-      # gate that can never be satisfied is the same "designed but not wired"
-      # failure this repository has hit repeatedly.
-      require_configured: false
+      # The gate is enforced by default. A release is the one place where "we did
+      # not check" has to be expensive, so a missing live configuration fails the
+      # gate instead of skipping it.
+      #
+      # This was `false`, on the reasoning that `true` made every release
+      # impossible - which is true only while STOW_LIVE_* is unset, and the cause
+      # of that is unset secrets rather than a bad flag. What `false` actually
+      # permitted was a release publishing while recording that it had not been
+      # verified against anything: the notes said SKIPPED and the release went
+      # out anyway, which is a gate whose failure mode is the default.
+      #
+      # Set the repository variable STOW_ALLOW_UNVERIFIED_RELEASE=true to
+      # downgrade this to a skip. The release notes still record the skip, so a
+      # deliberate downgrade is visible in what gets published rather than
+      # silent, and the default stays enforcing.
+      require_configured: ${{ vars.STOW_ALLOW_UNVERIFIED_RELEASE != 'true' }}
     secrets:
       STOW_LIVE_ENDPOINT: ${{ secrets.STOW_LIVE_ENDPOINT }}
       STOW_LIVE_ACCESS_KEY_ID: ${{ secrets.STOW_LIVE_ACCESS_KEY_ID }}
