@@ -18,6 +18,7 @@ import (
 	"github.com/chester-hill-solutions/stow-s3/internal/parentwatch"
 	"github.com/chester-hill-solutions/stow-s3/internal/ready"
 	"github.com/chester-hill-solutions/stow-s3/internal/runthrough"
+	"github.com/chester-hill-solutions/stow-s3/internal/runtime"
 	"github.com/chester-hill-solutions/stow-s3/internal/s3api"
 	"github.com/chester-hill-solutions/stow-s3/internal/storage"
 	"github.com/chester-hill-solutions/stow-s3/internal/storage/fs"
@@ -28,7 +29,7 @@ import (
 type readyDetails struct {
 	endpoint string
 	mode     string
-	backend  string
+	backend  runtime.Backend
 	limits   nativeStorageLimits
 	creds    auth.Credentials
 	banner   string
@@ -64,10 +65,14 @@ func writeReadyMessage(fd int, details readyDetails) {
 		AccessKeyID:   details.creds.AccessKeyID,
 		SecretKey:     details.creds.SecretAccessKey,
 		Mode:          details.mode,
-		Backend:       details.backend,
+		Backend:       string(details.backend),
 		BinaryVersion: version.Version,
 		Capabilities: ready.Capabilities{
-			Persistent:        details.backend == "filesystem",
+			// The runtime's own predicate, not a comparison of the flag string.
+			// These two agreed only because the CLI could select two backends;
+			// a third backend is exactly where a private string comparison
+			// starts lying.
+			Persistent:        runtime.IsPersistentBackend(details.backend),
 			Multipart:         true,
 			Upstream:          details.mode == string(runthrough.ModeRunThrough),
 			ConditionalWrites: true,
@@ -82,21 +87,42 @@ func writeReadyMessage(fd int, details readyDetails) {
 	}
 }
 
+// parseBackend is the one place the --backend flag becomes a typed backend.
+//
+// It used to be a bare string compared against "filesystem" and "memory" in
+// four places, which meant the persistence claim published in the readiness
+// payload was a fourth opinion rather than the runtime's. An unrecognised value
+// is refused here, once, instead of at whichever consumer happened to notice.
+func parseBackend(value string) (runtime.Backend, error) {
+	switch backend := runtime.Backend(strings.ToLower(strings.TrimSpace(value))); backend {
+	case runtime.BackendMemory, runtime.BackendFilesystem:
+		return backend, nil
+	case runtime.BackendWorkspace:
+		// Reachable as a value but not constructible here: the workspace backend
+		// needs options this command does not carry, and guessing at them would
+		// hand a caller a directory in a shape they did not ask for. See
+		// docs/architecture/environment-plan.md M1.2.
+		return "", fmt.Errorf("--backend %q is not selectable from the CLI yet; use the embedded API", value)
+	default:
+		return "", fmt.Errorf("invalid --backend %q (want filesystem or memory)", value)
+	}
+}
+
 // openLocalStore creates the authoritative local store for the selected
 // backend. Backend selection is a startup decision, so an unknown value or a
 // failed open is fatal rather than an error a caller can recover from.
-func openLocalStore(backend, dataDir string) storage.Store {
+func openLocalStore(backend runtime.Backend, dataDir string) storage.Store {
 	switch backend {
-	case "filesystem":
+	case runtime.BackendFilesystem:
 		store, err := fs.NewFilesystemStore(dataDir)
 		if err != nil {
 			log.Fatalf("open store: %v", err)
 		}
 		return store
-	case "memory":
+	case runtime.BackendMemory:
 		return storage.NewMemoryStore()
 	default:
-		log.Fatalf("invalid --backend %q (want filesystem or memory)", backend)
+		log.Fatalf("no local store for backend %q", backend)
 		return nil
 	}
 }
@@ -168,11 +194,11 @@ func applyCacheLimits(config *runthrough.Config, maxBytes, maxObjects int64, ttl
 	return nil
 }
 
-func validateLiveWriteBackend(mode runthrough.Mode, backend string, config runthrough.Config) error {
+func validateLiveWriteBackend(mode runthrough.Mode, backend runtime.Backend, config runthrough.Config) error {
 	// Keyed on consent, not policy. A mirrorWrites policy without
 	// STOW_ALLOW_LIVE_WRITES keeps every write local, so it is perfectly
 	// serviceable from the memory backend and must not be refused here.
-	if mode == runthrough.ModeRunThrough && backend == "memory" && runthrough.PropagatesUpstream(config) {
+	if mode == runthrough.ModeRunThrough && backend == runtime.BackendMemory && runthrough.PropagatesUpstream(config) {
 		return fmt.Errorf("run-through live writes require the filesystem backend")
 	}
 	return nil
@@ -207,7 +233,7 @@ func serve(args []string) {
 	flags := flag.NewFlagSet("serve", flag.ExitOnError)
 	port := flags.Int("port", 9000, "HTTP listen port (0 = ephemeral)")
 	dataDir := flags.String("data-dir", ".stow", "Data directory for object storage")
-	backend := flags.String("backend", "filesystem", "Storage backend (filesystem or memory)")
+	backendFlag := flags.String("backend", "filesystem", "Storage backend (filesystem or memory)")
 	accessKey := flags.String("access-key", "", "Access key (generated if omitted)")
 	secretKey := flags.String("secret-key", "", "Secret key (generated if omitted)")
 	host := flags.String("host", "127.0.0.1", "Listen host")
@@ -259,7 +285,11 @@ func serve(args []string) {
 	if *cacheDir != "" {
 		rtCfg.CacheDir = *cacheDir
 	}
-	if err := validateLiveWriteBackend(mode, *backend, rtCfg); err != nil {
+	backend, err := parseBackend(*backendFlag)
+	if err != nil {
+		log.Fatal(err)
+	}
+	if err := validateLiveWriteBackend(mode, backend, rtCfg); err != nil {
 		log.Fatal(err)
 	}
 
@@ -273,13 +303,13 @@ func serve(args []string) {
 		}
 	}
 
-	store, adapter, err := buildStore(mode, *backend, localDataDir, rtCfg)
+	store, adapter, err := buildStore(mode, backend, localDataDir, rtCfg)
 	if err != nil {
 		log.Fatal(err)
 	}
 
 	storeLimits := nativeStorageLimits{maxBytes: *maxBytes, maxObjects: *maxObjects}
-	boundStore, err := bindNativeRuntimeStore(store, *backend, adapter, storeLimits)
+	boundStore, err := bindNativeRuntimeStore(store, backend, adapter, storeLimits)
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -354,7 +384,7 @@ func serve(args []string) {
 	announceStartup(*readyFd, readyDetails{
 		endpoint: endpoint,
 		mode:     string(mode),
-		backend:  *backend,
+		backend:  backend,
 		limits:   storeLimits,
 		creds:    creds,
 		banner:   runthrough.StartupBanner(rtCfg, mode),

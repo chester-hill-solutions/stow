@@ -11,6 +11,7 @@ import (
 	"testing"
 
 	"github.com/chester-hill-solutions/stow-s3/internal/runthrough"
+	"github.com/chester-hill-solutions/stow-s3/internal/runtime"
 	"github.com/chester-hill-solutions/stow-s3/internal/s3api"
 	"github.com/chester-hill-solutions/stow-s3/internal/storage"
 )
@@ -73,7 +74,7 @@ func assertHazardIsReal(t *testing.T) {
 // startLocalServer brings up the same wiring stow serve uses, in local mode.
 func startLocalServer(t *testing.T, dataDir string, cfg runthrough.Config) *httptest.Server {
 	t.Helper()
-	store, adapter, err := buildStore(runthrough.DetectMode(), "memory", dataDir, cfg)
+	store, adapter, err := buildStore(runthrough.DetectMode(), runtime.BackendMemory, dataDir, cfg)
 	if err != nil {
 		t.Fatalf("build store: %v", err)
 	}
@@ -180,7 +181,7 @@ func TestBuildStoreIgnoresUpstreamConfigInLocalMode(t *testing.T) {
 	dataDir := t.TempDir()
 	cfg.CacheDir = filepath.Join(dataDir, "cache")
 
-	store, adapter, err := buildStore(runthrough.DetectMode(), "memory", dataDir, cfg)
+	store, adapter, err := buildStore(runthrough.DetectMode(), runtime.BackendMemory, dataDir, cfg)
 	if err != nil {
 		t.Fatalf("build store: %v", err)
 	}

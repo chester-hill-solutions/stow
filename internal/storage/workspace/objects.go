@@ -51,7 +51,7 @@ func (s *Store) putLocked(ctx context.Context, bucket, key string, body io.Reade
 	if err != nil {
 		return nil, err
 	}
-	if err := s.verifyChecksum(opts, data); err != nil {
+	if err := storage.VerifyChecksum(opts, data); err != nil {
 		return nil, err
 	}
 
@@ -90,22 +90,6 @@ func (s *Store) putLocked(ctx context.Context, bucket, key string, body io.Reade
 		return nil, err
 	}
 	return s.metaFromEntry(bucket, key, entry), nil
-}
-
-// verifyChecksum checks a caller-supplied checksum against the body.
-func (s *Store) verifyChecksum(opts storage.PutOptions, data []byte) error {
-	algorithm := storage.NormalizeChecksumAlgorithm(opts.ChecksumAlgorithm)
-	if algorithm == "" || opts.ChecksumValue == "" {
-		return nil
-	}
-	computed, err := storage.ComputeChecksum(algorithm, data)
-	if err != nil {
-		return err
-	}
-	if computed != opts.ChecksumValue {
-		return storage.ErrChecksumMismatch
-	}
-	return nil
 }
 
 // GetObject returns an object's bytes. The file may be one stow wrote or one

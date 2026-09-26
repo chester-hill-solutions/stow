@@ -33,16 +33,12 @@ func (l nativeStorageLimits) objects() int64 {
 	return l.maxObjects
 }
 
-func bindNativeRuntimeStore(store storage.Store, backend string, admin *runthrough.Adapter, limits nativeStorageLimits) (storage.Store, error) {
-	options := runtime.Options{
-		Backend:    runtime.BackendMemory,
+func bindNativeRuntimeStore(store storage.Store, backend runtime.Backend, admin *runthrough.Adapter, limits nativeStorageLimits) (storage.Store, error) {
+	instance, err := runtime.OpenWithStore(runtime.Options{
+		Backend:    backend,
 		MaxBytes:   limits.bytes(),
 		MaxObjects: limits.objects(),
-	}
-	if backend == "filesystem" {
-		options.Backend = runtime.BackendFilesystem
-	}
-	instance, err := runtime.OpenWithStore(options, store, nil)
+	}, store, nil)
 	if err != nil {
 		return nil, fmt.Errorf("open native runtime: %w", err)
 	}

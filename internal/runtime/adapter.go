@@ -47,7 +47,7 @@ func OpenWithStore(options Options, store storage.Store, resetStore func() (stor
 		normalized,
 		store,
 		resetStore,
-		isPersistentBackend(normalized.Backend),
+		IsPersistentBackend(normalized.Backend),
 		true,
 	)
 	if err := instance.initialize(context.Background()); err != nil {

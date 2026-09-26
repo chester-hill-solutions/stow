@@ -131,6 +131,9 @@ func (s *MemoryStore) PutObject(_ context.Context, bucket, key string, body io.R
 	if err != nil {
 		return nil, err
 	}
+	if err := VerifyChecksum(opts, data); err != nil {
+		return nil, err
+	}
 
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -161,7 +164,7 @@ func (s *MemoryStore) PutObject(_ context.Context, bucket, key string, body io.R
 		ContentType:       opts.ContentType,
 		LastModified:      now,
 		Metadata:          CloneMetadata(opts.Metadata),
-		ChecksumAlgorithm: opts.ChecksumAlgorithm,
+		ChecksumAlgorithm: NormalizeChecksumAlgorithm(opts.ChecksumAlgorithm),
 		ChecksumValue:     opts.ChecksumValue,
 	}
 	b.objects[key] = &memObject{data: data, meta: meta}

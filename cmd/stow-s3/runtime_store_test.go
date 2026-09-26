@@ -10,6 +10,7 @@ import (
 	"testing"
 
 	"github.com/chester-hill-solutions/stow-s3/internal/runthrough"
+	"github.com/chester-hill-solutions/stow-s3/internal/runtime"
 	"github.com/chester-hill-solutions/stow-s3/internal/s3api"
 	"github.com/chester-hill-solutions/stow-s3/internal/storage"
 )
@@ -18,7 +19,7 @@ import (
 // assertions below exercise enforcement rather than the flag plumbing.
 func nativeTestStore(t *testing.T, limits nativeStorageLimits) storage.Store {
 	t.Helper()
-	store, err := bindNativeRuntimeStore(storage.NewMemoryStore(), "memory", nil, limits)
+	store, err := bindNativeRuntimeStore(storage.NewMemoryStore(), runtime.BackendMemory, nil, limits)
 	if err != nil {
 		t.Fatalf("bind native runtime store: %v", err)
 	}
@@ -170,7 +171,7 @@ func TestRunThroughStoreStillReportsAdminStats(t *testing.T) {
 		nil,
 		runthrough.NewMemoryOutbox(),
 	)
-	store, err := bindNativeRuntimeStore(local, "memory", admin, nativeStorageLimits{})
+	store, err := bindNativeRuntimeStore(local, runtime.BackendMemory, admin, nativeStorageLimits{})
 	if err != nil {
 		t.Fatalf("bind native runtime store: %v", err)
 	}

@@ -51,10 +51,17 @@ func isKnownBackend(backend Backend) bool {
 	}
 }
 
-// isPersistentBackend reports whether a backend keeps objects across a reopen.
+// IsPersistentBackend reports whether a backend keeps objects across a reopen.
 // It is the capability a host asks about, and it is why the two persistent
 // backends need a store supplied rather than constructed from Options.
-func isPersistentBackend(backend Backend) bool {
+//
+// Exported because a host that reports capabilities has to answer the same
+// question the runtime does. A host that answers it with its own string
+// comparison is the reason this is exported rather than kept internal: the
+// readiness payload used to claim `backend == "filesystem"`, which happened to
+// agree for the two backends the CLI could select and silently disagreed about
+// the third.
+func IsPersistentBackend(backend Backend) bool {
 	return backend == BackendFilesystem || backend == BackendWorkspace
 }
 
