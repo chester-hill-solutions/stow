@@ -76,43 +76,67 @@ func main() {
 	}
 
 	if previous, ok := previousBaseline(baselinePath); ok {
-		for rule, count := range current.Counts {
-			if count > previous.Counts[rule] {
-				fmt.Fprintf(os.Stderr, "quality baseline increased: %s (%d > %d)\n", rule, count, previous.Counts[rule])
-				os.Exit(1)
+		if problems := countIncreases(current, previous); len(problems) > 0 {
+			for _, problem := range problems {
+				fmt.Fprintln(os.Stderr, problem)
 			}
+			os.Exit(1)
 		}
 	}
 
-	allowed := make(map[string]struct{}, len(baseline.Violations))
-	for _, item := range baseline.Violations {
-		allowed[item.Identity] = struct{}{}
-	}
-	actual := make(map[string]struct{}, len(current.Violations))
-	var newItems, staleItems []string
-	for _, item := range current.Violations {
-		actual[item.Identity] = struct{}{}
-		if _, ok := allowed[item.Identity]; !ok {
-			newItems = append(newItems, fmt.Sprintf("new: %s (%s)", item.Identity, item.Message))
-		}
-	}
-	for _, item := range baseline.Violations {
-		if _, ok := actual[item.Identity]; !ok {
-			staleItems = append(staleItems, "stale: "+item.Identity)
-		}
-	}
-	if len(newItems) > 0 || len(staleItems) > 0 {
+	if problems := ratchetProblems(current, baseline); len(problems) > 0 {
 		fmt.Fprintln(os.Stderr, "Go quality ratchet violation")
-		for _, item := range newItems {
-			fmt.Fprintln(os.Stderr, item)
-		}
-		for _, item := range staleItems {
-			fmt.Fprintln(os.Stderr, item)
+		for _, problem := range problems {
+			fmt.Fprintln(os.Stderr, problem)
 		}
 		fmt.Fprintln(os.Stderr, "Fix the violation; regenerate the baseline only after intentional debt reduction.")
 		os.Exit(1)
 	}
 	fmt.Printf("Go quality ratchet OK (%d baseline entries)\n", len(current.Violations))
+}
+
+// countIncreases reports the rules whose violation count rose against a previous
+// report. A rule that current no longer has is not an increase, and one that
+// previous never had counts as an increase from zero.
+//
+// This is the check that makes a baseline impossible to grow quietly: identities
+// are matched exactly, so a violation can be renamed to shed its entry, but the
+// per-rule totals still catch it.
+func countIncreases(current, previous report) []string {
+	var problems []string
+	for rule, count := range current.Counts {
+		if count > previous.Counts[rule] {
+			problems = append(problems, fmt.Sprintf("quality baseline increased: %s (%d > %d)", rule, count, previous.Counts[rule]))
+		}
+	}
+	sort.Strings(problems)
+	return problems
+}
+
+// ratchetProblems reports every identity that is new since the baseline and
+// every baseline entry that is now stale. Both are failures: a new identity is
+// unapproved debt, and a stale one is debt that was paid and not recorded, which
+// is what forces the baseline down after a fix.
+func ratchetProblems(current, baseline report) []string {
+	allowed := make(map[string]struct{}, len(baseline.Violations))
+	for _, item := range baseline.Violations {
+		allowed[item.Identity] = struct{}{}
+	}
+	actual := make(map[string]struct{}, len(current.Violations))
+	var problems []string
+	for _, item := range current.Violations {
+		actual[item.Identity] = struct{}{}
+		if _, ok := allowed[item.Identity]; !ok {
+			problems = append(problems, fmt.Sprintf("new: %s (%s)", item.Identity, item.Message))
+		}
+	}
+	for _, item := range baseline.Violations {
+		if _, ok := actual[item.Identity]; !ok {
+			problems = append(problems, "stale: "+item.Identity)
+		}
+	}
+	sort.Strings(problems)
+	return problems
 }
 
 func previousBaseline(path string) (report, bool) {
@@ -136,10 +160,18 @@ func previousBaseline(path string) (report, bool) {
 	return previous, true
 }
 
+// scanRoots is where the tree comes from, so a test can point the same analysis
+// at a fixture instead of at the repository. A fixture inside the repository
+// would be scanned by the gate itself and would need a baseline entry of its
+// own, which is a debt recorded to test the thing that records debt.
 func scan() (report, error) {
+	return scanRoots([]string{"cmd", "internal", "conformance", "pkg"})
+}
+
+func scanRoots(roots []string) (report, error) {
 	result := report{Version: baselineVersion, Counts: map[string]int{}}
 	seen := map[string]int{}
-	for _, root := range []string{"cmd", "internal", "conformance", "pkg"} {
+	for _, root := range roots {
 		if err := filepath.WalkDir(root, func(path string, entry os.DirEntry, err error) error {
 			if err != nil {
 				return err
