@@ -278,3 +278,36 @@ time.sleep(300)
             child.kill()
             child.wait(timeout=10)
         pid_file.unlink(missing_ok=True)
+
+
+@needs_binary
+def test_close_does_not_delete_a_caller_supplied_data_dir(tmp_path: Path) -> None:
+    """close() removes only what the session created.
+
+    open_session accepts a caller-owned data_dir, and its two failure paths
+    already guard on ownership. close() did not, so passing your own directory
+    meant it was deleted on the success path and preserved on the failure ones.
+    """
+    supplied = tmp_path / "mine"
+    supplied.mkdir()
+    keep = supplied / "precious.txt"
+    keep.write_text("not stow's to delete")
+
+    session = open_session(data_dir=supplied)
+    assert session.data_dir == supplied
+    assert not session.owns_data_dir
+    session.close()
+
+    assert supplied.is_dir(), "close() removed a directory the caller supplied"
+    assert keep.read_text() == "not stow's to delete"
+
+
+@needs_binary
+def test_close_does_remove_a_session_created_data_dir() -> None:
+    """The mirror image: a directory stow made is stow's to remove."""
+    with with_session() as session:
+        assert session.owns_data_dir
+        created = session.data_dir
+        assert created.is_dir()
+
+    assert not created.exists(), "close() left behind a directory it created"
