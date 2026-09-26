@@ -187,9 +187,14 @@ func (i *Instance) DeleteObjects(ctx context.Context, bucket string, keys []stri
 	}
 	deleted, err := i.store.DeleteObjects(ctx, bucket, keys)
 	for _, key := range deleted {
-		if size, ok := sizes[key]; ok {
-			i.usage.Bytes -= size
+		size, existed := sizes[key]
+		if !existed {
+			// Confirmed as deleted because it was not there. There is no object
+			// to account for, and decrementing anyway would let a caller inflate
+			// its own quota by deleting keys that never existed.
+			continue
 		}
+		i.usage.Bytes -= size
 		i.usage.Objects--
 		target := objectTarget(bucket, key)
 		i.consumeTargetReservation(target)

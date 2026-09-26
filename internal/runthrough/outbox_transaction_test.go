@@ -6,6 +6,7 @@ import (
 	"errors"
 	"io"
 	"path/filepath"
+	"slices"
 	"testing"
 	"time"
 
@@ -217,7 +218,10 @@ func TestCopyIntentRetainsOperationIdentity(t *testing.T) {
 	}
 }
 
-func TestDeleteObjectsDiscardsPreparedIntentForMissingKey(t *testing.T) {
+// A delete for a key that was never there is confirmed, so it counts as a
+// deletion - and still enqueues nothing, because there is nothing to propagate
+// that reconciliation would not immediately acknowledge.
+func TestDeleteObjectsConfirmsButDoesNotPropagateAMissingKey(t *testing.T) {
 	ctx := context.Background()
 	local := storage.NewMemoryStore()
 	if err := local.CreateBucket(ctx, "bucket"); err != nil {
@@ -228,12 +232,15 @@ func TestDeleteObjectsDiscardsPreparedIntentForMissingKey(t *testing.T) {
 		t.Fatalf("new outbox: %v", err)
 	}
 	adapter := runthrough.NewWithOutbox(runthrough.Config{Policy: runthrough.PolicyMirrorWrites, AllowLiveWrites: true}, local, local, newMockUpstream(), outbox)
-	deleted, err := adapter.DeleteObjects(ctx, "bucket", []string{"missing"})
+	confirmed, err := adapter.DeleteObjects(ctx, "bucket", []string{"missing"})
 	if err != nil {
 		t.Fatalf("delete missing: %v", err)
 	}
-	if len(deleted) != 0 || len(outbox.Prepared()) != 0 || len(outbox.Pending()) != 0 {
-		t.Fatalf("state = deleted %d prepared %d active %d", len(deleted), len(outbox.Prepared()), len(outbox.Pending()))
+	if !slices.Equal(confirmed, []string{"missing"}) {
+		t.Fatalf("confirmed = %v, want [missing]", confirmed)
+	}
+	if len(outbox.Prepared()) != 0 || len(outbox.Pending()) != 0 {
+		t.Fatalf("state = prepared %d active %d, want none enqueued", len(outbox.Prepared()), len(outbox.Pending()))
 	}
 }
 

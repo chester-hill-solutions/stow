@@ -3,6 +3,7 @@ package s3api
 import (
 	"errors"
 	"net/http"
+	"net/url"
 	"strconv"
 	"strings"
 	"time"
@@ -75,13 +76,31 @@ func metadataSize(m map[string]string) int {
 	return n
 }
 
+// parseCopySource splits an x-amz-copy-source header into its bucket and key.
+//
+// The key is percent-encoded, so the split happens on the raw header and each
+// half is decoded afterwards, never the other way round: decoding first would
+// turn an encoded %2F inside a key into a separator and land the split inside the
+// key, making a key with a real slash work and a key with an encoded one fail.
+//
+// It is PathUnescape and not QueryUnescape because in a path segment a plus is a
+// literal plus rather than an encoded space, and the query form would rewrite a
+// key spelled "a+b" into "a b" and copy the wrong object without complaining.
 func parseCopySource(src string) (bucket, key string, err error) {
 	src = strings.TrimPrefix(src, "/")
 	parts := strings.SplitN(src, "/", 2)
 	if len(parts) != 2 {
 		return "", "", errInvalidCopySource
 	}
-	return parts[0], parts[1], nil
+	bucket, err = url.PathUnescape(parts[0])
+	if err != nil {
+		return "", "", errInvalidCopySource
+	}
+	key, err = url.PathUnescape(parts[1])
+	if err != nil {
+		return "", "", errInvalidCopySource
+	}
+	return bucket, key, nil
 }
 
 var errInvalidCopySource = &copySourceError{"Invalid copy source"}

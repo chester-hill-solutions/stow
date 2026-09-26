@@ -211,9 +211,9 @@ func (s *Store) CompleteMultipartUpload(ctx context.Context, uploadID string, pa
 	if err != nil {
 		return nil, err
 	}
-	if len(parts) > 1 {
-		meta.ETag = storage.CompositeETag(etags)
-	}
+	// This backend already had the single-part rule right; it now shares the
+	// rule with the other two rather than keeping the one correct copy of it.
+	meta.ETag = storage.CompletionETag(etags)
 	if err := os.RemoveAll(s.uploadDir(uploadID)); err != nil {
 		return nil, fmt.Errorf("workspace store: clear upload: %w", err)
 	}

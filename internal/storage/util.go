@@ -96,8 +96,17 @@ func CompositeETag(partETags []string) string {
 }
 
 // ValidateMultipartPartNumbers validates that completion parts are in strictly
-// ascending order, with no duplicate part numbers.
+// ascending order, with no duplicate part numbers, and that there is at least
+// one of them.
+//
+// An empty completion returns ErrInvalidPart rather than ErrInvalidUpload
+// because ErrInvalidPart is the sentinel the S3 surface maps; ErrInvalidUpload is
+// unmapped and would reach a client as a 500, which reports a malformed request
+// as a server fault and invites a retry that cannot succeed.
 func ValidateMultipartPartNumbers(parts []PartInfo) error {
+	if len(parts) == 0 {
+		return ErrInvalidPart
+	}
 	previous := 0
 	for _, part := range parts {
 		if part.PartNumber < 1 || part.PartNumber > 10000 {
@@ -109,6 +118,23 @@ func ValidateMultipartPartNumbers(parts []PartInfo) error {
 		previous = part.PartNumber
 	}
 	return nil
+}
+
+// CompletionETag is the ETag of a completed multipart object.
+//
+// A completion with exactly one part produced a single-part object, and S3 gives
+// it that part's own ETag verbatim. The `-{partCount}` suffix belongs to
+// genuinely multipart objects, where the digest covers the concatenated part
+// digests. So one part is not "a multipart object with a count of one": it is
+// the part.
+//
+// A client returns this value on its next conditional write, so the two forms
+// are not interchangeable behind the API.
+func CompletionETag(partETags []string) string {
+	if len(partETags) == 1 {
+		return partETags[0]
+	}
+	return CompositeETag(partETags)
 }
 
 // ETagForReader reads an object and returns its ETag and bytes.

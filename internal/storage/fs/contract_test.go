@@ -3,6 +3,7 @@ package fs_test
 import (
 	"context"
 	"errors"
+	"slices"
 	"strings"
 	"testing"
 
@@ -73,12 +74,15 @@ func TestFilesystemStoreObjectContract(t *testing.T) {
 	if _, err := store.CopyObject(ctx, "source", "one", "destination", "copy"); err != nil {
 		t.Fatalf("copy object: %v", err)
 	}
-	deleted, err := store.DeleteObjects(ctx, "source", []string{"two", "missing"})
+	// Both keys come back: "missing" is confirmed as deleted rather than
+	// omitted, because S3 deletes idempotently and reports a missing key as
+	// deleted.
+	confirmed, err := store.DeleteObjects(ctx, "source", []string{"two", "missing"})
 	if err != nil {
 		t.Fatalf("delete objects: %v", err)
 	}
-	if len(deleted) != 1 || deleted[0] != "two" {
-		t.Fatalf("delete objects = %v, want [two]", deleted)
+	if !slices.Equal(confirmed, []string{"two", "missing"}) {
+		t.Fatalf("delete objects = %v, want [two missing]", confirmed)
 	}
 	list, err := store.ListObjectsV2(ctx, "source", storage.ListOptions{})
 	if err != nil {

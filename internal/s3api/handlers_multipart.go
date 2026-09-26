@@ -102,8 +102,15 @@ func (s *Server) handleCompleteMultipartUpload(ctx context.Context, w http.Respo
 		parts = append(parts, storage.PartInfo{PartNumber: p.PartNumber, ETag: "\"" + etag + "\""})
 	}
 
-	// Validate minimum part size for non-final parts
-	storedParts, _ := s.multipart.ListParts(ctx, uploadID)
+	// Validate minimum part size for non-final parts. A store that cannot list the
+	// parts cannot be asked whether they are big enough, so this error is reported
+	// rather than treated as an empty listing: an empty map would make every size
+	// lookup miss and silently pass every part.
+	storedParts, err := s.multipart.ListParts(ctx, uploadID)
+	if err != nil {
+		writeError(w, r, mapStorageError(err, resourcePath(bucket, key)))
+		return
+	}
 	partSizes := map[int]int64{}
 	for _, p := range storedParts {
 		partSizes[p.PartNumber] = p.Size
@@ -273,8 +280,16 @@ func parseRange(hdr string, size int64) (start, end int64, err error) {
 			return 0, 0, errInvalidRange
 		}
 	}
-	if s < 0 || s >= size || e < s || e >= size {
+	if s < 0 || s >= size || e < s {
 		return 0, 0, errInvalidRange
+	}
+	// An end past the last byte is clamped, not refused. A recipient must treat an
+	// unsatisfiable end as the last byte, and clients that ask for "the rest of
+	// this" routinely name an offset they inferred rather than measured. Only a
+	// range that *begins* past the end is unsatisfiable, which the check above
+	// rejects.
+	if e >= size {
+		e = size - 1
 	}
 	return s, e, nil
 }

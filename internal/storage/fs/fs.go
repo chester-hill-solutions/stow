@@ -365,13 +365,16 @@ func (s *FilesystemStore) DeleteObjects(_ context.Context, bucket string, keys [
 			return deleted, err
 		}
 		objPath := s.objectPath(bucket, key)
-		if _, err := os.Stat(objPath); os.IsNotExist(err) {
-			continue
-		}
-		if err := os.Remove(objPath); err != nil {
+		// A key that was not there is still confirmed: S3 deletes idempotently
+		// and reports it as deleted rather than as an error.
+		if _, err := os.Stat(objPath); err == nil {
+			if err := os.Remove(objPath); err != nil {
+				return deleted, err
+			}
+			s.pruneEmptyShards(bucket, objPath)
+		} else if !os.IsNotExist(err) {
 			return deleted, err
 		}
-		s.pruneEmptyShards(bucket, objPath)
 		deleted = append(deleted, key)
 	}
 	return deleted, nil

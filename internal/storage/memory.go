@@ -253,10 +253,11 @@ func (s *MemoryStore) DeleteObjects(_ context.Context, bucket string, keys []str
 		if err := ValidateKey(key); err != nil {
 			return deleted, err
 		}
-		if _, ok := b.objects[key]; !ok {
-			continue
+		// A key that was not there is still confirmed: S3 deletes idempotently
+		// and reports it as deleted rather than as an error.
+		if _, ok := b.objects[key]; ok {
+			delete(b.objects, key)
 		}
-		delete(b.objects, key)
 		deleted = append(deleted, key)
 	}
 	return deleted, nil
@@ -366,9 +367,6 @@ func (s *MemoryStore) UploadPart(_ context.Context, uploadID string, partNumber 
 }
 
 func (s *MemoryStore) CompleteMultipartUpload(_ context.Context, uploadID string, parts []PartInfo) (*ObjectMeta, error) {
-	if len(parts) == 0 {
-		return nil, ErrInvalidUpload
-	}
 	if err := ValidateMultipartPartNumbers(parts); err != nil {
 		return nil, err
 	}
@@ -395,7 +393,7 @@ func (s *MemoryStore) CompleteMultipartUpload(_ context.Context, uploadID string
 		combined = append(combined, part.data...)
 	}
 
-	etag := CompositeETag(partETags)
+	etag := CompletionETag(partETags)
 	versionID, err := NewRecordVersion()
 	if err != nil {
 		return nil, err

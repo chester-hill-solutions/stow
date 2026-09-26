@@ -185,17 +185,18 @@ func (s *Store) DeleteObjects(ctx context.Context, bucket string, keys []string)
 	if !s.bucketExists(bucket) {
 		return nil, storage.ErrBucketNotFound
 	}
-	var undeleted []string
+	// The returned slice is the keys this call confirmed deleted. A key that was
+	// not there counts: S3 deletes idempotently and reports a missing key as
+	// deleted rather than as an error, so it belongs in the slice the S3 handler
+	// emits as <Deleted>. Only a key whose delete failed is left out.
+	var deleted []string
 	for _, key := range keys {
-		if err := s.DeleteObject(ctx, bucket, key); err != nil {
-			if errors.Is(err, storage.ErrObjectNotFound) {
-				undeleted = append(undeleted, key)
-				continue
-			}
-			return nil, err
+		if err := s.DeleteObject(ctx, bucket, key); err != nil && !errors.Is(err, storage.ErrObjectNotFound) {
+			return deleted, err
 		}
+		deleted = append(deleted, key)
 	}
-	return undeleted, nil
+	return deleted, nil
 }
 
 // CopyObject writes an existing object to a new key, as a real file at the new

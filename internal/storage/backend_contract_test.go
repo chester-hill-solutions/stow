@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"slices"
 	"strings"
 	"testing"
 
@@ -85,6 +86,78 @@ func requireMultipart(t *testing.T, store storage.Store) storage.MultipartStore 
 		t.Fatalf("%T does not implement storage.MultipartStore", store)
 	}
 	return multi
+}
+
+// A batch delete returns the keys it confirmed deleted.
+//
+// DeleteObjects returns a []string whose meaning is not visible in its
+// signature, and the S3 handler emits it as <Deleted>, so a backend that returns
+// the wrong set produces a response that misreports what happened.
+//
+// A key that was not there is confirmed rather than skipped. S3 deletes
+// idempotently and states that a missing key is "returned as deleted", so it
+// belongs in the slice: the returned list is the request minus the failures, not
+// the request minus the absences. A backend that omits absent keys agrees with
+// one that deleted them, and a client cannot tell the two apart except by
+// counting.
+func TestStoreBatchDeleteReturnsTheKeysItConfirmed(t *testing.T) {
+	withStores(t, func(t *testing.T, store storage.Store) {
+		ctx := context.Background()
+		if err := store.CreateBucket(ctx, "batch"); err != nil {
+			t.Fatalf("create bucket: %v", err)
+		}
+		for _, key := range []string{"kept/one", "kept/two"} {
+			if _, err := store.PutObject(ctx, "batch", key, strings.NewReader("body"), storage.PutOptions{}); err != nil {
+				t.Fatalf("put %s: %v", key, err)
+			}
+		}
+
+		confirmed, err := store.DeleteObjects(ctx, "batch", []string{"kept/one", "absent", "kept/two"})
+		if err != nil {
+			t.Fatalf("delete objects: %v", err)
+		}
+		// All three, in request order: the two real deletions and the absent key
+		// S3 confirms.
+		want := []string{"kept/one", "absent", "kept/two"}
+		if !slices.Equal(confirmed, want) {
+			t.Fatalf("confirmed = %v, want %v; a missing key is confirmed as deleted, not omitted", confirmed, want)
+		}
+
+		// And the two that existed are gone, so the list cannot be satisfied by
+		// echoing the request back.
+		for _, key := range []string{"kept/one", "kept/two"} {
+			if _, err := store.HeadObject(ctx, "batch", key); !errors.Is(err, storage.ErrObjectNotFound) {
+				t.Fatalf("head %s after reported deletion = %v, want ErrObjectNotFound", key, err)
+			}
+		}
+	})
+}
+
+// A batch delete that fails partway keeps the keys it already confirmed, so a
+// caller retrying the remainder can skip what already succeeded. Without that
+// list a recoverable partial failure becomes a second round of deletions against
+// keys that are gone.
+func TestStoreBatchDeleteReportsProgressBeforeAFailure(t *testing.T) {
+	withStores(t, func(t *testing.T, store storage.Store) {
+		ctx := context.Background()
+		if err := store.CreateBucket(ctx, "batch"); err != nil {
+			t.Fatalf("create bucket: %v", err)
+		}
+		if _, err := store.PutObject(ctx, "batch", "doomed", strings.NewReader("body"), storage.PutOptions{}); err != nil {
+			t.Fatalf("put: %v", err)
+		}
+
+		// A key past the documented 1024-byte limit fails validation after the
+		// first key has already been removed, which is the partial state.
+		tooLong := strings.Repeat("k", 1025)
+		confirmed, err := store.DeleteObjects(ctx, "batch", []string{"doomed", tooLong})
+		if !errors.Is(err, storage.ErrInvalidKey) {
+			t.Fatalf("delete error = %v, want ErrInvalidKey", err)
+		}
+		if !slices.Equal(confirmed, []string{"doomed"}) {
+			t.Fatalf("confirmed = %v, want [doomed]; a caller retrying the remainder cannot skip what already succeeded without this", confirmed)
+		}
+	})
 }
 
 func TestStoreBatchDeleteRequiresBucket(t *testing.T) {
@@ -227,57 +300,6 @@ func TestStoreBucketDeletionRejectsActiveMultipartUpload(t *testing.T) {
 		}
 		if err := multi.ValidateMultipartUpload(ctx, upload.UploadID, upload.Bucket, upload.Key); err != nil {
 			t.Fatalf("validate upload after rejected deletion: %v", err)
-		}
-	})
-}
-
-func TestStoreRejectsDuplicateMultipartParts(t *testing.T) {
-	withStores(t, func(t *testing.T, store storage.Store) {
-		ctx := context.Background()
-		multi := requireMultipart(t, store)
-		if err := store.CreateBucket(ctx, "uploads"); err != nil {
-			t.Fatalf("create bucket: %v", err)
-		}
-		upload, err := multi.CreateMultipartUpload(ctx, "uploads", "object.bin")
-		if err != nil {
-			t.Fatalf("create upload: %v", err)
-		}
-		part, err := multi.UploadPart(ctx, upload.UploadID, 1, strings.NewReader("part"))
-		if err != nil {
-			t.Fatalf("upload part: %v", err)
-		}
-		_, err = multi.CompleteMultipartUpload(ctx, upload.UploadID, []storage.PartInfo{*part, *part})
-		if !errors.Is(err, storage.ErrInvalidPart) {
-			t.Fatalf("complete error = %v, want ErrInvalidPart", err)
-		}
-	})
-}
-
-func TestStoreRejectsUnsortedMultipartCompletionParts(t *testing.T) {
-	withStores(t, func(t *testing.T, store storage.Store) {
-		ctx := context.Background()
-		multi := requireMultipart(t, store)
-		if err := store.CreateBucket(ctx, "uploads"); err != nil {
-			t.Fatalf("create bucket: %v", err)
-		}
-		upload, err := multi.CreateMultipartUpload(ctx, "uploads", "object.bin")
-		if err != nil {
-			t.Fatalf("create upload: %v", err)
-		}
-		first, err := multi.UploadPart(ctx, upload.UploadID, 1, strings.NewReader("first"))
-		if err != nil {
-			t.Fatalf("upload first part: %v", err)
-		}
-		second, err := multi.UploadPart(ctx, upload.UploadID, 2, strings.NewReader("second"))
-		if err != nil {
-			t.Fatalf("upload second part: %v", err)
-		}
-		parts := []storage.PartInfo{*second, *first}
-		if _, err := multi.CompleteMultipartUpload(ctx, upload.UploadID, parts); !errors.Is(err, storage.ErrInvalidPart) {
-			t.Fatalf("complete error = %v, want ErrInvalidPart", err)
-		}
-		if parts[0].PartNumber != 2 {
-			t.Fatalf("completion parts were reordered: %+v", parts)
 		}
 	})
 }

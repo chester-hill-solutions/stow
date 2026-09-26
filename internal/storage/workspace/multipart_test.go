@@ -5,6 +5,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 
@@ -206,12 +207,16 @@ func TestCopyAndBatchDelete(t *testing.T) {
 		t.Errorf("the source changed when the copy was edited: %q", got)
 	}
 
-	undeleted, err := store.DeleteObjects(ctx, bucket, []string{"copy.txt", "never-existed.txt"})
+	// DeleteObjects confirms every key it was asked to delete, the one that was
+	// never there included: S3 reports a missing key as deleted. The assertion
+	// below also checks the deletion really happened, so the list is not
+	// satisfied by echoing the request back.
+	confirmed, err := store.DeleteObjects(ctx, bucket, []string{"copy.txt", "never-existed.txt"})
 	if err != nil {
 		t.Fatalf("DeleteObjects: %v", err)
 	}
-	if len(undeleted) != 1 || undeleted[0] != "never-existed.txt" {
-		t.Errorf("DeleteObjects undeleted = %v, want just the absent key", undeleted)
+	if !slices.Equal(confirmed, []string{"copy.txt", "never-existed.txt"}) {
+		t.Errorf("DeleteObjects confirmed = %v, want both keys", confirmed)
 	}
 	if _, _, err := store.GetObject(ctx, bucket, "copy.txt"); !errors.Is(err, storage.ErrObjectNotFound) {
 		t.Errorf("the deleted key is still readable: %v", err)

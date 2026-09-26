@@ -81,7 +81,7 @@ All S3 operations use **AWS Signature Version 4 (SigV4)** unless served via a **
 | **GetObject** | `GET` | `/{bucket}/{key}` | `Authorization` | `200 OK`, object bytes; `Content-Type`, `Content-Length`, `ETag`, `Last-Modified`; user `x-amz-meta-*` echoed |
 | **HeadObject** | `HEAD` | `/{bucket}/{key}` | `Authorization` | `200 OK` (empty body) with same metadata headers as GetObject; `404` if missing |
 | **DeleteObject** | `DELETE` | `/{bucket}/{key}` | `Authorization` | `204 No Content` (even if key did not exist — S3 idempotent delete) |
-| **DeleteObjects** | `POST` | `/{bucket}?delete` | `Authorization`, `Content-Type: application/xml`, `Content-Length` | `200 OK`, XML `DeleteResult` with per-key `Deleted` and/or `Error` entries |
+| **DeleteObjects** | `POST` | `/{bucket}?delete` | `Authorization`, `Content-Type: application/xml`, `Content-Length` | `200 OK`, XML `DeleteResult` with per-key `Deleted` and/or `Error` entries. A key that was not there is **confirmed as deleted** and appears in `Deleted` — S3 deletes idempotently and reports a missing key as deleted. Only a key whose delete actually failed appears in `Error` |
 | **CopyObject** | `PUT` | `/{bucket}/{key}` | `Authorization`, `x-amz-copy-source: /{srcBucket}/{srcKey}` (URL-encoded key segments) | `200 OK`, XML `CopyObjectResult` with `ETag`, `LastModified` |
 
 **Object metadata (v1):**
@@ -89,7 +89,7 @@ All S3 operations use **AWS Signature Version 4 (SigV4)** unless served via a **
 - **Content-Length:** Required on PUT; enforced. Mismatch between declared length and body: `400 Bad Request`.
 - **ETag:** Strong validator; quoted hex MD5 for single-part objects; multipart ETag format per S3 (`{md5}-{partCount}`).
 - **x-amz-meta-*:** Arbitrary user metadata keys (case-insensitive key normalization per S3). Returned on GET/HEAD. Max 2 KB total user metadata per object (enforce `400` if exceeded).
-- **Range requests:** `GET` with `Range: bytes={start}-{end}` returns `206 Partial Content` with `Content-Range` header. Invalid or unsatisfiable range: `416 Range Not Satisfiable` with `Content-Range: bytes */{size}`.
+- **Range requests:** `GET` with `Range: bytes={start}-{end}` returns `206 Partial Content` with `Content-Range` header. An end past the last byte is **clamped to the last byte**, not refused — `416` is for a range that cannot be satisfied at all, which means a start at or past the size, an end before its start, or an unparseable spec. Refusals answer `416 Range Not Satisfiable` with `Content-Range: bytes */{size}`. The distinction matters in both directions: refusing a clamped end breaks resumable clients, and clamping a start turns a `416` into a silently short `206`.
 
 **CopyObject constraints (v1):**
 - Same-bucket and cross-bucket copy supported locally.
@@ -220,6 +220,13 @@ Each flow below MUST pass against the local endpoint using the pinned AWS SDK v3
 2. GetObject Range bytes=0-1023 → 206, Content-Range, 1024 bytes
 3. GetObject Range bytes=-512 → last 512 bytes
 4. GetObject Range bytes=99999- → 416
+5. GetObject Range bytes=0-99999 → 206, Content-Range bytes 0-10239/10240, whole
+   object. An end past the last byte is clamped, not refused: RFC 9110 requires a
+   recipient to treat it as the last byte, and S3 does. Only a range that *begins*
+   past the end is unsatisfiable, which is case 4. Clamping the start as well
+   would answer 416 where S3 answers 206 for a resumable client that named an
+   offset it had guessed, so the two directions are pinned separately.
+6. GetObject Range bytes=9999-99999 → 206, Content-Range bytes 9999-10239/10240
 ```
 
 ### 2.6 CopyObject — Same-Bucket and Cross-Bucket
@@ -240,6 +247,12 @@ Each flow below MUST pass against the local endpoint using the pinned AWS SDK v3
 2. DeleteObjects with 2 keys → response lists 2 Deleted
 3. ListObjectsV2 → 1 key remains
 4. DeleteObjects with quiet=false → per-key Deleted entries in XML
+5. DeleteObjects including a key that was never there → that key is listed in
+   Deleted, not in Error. S3's DeleteObjects reference states that a missing key
+   is "returned as deleted", so a response that omits it is a divergence a client
+   detects only by counting entries.
+6. DeleteObjects where a key fails (revoked permission) → that key appears in
+   Error and the others still appear in Deleted
 ```
 
 ### 2.8 URL Style Matrix (smoke)
@@ -368,7 +381,8 @@ GET/HeadObject flow (readThroughCache):
 **ListObjectsV2 in run-through:**
 - Returns **union** of local keys and upstream keys (deduplicated by key name).
 - For duplicate keys, **local metadata wins** for `ETag`/`Size`/`LastModified` in listing (local is authoritative for dev).
-- Implementation fetches complete prefix sets from both sources, merges, then applies client `max-keys` / continuation locally so pagination tokens stay stable.
+- The merged result is ordered by key, then `max-keys` and `continuation-token` are applied to the merged set. Continuation tokens are opaque; a client resumes by returning a token it received and MUST NOT construct one.
+- **Consistency: eventual.** The local store and the upstream provider are independent systems read at different times, and there is no transaction spanning them. The listing is therefore a union of two separately-timed reads, not a snapshot of one instant — and no implementation can make it one without abandoning the merge. Under concurrent writes a key **MAY appear in two consecutive pages, or in neither**, and a key deleted upstream mid-listing MAY still be returned. Clients MUST tolerate this. This is the guarantee S3's own `ListObjectsV2` offers, and it is not stronger here: claiming a cross-source snapshot would be a divergence from the compatibility target, not an improvement. See ADR 0001 for the policy modes and `docs/architecture/environment-implementation.md` R-707 for the fetch bound this permits.
 - Under `readThroughCache` and `mirrorWrites`, listing is the merged local/upstream result described above; the legacy `proxy` policy is not supported.
 
 **Object size / buffering (v1, intentional):**
@@ -406,6 +420,8 @@ Required manual/CI scenarios (against AWS S3, Cloudflare R2, or custom endpoint)
 4. Write with default policy → upstream unchanged (verify with upstream SDK).
 5. Write with `allowLiveWrites: true` → visible on upstream.
 6. Failed upstream propagation → local result is retained, an immutable outbox entry is recorded, and a transient retry/manual retry can propagate the exact version.
+7. Merged listing over one prefix returns keys from **both** the local store and upstream, and a key present in both resolves to local `ETag`/`Size`/`LastModified`. Assert set membership within the returned page only. Do **not** assert cross-page ordering or completeness: §6.2 claims eventual consistency, and a case that pins either would fail against a correct implementation.
+8. A paged merged listing fetches a bounded window per page rather than the full prefix set from each source. Assert against the upstream mock's call count and requested `max-keys`, so the O(n)-per-page behaviour cannot return. Keys are written across both sources so the assertion cannot pass by accident on a single-source listing.
 
 ---
 
