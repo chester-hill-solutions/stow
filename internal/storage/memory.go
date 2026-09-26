@@ -253,10 +253,11 @@ func (s *MemoryStore) DeleteObjects(_ context.Context, bucket string, keys []str
 		if err := ValidateKey(key); err != nil {
 			return deleted, err
 		}
-		if _, ok := b.objects[key]; !ok {
-			continue
+		// A key that was not there is still confirmed: S3 deletes idempotently
+		// and reports it as deleted rather than as an error.
+		if _, ok := b.objects[key]; ok {
+			delete(b.objects, key)
 		}
-		delete(b.objects, key)
 		deleted = append(deleted, key)
 	}
 	return deleted, nil

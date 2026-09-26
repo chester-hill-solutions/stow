@@ -81,7 +81,7 @@ All S3 operations use **AWS Signature Version 4 (SigV4)** unless served via a **
 | **GetObject** | `GET` | `/{bucket}/{key}` | `Authorization` | `200 OK`, object bytes; `Content-Type`, `Content-Length`, `ETag`, `Last-Modified`; user `x-amz-meta-*` echoed |
 | **HeadObject** | `HEAD` | `/{bucket}/{key}` | `Authorization` | `200 OK` (empty body) with same metadata headers as GetObject; `404` if missing |
 | **DeleteObject** | `DELETE` | `/{bucket}/{key}` | `Authorization` | `204 No Content` (even if key did not exist — S3 idempotent delete) |
-| **DeleteObjects** | `POST` | `/{bucket}?delete` | `Authorization`, `Content-Type: application/xml`, `Content-Length` | `200 OK`, XML `DeleteResult` with per-key `Deleted` and/or `Error` entries |
+| **DeleteObjects** | `POST` | `/{bucket}?delete` | `Authorization`, `Content-Type: application/xml`, `Content-Length` | `200 OK`, XML `DeleteResult` with per-key `Deleted` and/or `Error` entries. A key that was not there is **confirmed as deleted** and appears in `Deleted` — S3 deletes idempotently and reports a missing key as deleted. Only a key whose delete actually failed appears in `Error` |
 | **CopyObject** | `PUT` | `/{bucket}/{key}` | `Authorization`, `x-amz-copy-source: /{srcBucket}/{srcKey}` (URL-encoded key segments) | `200 OK`, XML `CopyObjectResult` with `ETag`, `LastModified` |
 
 **Object metadata (v1):**
@@ -247,6 +247,12 @@ Each flow below MUST pass against the local endpoint using the pinned AWS SDK v3
 2. DeleteObjects with 2 keys → response lists 2 Deleted
 3. ListObjectsV2 → 1 key remains
 4. DeleteObjects with quiet=false → per-key Deleted entries in XML
+5. DeleteObjects including a key that was never there → that key is listed in
+   Deleted, not in Error. S3's DeleteObjects reference states that a missing key
+   is "returned as deleted", so a response that omits it is a divergence a client
+   detects only by counting entries.
+6. DeleteObjects where a key fails (revoked permission) → that key appears in
+   Error and the others still appear in Deleted
 ```
 
 ### 2.8 URL Style Matrix (smoke)

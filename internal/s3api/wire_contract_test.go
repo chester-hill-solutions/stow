@@ -372,9 +372,15 @@ func TestGetObjectRangeOverTheWholeObjectIsPartialContent(t *testing.T) {
 }
 
 // The <Deleted> entries in a multi-object delete response name the keys that
-// were deleted. The handler copies the store's return value into the response
-// body, so this runs against all three stores: the store contract case proves
-// what a backend returns, and only this proves the wire inherits it.
+// were confirmed deleted, including a key that was never there. The handler
+// copies the store's return value into the response body, so this runs against
+// all three stores: the store contract case proves what a backend returns, and
+// only this proves the wire inherits it.
+//
+// The absent key is the load-bearing entry. S3 states that a missing key is
+// "returned as deleted", so omitting it is a divergence a client can detect only
+// by counting - and a backend returning the survivors instead is the same wire
+// output for a different and much worse reason.
 func TestDeleteObjectsResponseNamesTheKeysItDeleted(t *testing.T) {
 	for name, newStore := range wireStores() {
 		t.Run(name, func(t *testing.T) {
@@ -383,17 +389,15 @@ func TestDeleteObjectsResponseNamesTheKeysItDeleted(t *testing.T) {
 			putOverWire(t, ts, objectRef{"wirebucket", "gone/one"}, "value")
 			putOverWire(t, ts, objectRef{"wirebucket", "gone/two"}, "value")
 
-			// The absent key is the tell. It was never deleted, so it must not
-			// appear; a complement implementation reports exactly this one.
 			reported := deleteOverWire(t, ts, "wirebucket", "gone/one", "never-existed", "gone/two")
-			want := []string{"gone/one", "gone/two"}
+			want := []string{"gone/one", "never-existed", "gone/two"}
 			if !slices.Equal(reported, want) {
-				t.Fatalf("reported deleted = %v, want %v; the absent key must not appear and the two real deletions must", reported, want)
+				t.Fatalf("reported deleted = %v, want %v; every key is confirmed, the absent one included", reported, want)
 			}
 
-			// And the named keys are genuinely gone, so the response is not
-			// merely plausible.
-			for _, key := range want {
+			// And the two that existed are genuinely gone, so the response is
+			// not satisfied by echoing the request back.
+			for _, key := range []string{"gone/one", "gone/two"} {
 				if status := headStatusOverWire(t, ts, objectRef{"wirebucket", key}); status != http.StatusNotFound {
 					t.Fatalf("head %s after reported deletion = %d, want 404", key, status)
 				}

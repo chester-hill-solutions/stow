@@ -185,15 +185,13 @@ func (s *Store) DeleteObjects(ctx context.Context, bucket string, keys []string)
 	if !s.bucketExists(bucket) {
 		return nil, storage.ErrBucketNotFound
 	}
-	// The returned slice is the keys this call deleted. A key that was not there
-	// is skipped rather than reported, which is S3's behaviour and what makes a
-	// repeated delete idempotent.
+	// The returned slice is the keys this call confirmed deleted. A key that was
+	// not there counts: S3 deletes idempotently and reports a missing key as
+	// deleted rather than as an error, so it belongs in the slice the S3 handler
+	// emits as <Deleted>. Only a key whose delete failed is left out.
 	var deleted []string
 	for _, key := range keys {
-		if err := s.DeleteObject(ctx, bucket, key); err != nil {
-			if errors.Is(err, storage.ErrObjectNotFound) {
-				continue
-			}
+		if err := s.DeleteObject(ctx, bucket, key); err != nil && !errors.Is(err, storage.ErrObjectNotFound) {
 			return deleted, err
 		}
 		deleted = append(deleted, key)

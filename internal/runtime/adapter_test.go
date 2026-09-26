@@ -73,9 +73,11 @@ func assertAdapterCopyAndDelete(t *testing.T, ctx context.Context, adapter *Stor
 	if _, err := adapter.CopyObject(ctx, "adapter", "dir/one", "adapter", "copy"); err != nil {
 		t.Fatalf("copy: %v", err)
 	}
-	deleted, err := adapter.DeleteObjects(ctx, "adapter", []string{"copy", "missing"})
-	if err != nil || !equalStrings(deleted, []string{"copy"}) {
-		t.Fatalf("delete objects = %v, err = %v", deleted, err)
+	// Both keys are confirmed: "missing" was not there, which S3 reports as
+	// deleted. Quota is only released for the one that existed.
+	confirmed, err := adapter.DeleteObjects(ctx, "adapter", []string{"copy", "missing"})
+	if err != nil || !equalStrings(confirmed, []string{"copy", "missing"}) {
+		t.Fatalf("delete objects = %v, err = %v", confirmed, err)
 	}
 	if usage := instance.Usage(); usage.Bytes != 6 || usage.Objects != 2 {
 		t.Fatalf("usage = %+v", usage)

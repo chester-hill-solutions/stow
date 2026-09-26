@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"slices"
 	"strings"
 	"testing"
 
@@ -87,15 +88,19 @@ func requireMultipart(t *testing.T, store storage.Store) storage.MultipartStore 
 	return multi
 }
 
-// A batch delete returns the keys it deleted.
+// A batch delete returns the keys it confirmed deleted.
 //
 // DeleteObjects returns a []string whose meaning is not visible in its
 // signature, and the S3 handler emits it as <Deleted>, so a backend that returns
-// the survivors produces a response naming objects still on disk and omitting
-// the ones that are gone. A key that was not there is neither an error nor a
-// deletion, which is S3's behaviour and why the two lists are not the same set
-// in a different order.
-func TestStoreBatchDeleteReturnsTheKeysItDeleted(t *testing.T) {
+// the wrong set produces a response that misreports what happened.
+//
+// A key that was not there is confirmed rather than skipped. S3 deletes
+// idempotently and states that a missing key is "returned as deleted", so it
+// belongs in the slice: the returned list is the request minus the failures, not
+// the request minus the absences. A backend that omits absent keys agrees with
+// one that deleted them, and a client cannot tell the two apart except by
+// counting.
+func TestStoreBatchDeleteReturnsTheKeysItConfirmed(t *testing.T) {
 	withStores(t, func(t *testing.T, store storage.Store) {
 		ctx := context.Background()
 		if err := store.CreateBucket(ctx, "batch"); err != nil {
@@ -107,37 +112,31 @@ func TestStoreBatchDeleteReturnsTheKeysItDeleted(t *testing.T) {
 			}
 		}
 
-		deleted, err := store.DeleteObjects(ctx, "batch", []string{"kept/one", "absent", "kept/two"})
+		confirmed, err := store.DeleteObjects(ctx, "batch", []string{"kept/one", "absent", "kept/two"})
 		if err != nil {
 			t.Fatalf("delete objects: %v", err)
 		}
-		want := []string{"kept/one", "kept/two"}
-		if len(deleted) != len(want) {
-			t.Fatalf("deleted = %v, want %v", deleted, want)
-		}
-		for i, key := range want {
-			if deleted[i] != key {
-				t.Fatalf("deleted = %v, want %v in request order", deleted, want)
-			}
+		// All three, in request order: the two real deletions and the absent key
+		// S3 confirms.
+		want := []string{"kept/one", "absent", "kept/two"}
+		if !slices.Equal(confirmed, want) {
+			t.Fatalf("confirmed = %v, want %v; a missing key is confirmed as deleted, not omitted", confirmed, want)
 		}
 
-		// A key reported as deleted is gone, so the list cannot be satisfied by
-		// reporting the complement.
-		for _, key := range want {
+		// And the two that existed are gone, so the list cannot be satisfied by
+		// echoing the request back.
+		for _, key := range []string{"kept/one", "kept/two"} {
 			if _, err := store.HeadObject(ctx, "batch", key); !errors.Is(err, storage.ErrObjectNotFound) {
 				t.Fatalf("head %s after reported deletion = %v, want ErrObjectNotFound", key, err)
 			}
 		}
-		if _, err := store.HeadObject(ctx, "batch", "absent"); !errors.Is(err, storage.ErrObjectNotFound) {
-			t.Fatalf("head absent = %v, want ErrObjectNotFound", err)
-		}
 	})
 }
 
-// A batch delete that fails partway keeps the keys it already deleted, so a
+// A batch delete that fails partway keeps the keys it already confirmed, so a
 // caller retrying the remainder can skip what already succeeded. Without that
-// list a recoverable partial failure becomes a second round of deletions
-// against keys that are gone.
+// list a recoverable partial failure becomes a second round of deletions against
+// keys that are gone.
 func TestStoreBatchDeleteReportsProgressBeforeAFailure(t *testing.T) {
 	withStores(t, func(t *testing.T, store storage.Store) {
 		ctx := context.Background()
@@ -151,12 +150,12 @@ func TestStoreBatchDeleteReportsProgressBeforeAFailure(t *testing.T) {
 		// A key past the documented 1024-byte limit fails validation after the
 		// first key has already been removed, which is the partial state.
 		tooLong := strings.Repeat("k", 1025)
-		deleted, err := store.DeleteObjects(ctx, "batch", []string{"doomed", tooLong})
+		confirmed, err := store.DeleteObjects(ctx, "batch", []string{"doomed", tooLong})
 		if !errors.Is(err, storage.ErrInvalidKey) {
 			t.Fatalf("delete error = %v, want ErrInvalidKey", err)
 		}
-		if len(deleted) != 1 || deleted[0] != "doomed" {
-			t.Fatalf("deleted = %v, want [doomed]; a caller retrying the remainder cannot skip what already succeeded without this", deleted)
+		if !slices.Equal(confirmed, []string{"doomed"}) {
+			t.Fatalf("confirmed = %v, want [doomed]; a caller retrying the remainder cannot skip what already succeeded without this", confirmed)
 		}
 	})
 }
