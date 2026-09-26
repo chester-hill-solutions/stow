@@ -26,9 +26,31 @@ import (
 // operations work, which is the condition the completion handler mishandled: it
 // discarded the error, leaving the part-size map empty and skipping the
 // minimum-part-size check without saying so.
+//
+// Both halves of the store contract are embedded because multipart is an
+// optional interface the server discovers by assertion. Overriding only the
+// object-model half would leave the real multipart implementation in place, and
+// the test would pass or fail for the wrong reason - which is exactly what
+// happened when the interface was split and this stub was not updated with it.
 type unreadablePartsStore struct {
 	storage.Store
+	storage.MultipartStore
 	failure error
+}
+
+// newUnreadablePartsStore wraps a real store so that only ListParts fails and
+// only CompleteMultipartUpload is replaced. The embedded interfaces have to be a
+// working store: a nil one panics the moment the test sets an upload up, which
+// looks like a server crash rather than a stub.
+func newUnreadablePartsStore(t *testing.T, failure error) storage.Store {
+	t.Helper()
+	base := storage.NewMemoryStore()
+	var asStore storage.Store = base
+	multi, ok := asStore.(storage.MultipartStore)
+	if !ok {
+		t.Fatalf("%T does not implement storage.MultipartStore", base)
+	}
+	return unreadablePartsStore{Store: base, MultipartStore: multi, failure: failure}
 }
 
 func (s unreadablePartsStore) ListParts(context.Context, string) ([]storage.PartInfo, error) {
@@ -148,10 +170,7 @@ func TestCompleteMultipartUploadReportsAFailedPartListing(t *testing.T) {
 
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			ts := newStoreServer(t, unreadablePartsStore{
-				Store:   storage.NewMemoryStore(),
-				failure: tc.failure,
-			})
+			ts := newStoreServer(t, newUnreadablePartsStore(t, tc.failure))
 			createBucketOverWire(t, ts, "uploads")
 			uploadID, _ := uploadPartsOverWire(t, ts, objectRef{"uploads", "object.bin"}, 2, 16)
 

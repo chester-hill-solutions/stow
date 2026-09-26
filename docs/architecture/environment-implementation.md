@@ -50,6 +50,35 @@ Still pending, in the §6.1 order: **M0.1** (test `tools/quality` and the seven
 untested JS gates), **M0.2**, **M0.3**, **M0.4**, **C2.1**, and ADR 0010
 decision 2.
 
+### 0.0.1 What landed underneath this document
+
+These items were written from a review of `1982104`. PR #24
+(`5ddd88d`, "One capability, one answer") landed while the work above was in
+progress and changed the ground under three of them. Recorded here because a
+specification that does not notice a refactor underneath it is the failure mode
+this document exists to prevent.
+
+**Multipart is now an optional interface, and the duplication is gone.**
+`internal/storage.Store` was one interface with all eight multipart methods
+inline; `Options.DisableMultipart` let a constructor declare a capability the
+runtime then gated on; and `pkg/stow` re-derived it by asserting eight times.
+All of that is deleted. `internal/runtime` and `internal/s3api` now ask the store
+once. This closes the "capability duplication" row §2 previously listed as a live
+finding.
+
+**`R-203` is narrowed rather than closed** — see the requirement.
+
+**`internal/s3api/validators.go` lost `validBucketName`** in favour of
+`storage.ValidBucketName`, and `s3api.Server` holds multipart as
+`s.multipart storage.MultipartStore` rather than reaching through `s.store`.
+
+The interface split is also the reason one of the tests above had to be rewritten
+rather than rebased. `unreadablePartsStore` embedded `storage.Store` and
+overrode `ListParts`; after the split those methods belong to
+`storage.MultipartStore`, so the stub silently stopped intercepting anything and
+the suite stayed green while the test tested nothing. See the commit that fixes
+it — it is the clearest argument in this repository for M0.1.
+
 ### 0.1 What this document is
 
 An implementation specification, not a proposal and not a review. It states
@@ -220,9 +249,10 @@ judgement; §3 is where judgement lives.
 | Go statements | 30,720 across 15 packages | `find . -name '*.go' -not -path '*/node_modules/*' \| xargs wc -l` |
 | Largest production file | `internal/storage/memory.go`, 499 lines | `wc -l` |
 | Files over the 500-line gate | 1, and it is a test file | `node scripts/check-file-size.mjs` |
-| `storage.Store` methods | 20 (4 bucket, 7 object, 8 multipart, `Close`) | `sed -n '9,32p' internal/storage/store.go` |
-| `storage.Store` implementations | 7 declared; 3 are identity forwarders | `grep -rn "var _ storage.Store"` plus `S3Client`/`runthrough` |
-| `pkg/stow` runtime type assertions on store capability | 8 | `grep -c "a.store.(MultipartStore)" pkg/stow/store.go` |
+| `storage.Store` methods | **12** (4 bucket, 7 object, `Close`) — was 20 before #24 split multipart out | `awk '/^type Store interface/,/^}/' internal/storage/store.go \| grep -cE "^\t[A-Za-z0-9]+\("` |
+| `storage.MultipartStore` methods | 8, optional and asserted once per consumer | `awk '/^type MultipartStore interface/,/^}/' internal/storage/store.go` |
+| `storage.Store` implementations | 5 declared; 3 are identity forwarders | `grep -rn "var _ storage.Store"` plus `S3Client`/`runthrough` |
+| `pkg/stow` runtime type assertions on store capability | **0** — #24 deleted all 8 | `grep -c "a.store.(MultipartStore)" pkg/stow/store.go` |
 | `outbox` capability interfaces | 6, with 2 implementations | `outbox.go:61-87`, `outbox_claims.go:34-52` |
 | Authority enforcement sites | 21, covering 8 of 12 operations | `grep -rhoE "check\(authority\.[A-Za-z]+"` |
 | Baselined ratchet entries | `go-quality.json` 16, `file-size.json` 1; all others 0 | `scripts/baselines/*.json` |
@@ -293,9 +323,20 @@ mechanism can be deleted rather than supplemented.
 
 **R-203 — A principal maps to an authority.**
 `internal/s3api` MUST translate an authenticated principal into an `Authority`.
-Today it does not: `s3api.Config` never derives one, and
-`internal/s3api/auth.go:13-14` `DevBypass` returns `nil` for every request. Every
-S3 caller therefore receives whatever authority the runtime was opened with.
+It does not: `s3api.Config` never derives one, and `internal/s3api/auth.go:13-14`
+`DevBypass` returns `nil` for every request, so every S3 caller receives whatever
+authority the runtime was opened with.
+
+**Narrowed by #24, not closed.** `stow-s3 serve --read-only` now narrows the
+environment to `authority.ReadOnly()` and is enforced below every interface, so
+the S3 surface, an in-process caller and the admin surface are all refused alike,
+and the 403 mapping in `s3api/errors.go` is reachable in production for the first
+time. That is a reachable policy, not a per-caller one: `runtime.Instance` holds a
+single `Authority` for the whole environment and `s3api.AuthFunc` is
+`func(*http.Request) error`, so it authenticates without surfacing a principal. A
+per-request authority needs a per-request environment, which is M3.1. An operator
+can turn authority down and cannot yet vary it per caller, and the difference is
+the whole of what remains.
 
 ### 3.2 Storage
 
