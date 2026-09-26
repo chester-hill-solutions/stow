@@ -12,13 +12,37 @@ type Runtime struct {
 	inner *stowruntime.Instance
 }
 
+// Open returns a runtime over the store named by options.
+//
+// A nil Store is the memory backend, which is what this has always done and
+// keeps the common case a single field-free call. Supplying a Store is what
+// makes the embedded path composable rather than forked.
 func Open(options Options) (*Runtime, error) {
-	instance, err := stowruntime.Open(stowruntime.Options{
+	runtimeOptions := stowruntime.Options{
 		Backend:    stowruntime.Backend(options.Backend),
 		MaxBytes:   options.MaxBytes,
 		MaxObjects: options.MaxObjects,
 		Authority:  options.Authority,
-	})
+	}
+
+	var (
+		instance *stowruntime.Instance
+		err      error
+	)
+	if options.Store == nil {
+		instance, err = stowruntime.Open(runtimeOptions)
+	} else {
+		// Reset is not offered for a supplied store. It would have to rebuild
+		// something the caller owns, and "empty the caller's storage" is not a
+		// reasonable thing to do to a directory somebody handed you.
+		// The store knows whether it can serve multipart, and the environment
+		// reports that rather than being told true by the constructor it
+		// happened to be opened with.
+		runtimeOptions.DisableMultipart = !suppliesMultipart(options.Store)
+		instance, err = stowruntime.OpenWithStore(
+			runtimeOptions, &storeAdapter{store: options.Store}, nil,
+		)
+	}
 	if err != nil {
 		return nil, mapError(err)
 	}

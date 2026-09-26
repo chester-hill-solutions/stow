@@ -24,6 +24,18 @@ type Options struct {
 	MaxBytes   int64
 	MaxObjects int64
 
+	// Store is where the objects live. A nil Store means the memory backend,
+	// which is what an embedded runtime has always done.
+	//
+	// Supplying one is what makes this composable: the architecture's claim that
+	// a different store is a one-line change was false of the public API until
+	// this field existed, because a filesystem or workspace runtime had to be
+	// reached through a second constructor. Set Backend to match the store — a
+	// Store on its own does not say whether it is durable, and the two answers
+	// are not the same: a caller that asked for durable bytes must not be handed
+	// volatile ones.
+	Store Store
+
 	// Authority is what this environment permits, enforced below every
 	// interface so an embedded caller and an S3 client are granted the same
 	// things. A nil pointer permits everything, which is what an embedded

@@ -89,6 +89,15 @@ func (i *Instance) initializeBucket(ctx context.Context, bucket string) error {
 	if err := i.initializeObjects(ctx, bucket); err != nil {
 		return err
 	}
+	// Multipart reconciliation is skipped when the environment has no multipart
+	// capability. It used to run unconditionally, which meant a store that serves
+	// no multipart could not be OPENED as soon as it held a bucket: the
+	// capability gated the operations and not the initialization, so it was
+	// decorative. An empty store hid it, because the failing case needs a bucket
+	// and a fresh store has none.
+	if !i.multipartEnabled {
+		return nil
+	}
 	return i.initializeMultipart(ctx, bucket)
 }
 
