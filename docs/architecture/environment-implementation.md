@@ -955,7 +955,7 @@ Ordered by §6. Effort is a lower bound in days.
 |---|---|---|
 | M0.1 Test `tools/quality` and the seven untested JS gates | R-1001 | 2–3 |
 | M0.2 Delete the suppression regex; use ESLint's directive parsing | R-1002 | <1 |
-| M0.3 One `SCAN_ROOTS` for file-size, lint, and duplication. **Test half done** — `tsconfig.test.json` is wired and green, and found a live defect; the shared root list across the Go and JS gates is still to do | R-1003 | <1 remaining |
+| M0.3 One `SCAN_ROOTS`, and a type check for the tests. **Done** — `config/scan-roots.json` is read by both Go gates, `tsconfig.test.json` is wired, and both found defects (see §0.2) | R-1003 | — |
 | M0.4 Anti-recurrence: every `authority.Defined()` operation enforced or documented-ungated | R-101 | <1 |
 
 ### M1 — Environment core

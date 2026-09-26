@@ -6,17 +6,13 @@ import { compareIdentities, expandedKeys } from "./ratchet.mjs";
 
 const repoRoot = resolve(import.meta.dirname, "..");
 const baselinePath = resolve(repoRoot, "scripts/baselines/file-size.json");
-const roots = [
-  "cmd",
-  "internal",
-  "conformance",
-  "pkg",
-  "wasm",
-  "packages/stow-s3/src",
-  "packages/stow-s3/test",
-  "packages/stow-s3-py/src",
-  "packages/stow-s3-py/tests",
-];
+
+// The root list is shared with the Go quality ratchet through
+// config/scan-roots.json. The two each had their own and they disagreed:
+// tools/ and scripts/ were in neither, so the code that checks the code was
+// itself unchecked, and a gate with a list nobody cross-checks is a list that
+// drifts.
+const roots = JSON.parse(readFileSync(resolve(repoRoot, "config/scan-roots.json"), "utf8")).size;
 const maximum = 500;
 const violations = [];
 

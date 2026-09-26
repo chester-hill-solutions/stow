@@ -1,0 +1,19 @@
+{
+  "_comment": "One list of what the gates scan. The Go quality ratchet and the file-size ratchet each had their own, and they disagreed: tools/ and scripts/ were in neither, so the code that checks the code was itself unchecked. Both read this file. The TypeScript-only gates (lint, type escapes, duplication) scope themselves to packages/stow-s3 and are listed separately so that widening a Go scan does not silently widen a TypeScript one.",
+  "go": ["cmd", "internal", "conformance", "pkg", "tools"],
+  "size": [
+    "cmd",
+    "internal",
+    "conformance",
+    "pkg",
+    "tools",
+    "wasm",
+    "scripts",
+    "packages/stow-s3/src",
+    "packages/stow-s3/scripts",
+    "packages/stow-s3/test",
+    "packages/stow-s3-py/src",
+    "packages/stow-s3-py/tests"
+  ],
+  "typescriptPackage": "packages/stow-s3"
+}
