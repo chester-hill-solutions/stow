@@ -29,8 +29,19 @@ const output = execFileSync(
 const reports = JSON.parse(output || "[]");
 const counts = Object.fromEntries(rules.map((rule) => [rule, 0]));
 const hardErrors = [];
-const disablePattern = /eslint-disable(?:-next-line)?\b[^\n]*?(complexity|max-depth|max-params|max-lines-per-function|no-console|no-return-await|@typescript-eslint\/no-explicit-any|@typescript-eslint\/no-non-null-assertion|@typescript-eslint\/consistent-type-imports|@typescript-eslint\/no-unused-vars)\b/g;
 
+// Suppressions are counted from ESLint's own report rather than by matching
+// `eslint-disable` text in the source.
+//
+// The regex this replaces could not see a multi-line disable block, and matched
+// any line merely mentioning a ratcheted rule name beside the word eslint-disable
+// - including inside a string or an unrelated comment. It also cost one count per
+// comment however many violations the comment hid, so a single directive could
+// suppress an unlimited number of findings for the price of one.
+//
+// report.suppressedMessages is ESLint's own accounting: one entry per suppressed
+// message, carrying the rule that would have fired. A disable hiding five calls
+// costs five now, and a directive the linter never applied costs nothing.
 for (const report of reports) {
   for (const message of report.messages ?? []) {
     if (message.severity === 2) {
@@ -39,9 +50,8 @@ for (const report of reports) {
       counts[message.ruleId] += 1;
     }
   }
-  const source = readFileSync(report.filePath, "utf8");
-  for (const match of source.matchAll(disablePattern)) {
-    if (match[1] in counts) counts[match[1]] += 1;
+  for (const message of report.suppressedMessages ?? []) {
+    if (message.ruleId in counts) counts[message.ruleId] += 1;
   }
 }
 
