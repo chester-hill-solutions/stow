@@ -206,12 +206,16 @@ func TestCopyAndBatchDelete(t *testing.T) {
 		t.Errorf("the source changed when the copy was edited: %q", got)
 	}
 
-	undeleted, err := store.DeleteObjects(ctx, bucket, []string{"copy.txt", "never-existed.txt"})
+	// DeleteObjects reports the keys it deleted. This assertion used to want the
+	// complement - the absent key - while the line below confirmed copy.txt was
+	// really gone, so the test recorded the implementation's return value rather
+	// than the contract, and agreed with only one of the three implementations.
+	deleted, err := store.DeleteObjects(ctx, bucket, []string{"copy.txt", "never-existed.txt"})
 	if err != nil {
 		t.Fatalf("DeleteObjects: %v", err)
 	}
-	if len(undeleted) != 1 || undeleted[0] != "never-existed.txt" {
-		t.Errorf("DeleteObjects undeleted = %v, want just the absent key", undeleted)
+	if len(deleted) != 1 || deleted[0] != "copy.txt" {
+		t.Errorf("DeleteObjects deleted = %v, want [copy.txt]", deleted)
 	}
 	if _, _, err := store.GetObject(ctx, bucket, "copy.txt"); !errors.Is(err, storage.ErrObjectNotFound) {
 		t.Errorf("the deleted key is still readable: %v", err)

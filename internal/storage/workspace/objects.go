@@ -185,17 +185,23 @@ func (s *Store) DeleteObjects(ctx context.Context, bucket string, keys []string)
 	if !s.bucketExists(bucket) {
 		return nil, storage.ErrBucketNotFound
 	}
-	var undeleted []string
+	// The returned slice is the keys this call deleted. It was the complement
+	// until the contract suite pinned the meaning: the S3 handler emits this
+	// slice as <Deleted>, so returning the survivors reported the objects still
+	// on disk as deleted and stayed silent about the ones actually removed.
+	var deleted []string
 	for _, key := range keys {
 		if err := s.DeleteObject(ctx, bucket, key); err != nil {
 			if errors.Is(err, storage.ErrObjectNotFound) {
-				undeleted = append(undeleted, key)
+				// Not an error, and not a deletion. S3 skips it, which is what
+				// makes a repeated delete idempotent.
 				continue
 			}
-			return nil, err
+			return deleted, err
 		}
+		deleted = append(deleted, key)
 	}
-	return undeleted, nil
+	return deleted, nil
 }
 
 // CopyObject writes an existing object to a new key, as a real file at the new

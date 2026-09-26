@@ -87,6 +87,89 @@ func requireMultipart(t *testing.T, store storage.Store) storage.MultipartStore 
 	return multi
 }
 
+// A batch delete returns the keys it deleted.
+//
+// DeleteObjects had no doc comment on the Store interface, so the meaning of its
+// []string return was unspecified and three implementations chose. Two returned
+// the keys they deleted; the workspace backend returned the keys that
+// survived. The S3 handler emits this slice as <Deleted>, so on that backend a
+// multi-object delete reported the objects still on disk as deleted and said
+// nothing at all about the ones it had actually removed - a client that trusted
+// the response would believe the opposite of what happened.
+//
+// A key that was not there is not an error and is not reported as deleted, which
+// is S3's behaviour and the reason the complement is not simply the same set in
+// a different order.
+func TestStoreBatchDeleteReturnsTheKeysItDeleted(t *testing.T) {
+	withStores(t, func(t *testing.T, store storage.Store) {
+		ctx := context.Background()
+		if err := store.CreateBucket(ctx, "batch"); err != nil {
+			t.Fatalf("create bucket: %v", err)
+		}
+		for _, key := range []string{"kept/one", "kept/two"} {
+			if _, err := store.PutObject(ctx, "batch", key, strings.NewReader("body"), storage.PutOptions{}); err != nil {
+				t.Fatalf("put %s: %v", key, err)
+			}
+		}
+
+		deleted, err := store.DeleteObjects(ctx, "batch", []string{"kept/one", "absent", "kept/two"})
+		if err != nil {
+			t.Fatalf("delete objects: %v", err)
+		}
+		want := []string{"kept/one", "kept/two"}
+		if len(deleted) != len(want) {
+			t.Fatalf("deleted = %v, want %v", deleted, want)
+		}
+		for i, key := range want {
+			if deleted[i] != key {
+				t.Fatalf("deleted = %v, want %v in request order", deleted, want)
+			}
+		}
+
+		// A key reported as deleted is gone. This is the assertion that would
+		// have caught the complement: it passes on the two backends that were
+		// right and fails on the one that was not.
+		for _, key := range want {
+			if _, err := store.HeadObject(ctx, "batch", key); !errors.Is(err, storage.ErrObjectNotFound) {
+				t.Fatalf("head %s after reported deletion = %v, want ErrObjectNotFound", key, err)
+			}
+		}
+		if _, err := store.HeadObject(ctx, "batch", "absent"); !errors.Is(err, storage.ErrObjectNotFound) {
+			t.Fatalf("head absent = %v, want ErrObjectNotFound", err)
+		}
+	})
+}
+
+// A batch delete that fails partway keeps the keys it already deleted.
+//
+// This is the other half of the same unspecified return value: two backends
+// returned their partial progress alongside the error and the third returned
+// nil, so a caller that wanted to retry only the remainder could not tell what
+// the first pass had already removed. Losing that list turns a recoverable
+// partial failure into a second round of deletions against keys that are gone.
+func TestStoreBatchDeleteReportsProgressBeforeAFailure(t *testing.T) {
+	withStores(t, func(t *testing.T, store storage.Store) {
+		ctx := context.Background()
+		if err := store.CreateBucket(ctx, "batch"); err != nil {
+			t.Fatalf("create bucket: %v", err)
+		}
+		if _, err := store.PutObject(ctx, "batch", "doomed", strings.NewReader("body"), storage.PutOptions{}); err != nil {
+			t.Fatalf("put: %v", err)
+		}
+
+		// A key past the documented 1024-byte limit fails validation after the
+		// first key has already been removed, which is the partial state.
+		tooLong := strings.Repeat("k", 1025)
+		deleted, err := store.DeleteObjects(ctx, "batch", []string{"doomed", tooLong})
+		if !errors.Is(err, storage.ErrInvalidKey) {
+			t.Fatalf("delete error = %v, want ErrInvalidKey", err)
+		}
+		if len(deleted) != 1 || deleted[0] != "doomed" {
+			t.Fatalf("deleted = %v, want [doomed]; a caller retrying the remainder cannot skip what already succeeded without this", deleted)
+		}
+	})
+}
+
 func TestStoreBatchDeleteRequiresBucket(t *testing.T) {
 	withStores(t, func(t *testing.T, store storage.Store) {
 		deleted, err := store.DeleteObjects(context.Background(), "missing", []string{"key"})

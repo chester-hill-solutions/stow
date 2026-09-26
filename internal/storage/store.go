@@ -20,6 +20,17 @@ type Store interface {
 	GetObject(ctx context.Context, bucket, key string) (io.ReadCloser, *ObjectMeta, error)
 	HeadObject(ctx context.Context, bucket, key string) (*ObjectMeta, error)
 	DeleteObject(ctx context.Context, bucket, key string) error
+	// DeleteObjects deletes each key and returns the keys it deleted, in request
+	// order.
+	//
+	// A key that was not there is neither an error nor a deletion: it is skipped
+	// and left out of the returned slice, which is S3's behaviour and what makes
+	// a repeated delete idempotent.
+	//
+	// On failure it returns the keys deleted before the failure alongside the
+	// error, so a caller retrying the remainder can skip what already succeeded.
+	// Discarding that list turns a recoverable partial failure into a second
+	// round of deletes against keys that are gone.
 	DeleteObjects(ctx context.Context, bucket string, keys []string) ([]string, error)
 	CopyObject(ctx context.Context, srcBucket, srcKey, dstBucket, dstKey string) (*ObjectMeta, error)
 	ListObjectsV2(ctx context.Context, bucket string, opts ListOptions) (*ListResult, error)
