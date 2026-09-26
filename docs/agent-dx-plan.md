@@ -498,6 +498,72 @@ verified only by sleeping for an hour — and the first version of the test
 asserted that a touched workspace was *never* collected, which is wrong. Touch
 postpones; it does not exempt.
 
+### 0.11 Where this stands, and what to do next
+
+Recorded 2026-09-25, after W4 landed. Four of the eighteen tracked items are
+done, and the interesting fact about the remainder is that **the most important
+one is not engineering.**
+
+### Done
+
+| Item | What landed |
+|---|---|
+| **W0** | The workspace backend: objects as real files, one manifest, adopts files it did not write. Both same-bytes directions pass, written before the implementation and confirmed to fail first |
+| **W1** | `stow.OpenWorkspace` — a persistent workspace in-process, no injected store, no child process |
+| **W3** | `Destroy`, with the adoption guard it required. See section 0.9 |
+| **W4** | The registry, `Resume`, `Touch`, and TTL collection that refuses live and adopted workspaces. See section 0.10 |
+
+Also landed, and not on the backlog: the npm install path was broken on `main`
+and `make standards` could not complete. Fixed in #12.
+
+### Blocked on the owner, and gating everything
+
+**W14 — the accounts.** The organisation, npm trusted publishing, the PyPI
+publisher, and a registry line in the documented install command. Section 0.7
+argues the whole wedge is a distribution claim; a distribution claim that cannot
+be `pip install`ed is not one. No code change shortens this, and it is the item
+with the longest lead time in the plan.
+
+**W15** — the clean-install proof — depends on W14, and is the gate that keeps
+W14 honest rather than a status table.
+
+### Buildable now, in this order
+
+1. **W5 — the S3 facade.** The last piece of the Go surface, and the one that
+   makes a workspace usable by generated code. One object store, two surfaces; a
+   facade with its own storage is rejected in review. This is the natural next
+   thing, because the workspace currently speaks no S3 at all.
+2. **W2, W10, W12 — independent, and not worth queueing behind anything.** Finish
+   the S3 compatibility contract: virtual-hosted style end to end, and the two
+   sub-resources that return the wrong error code. W12 is the Windows
+   parent-death watch, without which requirement 1 is untrue on Windows.
+3. **W6 — quotas a host can actually set**, including making the request-body
+   cap raisable, which today is a constant with no flag.
+4. **W8 — the handoff reference.** A handoff that names a workspace rather than
+   carrying a secret key, which is requirement 5's honest half.
+
+### Deliberately not next
+
+- **W7** is conformance to seams other people own, and it is worth less than it
+  was: the framework-vendor interface exists and its word for this is a *mount*.
+  Doing it well means reading their contract first.
+- **W9, promote**, is blocked on fixing run-through mode, which has never once
+  read or written an upstream. That is a real piece of work, not a sequencing
+  choice.
+- **W16, the displacement**, needs W14 and W15, and is the most time-sensitive
+  item in the plan — the teams whose CI broke on 2026-03-23 are a finite,
+  findable, and increasingly annoyed list.
+
+### What a new session should read first
+
+1. This section, for the ordering.
+2. Section 0.6, for the eleven inherited defects. Several look like new work and
+   are not.
+3. Section 0.7, for why the strategy is distribution rather than the concept.
+4. `docs/workspace-contract.md`, for the surface being built and its exact
+   wording. The conformance cases in its section 8 are the acceptance spec, and
+   WS-01 and WS-02 are the two that decide whether the product claim is true.
+
 ## 1. Product outcome
 
 > **Amended by revision 2.** The outcome is a bounded artifact workspace, not a
@@ -1166,12 +1232,22 @@ green suite over a path that had never run.
 **Exit:** a workspace survives its process, resumes by ID, and is collected on a
 TTL without ever touching a live one.
 
-The uncomfortable part of this phase is that it turns a deliberate breaking
-change into a failing test. `close()` stops meaning "the data is gone", so the
-"100 sessions leak nothing" assertion is wrong the moment the phase starts.
-Replacing it in the same diff as the behaviour change, with the message saying
-why, is the discipline. A test quietly edited to match new behaviour teaches the
-next reader that the old guarantee was optional.
+**Status: complete in Go.** `Destroy` with the adoption guard it required, the
+registry, `Resume`, `Touch`, and TTL collection that refuses live and adopted
+workspaces. Recorded in sections 0.8, 0.9 and 0.10.
+
+The uncomfortable part of this phase turned out to be a plan error rather than an
+implementation difficulty, and both halves are worth keeping. `close()` does stop
+meaning "the data is gone" — for a *workspace*. It does not, and must not, for
+the memory-backed session, whose objects die with the child process regardless;
+see section 0.8. The originally planned breaking change to the TypeScript and
+Python sessions would have preserved nothing and made the "leaks no processes or
+directories" property worse.
+
+The general discipline still stands, and it cost a test in this very repository:
+replace an assertion in the same diff as the behaviour change, and say why in the
+message. A test quietly edited to match new behaviour teaches the next reader
+that the old guarantee was optional.
 
 This phase is also where requirement 5's honest half lands: a handoff that names
 a workspace rather than a secret key.
