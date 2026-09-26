@@ -90,24 +90,35 @@ type Part struct {
 	Size       int64
 }
 
-// errMultipartUnsupported is returned when a store that does not implement
-// MultipartStore is asked to. The runtime reads suppliesMultipart at open time
-// and reports the capability, so a caller learns from the environment rather
-// than from a failed upload.
-var errMultipartUnsupported = errors.New("stow: the supplied store does not implement MultipartStore")
-
-// suppliesMultipart reports whether a store can serve multipart.
-func suppliesMultipart(store Store) bool {
-	_, ok := store.(MultipartStore)
-	return ok
-}
-
 // storeAdapter presents a public Store as the internal storage contract, so a
 // caller can supply storage without importing internal/ and the internal
 // contract keeps its own shape.
 type storeAdapter struct{ store Store }
 
 var _ storage.Store = (*storeAdapter)(nil)
+
+// storeWithMultipart is the internal contract for a caller's store that also
+// serves multipart. Both halves are present only because the caller's store has
+// both, so the runtime's discovery finds exactly what the caller supplied.
+type storeWithMultipart struct {
+	storage.Store
+	storage.MultipartStore
+}
+
+// adaptStore returns the internal contract for a caller's store. Multipart is
+// carried only when the caller's store carries it, so the internal contract's
+// optional half is discovered by the runtime rather than declared to it.
+func adaptStore(store Store) storage.Store {
+	adapter := &storeAdapter{store: store}
+	multi, ok := store.(MultipartStore)
+	if !ok {
+		return adapter
+	}
+	return &storeWithMultipart{
+		Store:          adapter,
+		MultipartStore: multipartAdapter{multi: multi},
+	}
+}
 
 func (a *storeAdapter) CreateBucket(ctx context.Context, name string) error {
 	return translate(a.store.CreateBucket(ctx, name))
@@ -269,94 +280,87 @@ func (a *storeAdapter) CopyObject(ctx context.Context, srcBucket, srcKey, dstBuc
 
 func (a *storeAdapter) Close() error { return a.store.Close() }
 
-func (a *storeAdapter) CreateMultipartUpload(ctx context.Context, bucket, key string) (*storage.MultipartUpload, error) {
-	multi, ok := a.store.(MultipartStore)
-	if !ok {
-		return nil, errMultipartUnsupported
-	}
-	upload, err := multi.CreateMultipartUpload(ctx, bucket, key)
+// multipartAdapter presents a caller's MultipartStore as the internal contract.
+// It is reached only when the caller's store implements MultipartStore, so
+// there is no "unsupported" case here to answer.
+type multipartAdapter struct{ multi MultipartStore }
+
+var _ storage.MultipartStore = multipartAdapter{}
+
+func (a multipartAdapter) CreateMultipartUpload(ctx context.Context, bucket, key string) (*storage.MultipartUpload, error) {
+	upload, err := a.multi.CreateMultipartUpload(ctx, bucket, key)
 	if err != nil {
-		return nil, translate(err)
+		return nil, err
 	}
 	return uploadMetaOf(upload), nil
 }
 
-func (a *storeAdapter) UploadPart(ctx context.Context, uploadID string, partNumber int, body io.Reader) (*storage.PartInfo, error) {
-	multi, ok := a.store.(MultipartStore)
-	if !ok {
-		return nil, errMultipartUnsupported
+func (a multipartAdapter) GetMultipartUpload(ctx context.Context, uploadID string) (*storage.MultipartUpload, error) {
+	upload, err := a.multi.GetMultipartUpload(ctx, uploadID)
+	if err != nil {
+		return nil, err
 	}
+	return uploadMetaOf(upload), nil
+}
+
+func (a multipartAdapter) UploadPart(ctx context.Context, uploadID string, partNumber int, body io.Reader) (*storage.PartInfo, error) {
 	data, err := io.ReadAll(body)
 	if err != nil {
 		return nil, err
 	}
-	part, err := multi.UploadPart(ctx, uploadID, partNumber, data)
+	part, err := a.multi.UploadPart(ctx, uploadID, partNumber, data)
 	if err != nil {
-		return nil, translate(err)
+		return nil, err
 	}
-	return &storage.PartInfo{PartNumber: part.PartNumber, ETag: part.ETag, Size: part.Size}, nil
+	return partInfoOf(part), nil
 }
 
-func (a *storeAdapter) CompleteMultipartUpload(ctx context.Context, uploadID string, parts []storage.PartInfo) (*storage.ObjectMeta, error) {
-	multi, ok := a.store.(MultipartStore)
-	if !ok {
-		return nil, errMultipartUnsupported
-	}
+func (a multipartAdapter) CompleteMultipartUpload(ctx context.Context, uploadID string, parts []storage.PartInfo) (*storage.ObjectMeta, error) {
 	supplied := make([]Part, 0, len(parts))
 	for _, part := range parts {
 		supplied = append(supplied, Part{PartNumber: part.PartNumber, ETag: part.ETag, Size: part.Size})
 	}
-	object, err := multi.CompleteMultipartUpload(ctx, uploadID, supplied)
+	object, err := a.multi.CompleteMultipartUpload(ctx, uploadID, supplied)
 	if err != nil {
-		return nil, translate(err)
+		return nil, err
 	}
 	return objectMetaOf(object), nil
 }
 
-func (a *storeAdapter) AbortMultipartUpload(ctx context.Context, uploadID string) error {
-	multi, ok := a.store.(MultipartStore)
-	if !ok {
-		return errMultipartUnsupported
-	}
-	return translate(multi.AbortMultipartUpload(ctx, uploadID))
+func (a multipartAdapter) AbortMultipartUpload(ctx context.Context, uploadID string) error {
+	return a.multi.AbortMultipartUpload(ctx, uploadID)
 }
 
-func (a *storeAdapter) GetMultipartUpload(ctx context.Context, uploadID string) (*storage.MultipartUpload, error) {
-	multi, ok := a.store.(MultipartStore)
-	if !ok {
-		return nil, errMultipartUnsupported
-	}
-	upload, err := multi.GetMultipartUpload(ctx, uploadID)
+func (a multipartAdapter) ListParts(ctx context.Context, uploadID string) ([]storage.PartInfo, error) {
+	parts, err := a.multi.ListParts(ctx, uploadID)
 	if err != nil {
-		return nil, translate(err)
-	}
-	return uploadMetaOf(upload), nil
-}
-
-func (a *storeAdapter) ListParts(ctx context.Context, uploadID string) ([]storage.PartInfo, error) {
-	multi, ok := a.store.(MultipartStore)
-	if !ok {
-		return nil, errMultipartUnsupported
-	}
-	parts, err := multi.ListParts(ctx, uploadID)
-	if err != nil {
-		return nil, translate(err)
+		return nil, err
 	}
 	out := make([]storage.PartInfo, 0, len(parts))
 	for _, part := range parts {
-		out = append(out, storage.PartInfo{PartNumber: part.PartNumber, ETag: part.ETag, Size: part.Size})
+		out = append(out, *partInfoOf(part))
 	}
 	return out, nil
 }
 
-func (a *storeAdapter) ListMultipartUploads(ctx context.Context, bucket string, _ storage.MultipartListOptions) (*storage.MultipartListResult, error) {
-	multi, ok := a.store.(MultipartStore)
-	if !ok {
-		return nil, errMultipartUnsupported
-	}
-	uploads, err := multi.ListMultipartUploads(ctx, bucket)
+// ValidateMultipartUpload is the one method with no public equivalent: the
+// internal contract asks a store to confirm an upload is the one a completing
+// call claims, so the upload is fetched and compared.
+func (a multipartAdapter) ValidateMultipartUpload(ctx context.Context, uploadID, bucket, key string) error {
+	upload, err := a.multi.GetMultipartUpload(ctx, uploadID)
 	if err != nil {
-		return nil, translate(err)
+		return err
+	}
+	if upload.Bucket != bucket || upload.Key != key {
+		return storage.ErrUploadNotFound
+	}
+	return nil
+}
+
+func (a multipartAdapter) ListMultipartUploads(ctx context.Context, bucket string, opts storage.MultipartListOptions) (*storage.MultipartListResult, error) {
+	uploads, err := a.multi.ListMultipartUploads(ctx, bucket)
+	if err != nil {
+		return nil, err
 	}
 	result := &storage.MultipartListResult{}
 	for _, upload := range uploads {
@@ -365,22 +369,8 @@ func (a *storeAdapter) ListMultipartUploads(ctx context.Context, bucket string, 
 	return result, nil
 }
 
-func (a *storeAdapter) ValidateMultipartUpload(ctx context.Context, uploadID, bucket, key string) error {
-	// The internal contract asks a store to confirm an upload is the one a
-	// completing call claims. The public store has no equivalent question, and
-	// asking it for the upload and comparing is the honest way to answer.
-	multi, ok := a.store.(MultipartStore)
-	if !ok {
-		return errMultipartUnsupported
-	}
-	upload, err := multi.GetMultipartUpload(ctx, uploadID)
-	if err != nil {
-		return translate(err)
-	}
-	if upload.Bucket != bucket || upload.Key != key {
-		return storage.ErrUploadNotFound
-	}
-	return nil
+func partInfoOf(part Part) *storage.PartInfo {
+	return &storage.PartInfo{PartNumber: part.PartNumber, ETag: part.ETag, Size: part.Size}
 }
 
 func uploadMetaOf(upload MultipartUpload) *storage.MultipartUpload {

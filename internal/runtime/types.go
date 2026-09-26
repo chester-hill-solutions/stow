@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/chester-hill-solutions/stow-s3/internal/authority"
+	"github.com/chester-hill-solutions/stow-s3/internal/storage"
 )
 
 type Backend string
@@ -38,7 +39,10 @@ var (
 	ErrUnsupportedBackend       = errors.New("unsupported runtime backend")
 	ErrInvalidListLimit         = errors.New("runtime list limit must not be negative")
 	ErrExternalResetUnsupported = errors.New("runtime reset is unsupported for an externally managed store")
-	ErrMultipartUnsupported     = errors.New("runtime multipart operations are unsupported")
+
+	// The store said so, not the runtime: MultipartStore is optional, and the
+	// absence has one vocabulary wherever it is discovered.
+	ErrMultipartUnsupported = storage.ErrMultipartUnsupported
 )
 
 // isKnownBackend reports whether the runtime understands a backend name. An
@@ -53,17 +57,15 @@ func isKnownBackend(backend Backend) bool {
 	}
 }
 
-// IsPersistentBackend reports whether a backend keeps objects across a reopen.
+// isPersistentBackend reports whether a backend keeps objects across a reopen.
 // It is the capability a host asks about, and it is why the two persistent
 // backends need a store supplied rather than constructed from Options.
 //
-// Exported because a host that reports capabilities has to answer the same
-// question the runtime does. A host that answers it with its own string
-// comparison is the reason this is exported rather than kept internal: the
-// readiness payload used to claim `backend == "filesystem"`, which happened to
-// agree for the two backends the CLI could select and silently disagreed about
-// the third.
-func IsPersistentBackend(backend Backend) bool {
+// It is deliberately unexported. It used to be exported so a host publishing a
+// readiness payload could answer the same question, and the reason it no longer
+// needs to be is that the host is handed runtime.Capabilities instead of
+// re-deriving them.
+func isPersistentBackend(backend Backend) bool {
 	return backend == BackendFilesystem || backend == BackendWorkspace
 }
 
@@ -102,17 +104,6 @@ type Options struct {
 	// every interface, so that S3 and a native caller cannot be granted
 	// different things.
 	//
-	// DisableMultipart reports that the bound store cannot serve multipart. It is
-	// opt-out rather than a positive flag because every store this repository
-	// ships can, and a caller who says nothing is describing a working one.
-	//
-	// It exists because the alternative was a capability that was decided by which
-	// constructor was called rather than by the store: OpenWithStore passed true
-	// unconditionally, so a caller-supplied store that implemented no multipart at
-	// all was advertised as supporting it and failed partway through an upload
-	// instead. The store is the thing that knows the answer.
-	DisableMultipart bool
-
 	// A nil pointer means every operation, and that is the default on purpose:
 	// it is what an Instance opened without one has always permitted, so adding
 	// the field changes no existing behaviour. Pass &authority.None() to permit

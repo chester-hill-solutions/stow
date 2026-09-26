@@ -257,8 +257,76 @@ func TestOpenRemainsMemoryOnly(t *testing.T) {
 		t.Fatalf("memory open: %v", err)
 	}
 	defer instance.Close()
-	if capabilities := instance.Capabilities(); capabilities.Persistent || capabilities.Multipart {
+	if capabilities := instance.Capabilities(); capabilities.Backend != BackendMemory || capabilities.Persistent {
 		t.Fatalf("public capabilities = %+v", capabilities)
+	}
+}
+
+// Multipart is read off the store, so the two constructors cannot disagree about
+// one backend, and a store without the optional half is refused at the operation
+// rather than at open time.
+func TestMultipartCapabilityIsReadFromTheStoreNotTheConstructor(t *testing.T) {
+	memory, err := Open(Options{})
+	if err != nil {
+		t.Fatalf("open memory: %v", err)
+	}
+	defer memory.Close()
+
+	bound, err := OpenWithStore(Options{Backend: BackendMemory}, storage.NewMemoryStore(), nil)
+	if err != nil {
+		t.Fatalf("open bound memory: %v", err)
+	}
+	defer bound.Close()
+
+	if memory.Capabilities().Multipart != bound.Capabilities().Multipart {
+		t.Fatalf("open reports multipart=%v, openWithStore reports %v for the same backend",
+			memory.Capabilities().Multipart, bound.Capabilities().Multipart)
+	}
+
+	// A store with no multipart half: the object model is embedded, so the
+	// optional interface is genuinely absent.
+	ctx := context.Background()
+	plain := &objectModelOnlyStore{Store: storage.NewMemoryStore()}
+	if err := plain.CreateBucket(ctx, "already-here"); err != nil {
+		t.Fatalf("seed bucket: %v", err)
+	}
+	instance, err := OpenWithStore(Options{Backend: BackendMemory}, plain, nil)
+	if err != nil {
+		t.Fatalf("open a store that cannot serve multipart: %v", err)
+	}
+	defer instance.Close()
+	if instance.Capabilities().Multipart {
+		t.Fatal("capability claims multipart for a store that does not implement it")
+	}
+	if _, err := instance.CreateMultipartUpload(ctx, "already-here", "k"); !errors.Is(err, ErrMultipartUnsupported) {
+		t.Fatalf("create upload = %v, want ErrMultipartUnsupported", err)
+	}
+}
+
+// objectModelOnlyStore is a store with the object model and no multipart half,
+// which is what a caller-supplied store that declined the optional interface
+// looks like from in here.
+type objectModelOnlyStore struct{ storage.Store }
+
+// The persistence predicate covers the workspace backend, which the CLI cannot
+// select. A claim computed from a flag string would have said otherwise, so the
+// third backend is asserted here where the predicate lives.
+func TestPersistenceIsReportedForEveryKnownBackend(t *testing.T) {
+	for backend, want := range map[Backend]bool{
+		BackendMemory:     false,
+		BackendFilesystem: true,
+		BackendWorkspace:  true,
+	} {
+		instance, err := OpenWithStore(Options{Backend: backend}, storage.NewMemoryStore(), nil)
+		if err != nil {
+			t.Fatalf("open %q: %v", backend, err)
+		}
+		if got := instance.Capabilities().Persistent; got != want {
+			t.Errorf("%s: persistent = %v, want %v", backend, got, want)
+		}
+		if err := instance.Close(); err != nil {
+			t.Fatalf("close %q: %v", backend, err)
+		}
 	}
 }
 

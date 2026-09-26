@@ -27,6 +27,7 @@ const (
 // and controlled live writes. It implements storage.Store for s3api routing.
 type Adapter struct {
 	local             storage.Store
+	localMultipart    storage.MultipartStore
 	cache             storage.Store
 	upstream          Client
 	outbox            Outbox
@@ -70,9 +71,11 @@ func NewWithOutbox(cfg Config, local, cache storage.Store, upstream Client, outb
 		durable = provider.Durable()
 	}
 	coordinated, _ := outbox.(CoordinatedOutbox)
+	localMultipart, _ := local.(storage.MultipartStore)
 	return &Adapter{
 		cfg:               cfg,
 		local:             local,
+		localMultipart:    localMultipart,
 		cache:             cache,
 		upstream:          upstream,
 		outbox:            outbox,

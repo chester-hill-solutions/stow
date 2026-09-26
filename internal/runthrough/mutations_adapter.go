@@ -220,20 +220,18 @@ func (a *Adapter) CopyObject(ctx context.Context, srcBucket, srcKey, dstBucket, 
 	return meta, nil
 }
 
-func (a *Adapter) CreateMultipartUpload(ctx context.Context, bucket, key string) (*storage.MultipartUpload, error) {
-	return a.local.CreateMultipartUpload(ctx, bucket, key)
-}
-
-func (a *Adapter) GetMultipartUpload(ctx context.Context, uploadID string) (*storage.MultipartUpload, error) {
-	return a.local.GetMultipartUpload(ctx, uploadID)
-}
-
 func (a *Adapter) UploadPart(ctx context.Context, uploadID string, partNumber int, body io.Reader) (*storage.PartInfo, error) {
-	return a.local.UploadPart(ctx, uploadID, partNumber, body)
+	if a.localMultipart == nil {
+		return nil, storage.ErrMultipartUnsupported
+	}
+	return a.localMultipart.UploadPart(ctx, uploadID, partNumber, body)
 }
 
 func (a *Adapter) CompleteMultipartUpload(ctx context.Context, uploadID string, parts []storage.PartInfo) (*storage.ObjectMeta, error) {
-	upload, err := a.local.GetMultipartUpload(ctx, uploadID)
+	if a.localMultipart == nil {
+		return nil, storage.ErrMultipartUnsupported
+	}
+	upload, err := a.localMultipart.GetMultipartUpload(ctx, uploadID)
 	if err != nil {
 		return nil, err
 	}
@@ -262,7 +260,7 @@ func (a *Adapter) CompleteMultipartUpload(ctx context.Context, uploadID string, 
 		}
 	}
 
-	meta, err := a.local.CompleteMultipartUpload(ctx, uploadID, parts)
+	meta, err := a.localMultipart.CompleteMultipartUpload(ctx, uploadID, parts)
 	if err != nil {
 		if prepared.ID != "" {
 			return nil, a.reconcilePreparedAfterError(ctx, prepared, err)
@@ -281,7 +279,7 @@ func (a *Adapter) CompleteMultipartUpload(ctx context.Context, uploadID string, 
 }
 
 func (a *Adapter) multipartTarget(ctx context.Context, uploadID string) (string, error) {
-	upload, err := a.local.GetMultipartUpload(ctx, uploadID)
+	upload, err := a.localMultipart.GetMultipartUpload(ctx, uploadID)
 	if err != nil {
 		return "", err
 	}

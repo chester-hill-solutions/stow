@@ -16,7 +16,7 @@ import (
 const minPartSize = 5 * 1024 * 1024
 
 func (s *Server) validateMultipartRoute(ctx context.Context, w http.ResponseWriter, r *http.Request, route routeInfo, uploadID string) bool {
-	if err := s.store.ValidateMultipartUpload(ctx, uploadID, route.bucket, route.key); err != nil {
+	if err := s.multipart.ValidateMultipartUpload(ctx, uploadID, route.bucket, route.key); err != nil {
 		writeError(w, r, mapStorageError(err, resourcePath(route.bucket, route.key)))
 		return false
 	}
@@ -24,7 +24,7 @@ func (s *Server) validateMultipartRoute(ctx context.Context, w http.ResponseWrit
 }
 
 func (s *Server) handleCreateMultipartUpload(ctx context.Context, w http.ResponseWriter, r *http.Request, bucket, key string) {
-	upload, err := s.store.CreateMultipartUpload(ctx, bucket, key)
+	upload, err := s.multipart.CreateMultipartUpload(ctx, bucket, key)
 	if err != nil {
 		writeError(w, r, mapStorageError(err, resourcePath(bucket, key)))
 		return
@@ -75,7 +75,7 @@ func (s *Server) handleUploadPart(ctx context.Context, w http.ResponseWriter, r 
 		writeError(w, r, s3Error{Code: code, Message: err.Error(), Resource: resourcePath(bucket, key), StatusCode: http.StatusBadRequest})
 		return
 	}
-	part, err := s.store.UploadPart(ctx, uploadID, partNum, newBodyReader(body))
+	part, err := s.multipart.UploadPart(ctx, uploadID, partNum, newBodyReader(body))
 	if err != nil {
 		writeError(w, r, mapStorageError(err, resourcePath(bucket, key)))
 		return
@@ -103,7 +103,7 @@ func (s *Server) handleCompleteMultipartUpload(ctx context.Context, w http.Respo
 	}
 
 	// Validate minimum part size for non-final parts
-	storedParts, _ := s.store.ListParts(ctx, uploadID)
+	storedParts, _ := s.multipart.ListParts(ctx, uploadID)
 	partSizes := map[int]int64{}
 	for _, p := range storedParts {
 		partSizes[p.PartNumber] = p.Size
@@ -123,7 +123,7 @@ func (s *Server) handleCompleteMultipartUpload(ctx context.Context, w http.Respo
 		}
 	}
 
-	meta, err := s.store.CompleteMultipartUpload(ctx, uploadID, parts)
+	meta, err := s.multipart.CompleteMultipartUpload(ctx, uploadID, parts)
 	if err != nil {
 		writeError(w, r, mapStorageError(err, resourcePath(bucket, key)))
 		return
@@ -140,7 +140,7 @@ func (s *Server) handleAbortMultipartUpload(ctx context.Context, w http.Response
 	if !s.validateMultipartRoute(ctx, w, r, routeInfo{bucket: bucket, key: key}, uploadID) {
 		return
 	}
-	err := s.store.AbortMultipartUpload(ctx, uploadID)
+	err := s.multipart.AbortMultipartUpload(ctx, uploadID)
 	if err != nil {
 		writeError(w, r, mapStorageError(err, resourcePath(bucket, key)))
 		return
@@ -157,7 +157,7 @@ func (s *Server) handleListMultipartUploads(ctx context.Context, w http.Response
 			maxUploads = value
 		}
 	}
-	result, err := s.store.ListMultipartUploads(ctx, bucket, storage.MultipartListOptions{
+	result, err := s.multipart.ListMultipartUploads(ctx, bucket, storage.MultipartListOptions{
 		Prefix:         q.Get("prefix"),
 		Delimiter:      q.Get("delimiter"),
 		KeyMarker:      q.Get("key-marker"),
@@ -195,7 +195,7 @@ func (s *Server) handleListParts(ctx context.Context, w http.ResponseWriter, r *
 	if !s.validateMultipartRoute(ctx, w, r, routeInfo{bucket: bucket, key: key}, uploadID) {
 		return
 	}
-	parts, err := s.store.ListParts(ctx, uploadID)
+	parts, err := s.multipart.ListParts(ctx, uploadID)
 	if err != nil {
 		writeError(w, r, mapStorageError(err, resourcePath(bucket, key)))
 		return

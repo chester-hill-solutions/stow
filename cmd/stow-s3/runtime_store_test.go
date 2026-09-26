@@ -4,11 +4,13 @@ import (
 	"bytes"
 	"context"
 	"encoding/xml"
+	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
 	"testing"
 
+	"github.com/chester-hill-solutions/stow-s3/internal/authority"
 	"github.com/chester-hill-solutions/stow-s3/internal/runthrough"
 	"github.com/chester-hill-solutions/stow-s3/internal/runtime"
 	"github.com/chester-hill-solutions/stow-s3/internal/s3api"
@@ -19,12 +21,49 @@ import (
 // assertions below exercise enforcement rather than the flag plumbing.
 func nativeTestStore(t *testing.T, limits nativeStorageLimits) storage.Store {
 	t.Helper()
-	store, err := bindNativeRuntimeStore(storage.NewMemoryStore(), runtime.BackendMemory, nil, limits)
+	store, _, err := bindNativeRuntimeStore(storage.NewMemoryStore(), runtime.BackendMemory, nil, limits, nil)
 	if err != nil {
 		t.Fatalf("bind native runtime store: %v", err)
 	}
 	t.Cleanup(func() { _ = store.Close() })
 	return store
+}
+
+// A narrowed authority has to reach the environment, not just the readiness
+// payload. This is the assertion that was missing: enforcement existed, nothing
+// could turn it down, and the only test of it built the restricted value by
+// hand instead of going through the command.
+func TestReadOnlyAuthorityRefusesWritesThroughTheServedStore(t *testing.T) {
+	ctx := context.Background()
+	// Seeded before narrowing, because ReadOnly refuses BucketCreate too.
+	local := storage.NewMemoryStore()
+	if err := local.CreateBucket(ctx, "readonly-demo"); err != nil {
+		t.Fatalf("seed bucket: %v", err)
+	}
+	readOnly := authority.ReadOnly()
+	store, _, err := bindNativeRuntimeStore(local, runtime.BackendMemory, nil, nativeStorageLimits{}, &readOnly)
+	if err != nil {
+		t.Fatalf("bind read-only: %v", err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
+
+	_, err = store.PutObject(ctx, "readonly-demo", "k", bytes.NewReader([]byte("v")), storage.PutOptions{})
+	var denied *authority.ErrNotAuthorized
+	if !errors.As(err, &denied) {
+		t.Fatalf("a read-only environment returned %v for a write, want ErrNotAuthorized", err)
+	}
+	if denied.Operation != authority.ObjectWrite {
+		t.Errorf("refused %q, want %q", denied.Operation, authority.ObjectWrite)
+	}
+
+	// Reads and lists still work, so the refusal is the capability and not a
+	// store that is simply dead.
+	if _, err := store.ListObjectsV2(ctx, "readonly-demo", storage.ListOptions{}); err != nil {
+		t.Fatalf("list on a read-only environment: %v", err)
+	}
+	if err := store.CreateBucket(ctx, "another"); !errors.As(err, &denied) {
+		t.Fatalf("create bucket on a read-only environment = %v, want ErrNotAuthorized", err)
+	}
 }
 
 func nativeTestServer(t *testing.T, store storage.Store) *httptest.Server {
@@ -171,7 +210,7 @@ func TestRunThroughStoreStillReportsAdminStats(t *testing.T) {
 		nil,
 		runthrough.NewMemoryOutbox(),
 	)
-	store, err := bindNativeRuntimeStore(local, runtime.BackendMemory, admin, nativeStorageLimits{})
+	store, _, err := bindNativeRuntimeStore(local, runtime.BackendMemory, admin, nativeStorageLimits{}, nil)
 	if err != nil {
 		t.Fatalf("bind native runtime store: %v", err)
 	}

@@ -32,7 +32,7 @@ func (i *Instance) CreateMultipartUpload(ctx context.Context, bucket, key string
 	if needsObjectSlot && !i.objectQuotaFits(target, 1) {
 		return nil, ErrQuotaExceeded
 	}
-	upload, err := i.store.CreateMultipartUpload(ctx, bucket, key)
+	upload, err := i.multipartStore.CreateMultipartUpload(ctx, bucket, key)
 	if err != nil {
 		return nil, err
 	}
@@ -59,7 +59,7 @@ func (i *Instance) GetMultipartUpload(ctx context.Context, uploadID string) (*st
 	if err := i.checkMultipartOpen(); err != nil {
 		return nil, err
 	}
-	upload, err := i.store.GetMultipartUpload(ctx, uploadID)
+	upload, err := i.multipartStore.GetMultipartUpload(ctx, uploadID)
 	if err != nil {
 		return nil, err
 	}
@@ -91,7 +91,7 @@ func (i *Instance) UploadPart(ctx context.Context, uploadID string, partNumber i
 	if !i.bytesWithinQuota(oldSize, int64(len(data))) {
 		return nil, ErrQuotaExceeded
 	}
-	part, err := i.store.UploadPart(ctx, uploadID, partNumber, bytes.NewReader(data))
+	part, err := i.multipartStore.UploadPart(ctx, uploadID, partNumber, bytes.NewReader(data))
 	if err != nil {
 		return nil, err
 	}
@@ -125,7 +125,7 @@ func (i *Instance) ListPartsPage(ctx context.Context, uploadID string, opts stor
 		clone.Parts = append([]storage.PartInfo(nil), result.Parts...)
 		return &clone, nil
 	}
-	parts, err := i.store.ListParts(ctx, uploadID)
+	parts, err := i.multipartStore.ListParts(ctx, uploadID)
 	if err != nil {
 		return nil, err
 	}
@@ -167,7 +167,7 @@ func (i *Instance) CompleteMultipartUpload(ctx context.Context, uploadID string,
 	if i.usage.Bytes-oldSize+completedBytes+otherReservedBytes > i.options.MaxBytes {
 		return nil, ErrQuotaExceeded
 	}
-	meta, err := i.store.CompleteMultipartUpload(ctx, uploadID, parts)
+	meta, err := i.multipartStore.CompleteMultipartUpload(ctx, uploadID, parts)
 	if err != nil {
 		return nil, err
 	}
@@ -203,7 +203,7 @@ func (i *Instance) AbortMultipartUpload(ctx context.Context, uploadID string) er
 	if !ok {
 		return storage.ErrUploadNotFound
 	}
-	if err := i.store.AbortMultipartUpload(ctx, uploadID); err != nil {
+	if err := i.multipartStore.AbortMultipartUpload(ctx, uploadID); err != nil {
 		return err
 	}
 	i.reservedBytes -= usage.bytes()
@@ -227,7 +227,7 @@ func (i *Instance) ListParts(ctx context.Context, uploadID string) ([]storage.Pa
 	if err := i.checkMultipartOpen(); err != nil {
 		return nil, err
 	}
-	parts, err := i.store.ListParts(ctx, uploadID)
+	parts, err := i.multipartStore.ListParts(ctx, uploadID)
 	if err != nil {
 		return nil, err
 	}
@@ -246,7 +246,7 @@ func (i *Instance) ValidateMultipartUpload(ctx context.Context, uploadID, bucket
 	if err := i.checkMultipartOpen(); err != nil {
 		return err
 	}
-	return i.store.ValidateMultipartUpload(ctx, uploadID, bucket, key)
+	return i.multipartStore.ValidateMultipartUpload(ctx, uploadID, bucket, key)
 }
 
 func (i *Instance) ListMultipartUploads(ctx context.Context, bucket string, opts storage.MultipartListOptions) (*storage.MultipartListResult, error) {
@@ -261,7 +261,7 @@ func (i *Instance) ListMultipartUploads(ctx context.Context, bucket string, opts
 	if err := i.checkMultipartOpen(); err != nil {
 		return nil, err
 	}
-	result, err := i.store.ListMultipartUploads(ctx, bucket, opts)
+	result, err := i.multipartStore.ListMultipartUploads(ctx, bucket, opts)
 	if err != nil {
 		return nil, err
 	}
@@ -279,7 +279,7 @@ func (u multipartUsage) bytes() int64 {
 }
 
 func (i *Instance) checkMultipartOpen() error {
-	if !i.multipartEnabled {
+	if i.multipartStore == nil {
 		return ErrMultipartUnsupported
 	}
 	return i.checkOpen()

@@ -11,15 +11,16 @@ import (
 func runMultipartListContract(t *testing.T, store storage.Store) {
 	t.Helper()
 	ctx := context.Background()
+	multi := requireMultipart(t, store)
 	if err := store.CreateBucket(ctx, "uploads"); err != nil {
 		t.Fatalf("create bucket: %v", err)
 	}
-	upload, err := store.CreateMultipartUpload(ctx, "uploads", "dir/object.bin")
+	upload, err := multi.CreateMultipartUpload(ctx, "uploads", "dir/object.bin")
 	if err != nil {
 		t.Fatalf("create upload: %v", err)
 	}
 
-	result, err := store.ListMultipartUploads(ctx, "uploads", storage.MultipartListOptions{})
+	result, err := multi.ListMultipartUploads(ctx, "uploads", storage.MultipartListOptions{})
 	if err != nil {
 		t.Fatalf("list uploads: %v", err)
 	}

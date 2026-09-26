@@ -11,6 +11,7 @@ import (
 type Instance struct {
 	mu               sync.Mutex
 	store            storage.Store
+	multipartStore   storage.MultipartStore
 	resetStore       func() (storage.Store, error)
 	options          Options
 	authority        authority.Authority
@@ -21,7 +22,6 @@ type Instance struct {
 	reservedObjects  int64
 	reservedBytes    int64
 	persistent       bool
-	multipartEnabled bool
 	closed           bool
 	closeOnce        sync.Once
 	closeErr         error
@@ -39,19 +39,18 @@ func Open(options Options) (*Instance, error) {
 	}
 	return newInstance(normalized, storage.NewMemoryStore(), func() (storage.Store, error) {
 		return storage.NewMemoryStore(), nil
-	}, false, false), nil
+	}, false), nil
 }
 
-func newInstance(options Options, store storage.Store, resetStore func() (storage.Store, error), persistent, multipartEnabled bool) *Instance {
-	// An unset Authority permits everything, which is what this runtime has
-	// always done. Resolved once here rather than tested for nil on every
-	// operation, so the hot path is a mask test and nothing else.
+func newInstance(options Options, store storage.Store, resetStore func() (storage.Store, error), persistent bool) *Instance {
 	granted := authority.All()
 	if options.Authority != nil {
 		granted = *options.Authority
 	}
+	multipart, _ := store.(storage.MultipartStore)
 	return &Instance{
 		store:            store,
+		multipartStore:   multipart,
 		resetStore:       resetStore,
 		options:          options,
 		authority:        granted,
@@ -59,7 +58,6 @@ func newInstance(options Options, store storage.Store, resetStore func() (storag
 		multipartTargets: make(map[string]int),
 		reservedTargets:  make(map[string]struct{}),
 		persistent:       persistent,
-		multipartEnabled: multipartEnabled,
 	}
 }
 
@@ -95,20 +93,13 @@ func (i *Instance) checkOpen() error {
 	return nil
 }
 
-func (i *Instance) checkContextAndOpen(ctx context.Context) error {
-	if err := i.checkContext(ctx); err != nil {
-		return err
-	}
-	return i.checkOpen()
-}
-
 func (i *Instance) capabilitiesLocked() Capabilities {
 	return Capabilities{
 		Backend:    i.options.Backend,
 		MaxBytes:   i.options.MaxBytes,
 		MaxObjects: i.options.MaxObjects,
 		Persistent: i.persistent,
-		Multipart:  i.multipartEnabled,
+		Multipart:  i.multipartStore != nil,
 	}
 }
 
@@ -136,23 +127,20 @@ func (i *Instance) Reset(ctx context.Context) error {
 	if err := i.checkOpen(); err != nil {
 		return err
 	}
-	var next storage.Store
-	if i.resetStore != nil {
-		var err error
-		next, err = i.resetStore()
-		if err != nil {
-			return err
-		}
-	} else {
+	if i.resetStore == nil {
 		return ErrExternalResetUnsupported
 	}
+	next, err := i.resetStore()
+	if err != nil {
+		return err
+	}
 	if err := i.store.Close(); err != nil {
-		if i.resetStore != nil {
-			_ = next.Close()
-		}
+		_ = next.Close()
 		return err
 	}
 	i.store = next
+	// Re-derived: the store just closed is the one multipartStore pointed at.
+	i.multipartStore, _ = next.(storage.MultipartStore)
 	i.usage = Usage{}
 	i.multipart = make(map[string]multipartUsage)
 	i.multipartTargets = make(map[string]int)

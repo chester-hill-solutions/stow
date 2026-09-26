@@ -75,6 +75,18 @@ func withStores(t *testing.T, test func(*testing.T, storage.Store)) {
 	}
 }
 
+// requireMultipart pins the optional half. MultipartStore is optional in the
+// contract, but every backend this repository ships implements it, so the suite
+// asserts that rather than assuming it.
+func requireMultipart(t *testing.T, store storage.Store) storage.MultipartStore {
+	t.Helper()
+	multi, ok := store.(storage.MultipartStore)
+	if !ok {
+		t.Fatalf("%T does not implement storage.MultipartStore", store)
+	}
+	return multi
+}
+
 func TestStoreBatchDeleteRequiresBucket(t *testing.T) {
 	withStores(t, func(t *testing.T, store storage.Store) {
 		deleted, err := store.DeleteObjects(context.Background(), "missing", []string{"key"})
@@ -181,14 +193,15 @@ func TestStoreAssignsImmutableVersionForEqualContent(t *testing.T) {
 func TestStoreMultipartLookup(t *testing.T) {
 	withStores(t, func(t *testing.T, store storage.Store) {
 		ctx := context.Background()
+		multi := requireMultipart(t, store)
 		if err := store.CreateBucket(ctx, "uploads"); err != nil {
 			t.Fatalf("create bucket: %v", err)
 		}
-		upload, err := store.CreateMultipartUpload(ctx, "uploads", "object.bin")
+		upload, err := multi.CreateMultipartUpload(ctx, "uploads", "object.bin")
 		if err != nil {
 			t.Fatalf("create upload: %v", err)
 		}
-		got, err := store.GetMultipartUpload(ctx, upload.UploadID)
+		got, err := multi.GetMultipartUpload(ctx, upload.UploadID)
 		if err != nil {
 			t.Fatalf("get upload: %v", err)
 		}
@@ -201,17 +214,18 @@ func TestStoreMultipartLookup(t *testing.T) {
 func TestStoreBucketDeletionRejectsActiveMultipartUpload(t *testing.T) {
 	withStores(t, func(t *testing.T, store storage.Store) {
 		ctx := context.Background()
+		multi := requireMultipart(t, store)
 		if err := store.CreateBucket(ctx, "uploads"); err != nil {
 			t.Fatalf("create bucket: %v", err)
 		}
-		upload, err := store.CreateMultipartUpload(ctx, "uploads", "object.bin")
+		upload, err := multi.CreateMultipartUpload(ctx, "uploads", "object.bin")
 		if err != nil {
 			t.Fatalf("create upload: %v", err)
 		}
 		if err := store.DeleteBucket(ctx, "uploads"); !errors.Is(err, storage.ErrBucketNotEmpty) {
 			t.Fatalf("delete bucket error = %v, want ErrBucketNotEmpty", err)
 		}
-		if err := store.ValidateMultipartUpload(ctx, upload.UploadID, upload.Bucket, upload.Key); err != nil {
+		if err := multi.ValidateMultipartUpload(ctx, upload.UploadID, upload.Bucket, upload.Key); err != nil {
 			t.Fatalf("validate upload after rejected deletion: %v", err)
 		}
 	})
@@ -220,18 +234,19 @@ func TestStoreBucketDeletionRejectsActiveMultipartUpload(t *testing.T) {
 func TestStoreRejectsDuplicateMultipartParts(t *testing.T) {
 	withStores(t, func(t *testing.T, store storage.Store) {
 		ctx := context.Background()
+		multi := requireMultipart(t, store)
 		if err := store.CreateBucket(ctx, "uploads"); err != nil {
 			t.Fatalf("create bucket: %v", err)
 		}
-		upload, err := store.CreateMultipartUpload(ctx, "uploads", "object.bin")
+		upload, err := multi.CreateMultipartUpload(ctx, "uploads", "object.bin")
 		if err != nil {
 			t.Fatalf("create upload: %v", err)
 		}
-		part, err := store.UploadPart(ctx, upload.UploadID, 1, strings.NewReader("part"))
+		part, err := multi.UploadPart(ctx, upload.UploadID, 1, strings.NewReader("part"))
 		if err != nil {
 			t.Fatalf("upload part: %v", err)
 		}
-		_, err = store.CompleteMultipartUpload(ctx, upload.UploadID, []storage.PartInfo{*part, *part})
+		_, err = multi.CompleteMultipartUpload(ctx, upload.UploadID, []storage.PartInfo{*part, *part})
 		if !errors.Is(err, storage.ErrInvalidPart) {
 			t.Fatalf("complete error = %v, want ErrInvalidPart", err)
 		}
@@ -241,23 +256,24 @@ func TestStoreRejectsDuplicateMultipartParts(t *testing.T) {
 func TestStoreRejectsUnsortedMultipartCompletionParts(t *testing.T) {
 	withStores(t, func(t *testing.T, store storage.Store) {
 		ctx := context.Background()
+		multi := requireMultipart(t, store)
 		if err := store.CreateBucket(ctx, "uploads"); err != nil {
 			t.Fatalf("create bucket: %v", err)
 		}
-		upload, err := store.CreateMultipartUpload(ctx, "uploads", "object.bin")
+		upload, err := multi.CreateMultipartUpload(ctx, "uploads", "object.bin")
 		if err != nil {
 			t.Fatalf("create upload: %v", err)
 		}
-		first, err := store.UploadPart(ctx, upload.UploadID, 1, strings.NewReader("first"))
+		first, err := multi.UploadPart(ctx, upload.UploadID, 1, strings.NewReader("first"))
 		if err != nil {
 			t.Fatalf("upload first part: %v", err)
 		}
-		second, err := store.UploadPart(ctx, upload.UploadID, 2, strings.NewReader("second"))
+		second, err := multi.UploadPart(ctx, upload.UploadID, 2, strings.NewReader("second"))
 		if err != nil {
 			t.Fatalf("upload second part: %v", err)
 		}
 		parts := []storage.PartInfo{*second, *first}
-		if _, err := store.CompleteMultipartUpload(ctx, upload.UploadID, parts); !errors.Is(err, storage.ErrInvalidPart) {
+		if _, err := multi.CompleteMultipartUpload(ctx, upload.UploadID, parts); !errors.Is(err, storage.ErrInvalidPart) {
 			t.Fatalf("complete error = %v, want ErrInvalidPart", err)
 		}
 		if parts[0].PartNumber != 2 {
@@ -282,15 +298,16 @@ func requirePagedPartLister(t *testing.T, store storage.Store) pagedPartLister {
 func seedPartUpload(t *testing.T, store storage.Store) string {
 	t.Helper()
 	ctx := context.Background()
+	multi := requireMultipart(t, store)
 	if err := store.CreateBucket(ctx, "uploads"); err != nil {
 		t.Fatalf("create bucket: %v", err)
 	}
-	upload, err := store.CreateMultipartUpload(ctx, "uploads", "object.bin")
+	upload, err := multi.CreateMultipartUpload(ctx, "uploads", "object.bin")
 	if err != nil {
 		t.Fatalf("create upload: %v", err)
 	}
 	for _, partNumber := range []int{1, 2, 3} {
-		if _, err := store.UploadPart(ctx, upload.UploadID, partNumber, strings.NewReader("part")); err != nil {
+		if _, err := multi.UploadPart(ctx, upload.UploadID, partNumber, strings.NewReader("part")); err != nil {
 			t.Fatalf("upload part %d: %v", partNumber, err)
 		}
 	}

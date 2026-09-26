@@ -62,7 +62,7 @@ func TestOpenNormalizesOptions(t *testing.T) {
 		t.Fatalf("defaults = %+v", instance.options)
 	}
 	capabilities := instance.Capabilities()
-	if capabilities.Backend != BackendMemory || capabilities.Persistent || capabilities.Multipart || capabilities.Upstream {
+	if capabilities.Backend != BackendMemory || capabilities.Persistent || capabilities.Upstream {
 		t.Fatalf("capabilities = %+v", capabilities)
 	}
 	if instance.Usage() != (Usage{}) {

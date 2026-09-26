@@ -75,10 +75,6 @@ func metadataSize(m map[string]string) int {
 	return n
 }
 
-func validBucketName(name string) bool {
-	return storage.ValidBucketName(name)
-}
-
 func parseCopySource(src string) (bucket, key string, err error) {
 	src = strings.TrimPrefix(src, "/")
 	parts := strings.SplitN(src, "/", 2)
@@ -128,21 +124,30 @@ func etagHeaderMatchesMode(header, actual string, weak bool) bool {
 // differently instead of reporting "not modified" as a failed request.
 var errNotModified = errors.New("not modified")
 
-// checkReadPreconditions applies the RFC 9110 conditional headers to a read.
+// checkPreconditions applies the RFC 9110 conditional headers.
 //
-// If-Match failing is 412. A matching If-None-Match is not a failure at all: on
-// GET and HEAD it is 304 Not Modified. Collapsing the two told a polling client
-// that a healthy, unchanged object was a precondition failure — the same class
-// of silently wrong answer as ignoring the header on a write, and one of the
-// two things issue #11 asked to have confirmed.
-func checkReadPreconditions(h http.Header, meta *storage.ObjectMeta) error {
-	if match := h.Get("If-Match"); match != "" && !etagHeaderMatchesStrong(match, meta.ETag) {
+// A read and a copy-source ask the same four questions of the same
+// representation under different header names, so they are one function: the
+// names are the only thing that differs, and a second copy of these conditions
+// is a second place for the rule to drift.
+//
+// notModifiedIsSuccess is the one real difference. On GET and HEAD a matching
+// If-None-Match is 304 Not Modified, a successful answer with no body; the
+// copy-source headers have no 304 equivalent, so there a match is 412. Folding
+// them together without this would put issue #11's distinction back.
+func checkPreconditions(h http.Header, meta *storage.ObjectMeta, prefix string, notModifiedIsSuccess bool) error {
+	noneMatchError := error(storage.ErrPreconditionFailed)
+	if notModifiedIsSuccess {
+		noneMatchError = errNotModified
+	}
+
+	if match := h.Get(prefix + "If-Match"); match != "" && !etagHeaderMatchesStrong(match, meta.ETag) {
 		return storage.ErrPreconditionFailed
 	}
-	if noneMatch := h.Get("If-None-Match"); noneMatch != "" && etagHeaderMatchesWeak(noneMatch, meta.ETag) {
-		return errNotModified
+	if noneMatch := h.Get(prefix + "If-None-Match"); noneMatch != "" && etagHeaderMatchesWeak(noneMatch, meta.ETag) {
+		return noneMatchError
 	}
-	if raw := h.Get("If-Modified-Since"); raw != "" {
+	if raw := h.Get(prefix + "If-Modified-Since"); raw != "" {
 		when, err := time.Parse(http.TimeFormat, raw)
 		if err != nil {
 			return storage.ErrPreconditionFailed
@@ -151,7 +156,7 @@ func checkReadPreconditions(h http.Header, meta *storage.ObjectMeta) error {
 			return storage.ErrPreconditionFailed
 		}
 	}
-	if raw := h.Get("If-Unmodified-Since"); raw != "" {
+	if raw := h.Get(prefix + "If-Unmodified-Since"); raw != "" {
 		when, err := time.Parse(http.TimeFormat, raw)
 		if err != nil {
 			return storage.ErrPreconditionFailed
@@ -163,30 +168,10 @@ func checkReadPreconditions(h http.Header, meta *storage.ObjectMeta) error {
 	return nil
 }
 
+func checkReadPreconditions(h http.Header, meta *storage.ObjectMeta) error {
+	return checkPreconditions(h, meta, "", true)
+}
+
 func checkCopyPreconditions(h http.Header, meta *storage.ObjectMeta) error {
-	if match := h.Get("x-amz-copy-source-if-match"); match != "" && !etagHeaderMatchesStrong(match, meta.ETag) {
-		return storage.ErrPreconditionFailed
-	}
-	if noneMatch := h.Get("x-amz-copy-source-if-none-match"); noneMatch != "" && etagHeaderMatchesWeak(noneMatch, meta.ETag) {
-		return storage.ErrPreconditionFailed
-	}
-	if raw := h.Get("x-amz-copy-source-if-modified-since"); raw != "" {
-		when, err := time.Parse(http.TimeFormat, raw)
-		if err != nil {
-			return storage.ErrPreconditionFailed
-		}
-		if !meta.LastModified.After(when) {
-			return storage.ErrPreconditionFailed
-		}
-	}
-	if raw := h.Get("x-amz-copy-source-if-unmodified-since"); raw != "" {
-		when, err := time.Parse(http.TimeFormat, raw)
-		if err != nil {
-			return storage.ErrPreconditionFailed
-		}
-		if meta.LastModified.After(when) {
-			return storage.ErrPreconditionFailed
-		}
-	}
-	return nil
+	return checkPreconditions(h, meta, "x-amz-copy-source-", false)
 }

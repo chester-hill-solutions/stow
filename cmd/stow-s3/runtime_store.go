@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 
+	"github.com/chester-hill-solutions/stow-s3/internal/authority"
 	"github.com/chester-hill-solutions/stow-s3/internal/runthrough"
 	"github.com/chester-hill-solutions/stow-s3/internal/runtime"
 	"github.com/chester-hill-solutions/stow-s3/internal/storage"
@@ -33,24 +34,28 @@ func (l nativeStorageLimits) objects() int64 {
 	return l.maxObjects
 }
 
-func bindNativeRuntimeStore(store storage.Store, backend runtime.Backend, admin *runthrough.Adapter, limits nativeStorageLimits) (storage.Store, error) {
+func bindNativeRuntimeStore(store storage.Store, backend runtime.Backend, admin *runthrough.Adapter, limits nativeStorageLimits, granted *authority.Authority) (storage.Store, runtime.Capabilities, error) {
 	instance, err := runtime.OpenWithStore(runtime.Options{
 		Backend:    backend,
 		MaxBytes:   limits.bytes(),
 		MaxObjects: limits.objects(),
+		Authority:  granted,
 	}, store, nil)
 	if err != nil {
-		return nil, fmt.Errorf("open native runtime: %w", err)
+		return nil, runtime.Capabilities{}, fmt.Errorf("open native runtime: %w", err)
 	}
 	adapter, err := runtime.NewStoreAdapter(instance)
 	if err != nil {
 		_ = instance.Close()
-		return nil, fmt.Errorf("create native runtime adapter: %w", err)
+		return nil, runtime.Capabilities{}, fmt.Errorf("create native runtime adapter: %w", err)
 	}
+	// The runtime is asked what it can do, so the readiness payload reports a
+	// capability rather than re-deriving one.
+	capabilities := instance.Capabilities()
 	if admin != nil {
-		return &runThroughRuntimeStore{StoreAdapter: adapter, admin: admin}, nil
+		return &runThroughRuntimeStore{StoreAdapter: adapter, admin: admin}, capabilities, nil
 	}
-	return adapter, nil
+	return adapter, capabilities, nil
 }
 
 type runThroughRuntimeStore struct {

@@ -68,6 +68,27 @@ func All() Authority { return Authority{Mask: all} }
 // None permits nothing.
 func None() Authority { return Authority{0} }
 
+// ReadOnly permits reading and listing, and nothing that changes state or
+// reaches outside the environment. Upstream reads are withheld too: a read-only
+// capability is about this environment, and reaching a related object store is a
+// separate grant.
+func ReadOnly() Authority {
+	return All().Without(
+		ObjectWrite, ObjectDelete,
+		BucketCreate, BucketDelete,
+		EnvironmentReset, EnvironmentDestroy, EnvironmentPromote,
+		UpstreamRead, UpstreamWrite,
+	)
+}
+
+// ReadWrite permits local work with no reach outside the environment: no
+// upstream, and no ability to tear the environment down.
+func ReadWrite() Authority {
+	return All().Without(
+		EnvironmentDestroy, EnvironmentPromote, UpstreamRead, UpstreamWrite,
+	)
+}
+
 // Allows reports whether op is permitted.
 //
 // The test is a single mask intersection because this runs on every operation

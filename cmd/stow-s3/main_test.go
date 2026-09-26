@@ -110,34 +110,32 @@ func TestParseBackend(t *testing.T) {
 	}
 }
 
-// The readiness payload used to claim `backend == "filesystem"`, which is a
-// second opinion about persistence rather than the runtime's. It agreed for the
-// two backends the CLI could select, so no CLI-level test could have caught it.
-// This asserts the two facts that make it catchable: the predicate knows about
-// the third backend, and what the payload claims is what the runtime computes.
-func TestPersistenceClaimIsTheRuntimePredicateNotAFlagComparison(t *testing.T) {
-	if !runtime.IsPersistentBackend(runtime.BackendWorkspace) {
-		t.Fatal("workspace keeps objects across a reopen; a flag-string comparison would have claimed otherwise")
-	}
-	if runtime.IsPersistentBackend(runtime.BackendMemory) {
-		t.Fatal("memory does not survive a reopen")
-	}
-
+// The readiness payload used to publish a persistence claim of its own and a
+// hardcoded multipart=true beside it. Both happened to agree with the runtime
+// only because the CLI could select two backends, so nothing caught it.
+//
+// This is the check that would have caught it: the payload must report the
+// runtime's capabilities, unchanged, for every backend this command can select.
+func TestReadinessCapabilitiesAreTheRuntimes(t *testing.T) {
 	for _, backend := range []runtime.Backend{runtime.BackendMemory, runtime.BackendFilesystem} {
-		store := storage.NewMemoryStore()
-		instance, err := runtime.OpenWithStore(runtime.Options{Backend: backend}, store, nil)
+		store := openLocalStore(backend, t.TempDir())
+		_, capabilities, err := bindNativeRuntimeStore(store, backend, nil, nativeStorageLimits{}, nil)
 		if err != nil {
-			t.Fatalf("open runtime for %q: %v", backend, err)
+			t.Fatalf("bind %q: %v", backend, err)
 		}
-		// What writeReadyMessage publishes.
-		claimed := runtime.IsPersistentBackend(backend)
-		// What the runtime computes for the same backend.
-		reported := instance.Capabilities().Persistent
-		if claimed != reported {
-			t.Errorf("backend %q: readiness claims persistent=%v, runtime reports %v", backend, claimed, reported)
+		published := readyMessage(readyDetails{
+			backend:      backend,
+			capabilities: capabilities,
+			mode:         string(runthrough.ModeLocal),
+		}).Capabilities
+
+		if published.Persistent != capabilities.Persistent {
+			t.Errorf("%s: payload claims persistent=%v, runtime reports %v",
+				backend, published.Persistent, capabilities.Persistent)
 		}
-		if err := instance.Close(); err != nil {
-			t.Fatalf("close: %v", err)
+		if published.Multipart != capabilities.Multipart {
+			t.Errorf("%s: payload claims multipart=%v, runtime reports %v",
+				backend, published.Multipart, capabilities.Multipart)
 		}
 	}
 }
@@ -164,18 +162,21 @@ func TestTheStoreOpenedMatchesThePersistencePublished(t *testing.T) {
 		if _, err := store.PutObject(ctx, "persisted", "k", body, storage.PutOptions{}); err != nil {
 			t.Fatalf("%s: put: %v", tc.backend, err)
 		}
-		if err := store.Close(); err != nil {
-			t.Fatalf("%s: close: %v", tc.backend, err)
-		}
 
-		// What the payload would have claimed for this backend.
-		if claimed := runtime.IsPersistentBackend(tc.backend); claimed != tc.wantPersist {
-			t.Errorf("%s: predicate says persistent=%v, want %v", tc.backend, claimed, tc.wantPersist)
+		bound, capabilities, err := bindNativeRuntimeStore(store, tc.backend, nil, nativeStorageLimits{}, nil)
+		if err != nil {
+			t.Fatalf("%s: bind: %v", tc.backend, err)
+		}
+		if capabilities.Persistent != tc.wantPersist {
+			t.Errorf("%s: runtime reports persistent=%v, want %v", tc.backend, capabilities.Persistent, tc.wantPersist)
+		}
+		if err := bound.Close(); err != nil {
+			t.Fatalf("%s: close: %v", tc.backend, err)
 		}
 
 		// And whether the bytes are actually still there.
 		reopened := openLocalStore(tc.backend, dir)
-		_, _, err := reopened.GetObject(ctx, "persisted", "k")
+		_, _, err = reopened.GetObject(ctx, "persisted", "k")
 		survived := err == nil
 		_ = reopened.Close()
 		if survived != tc.wantPersist {

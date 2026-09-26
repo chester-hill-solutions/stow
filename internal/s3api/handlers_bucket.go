@@ -27,7 +27,7 @@ func (s *Server) handleListBuckets(ctx context.Context, w http.ResponseWriter, r
 }
 
 func (s *Server) handleCreateBucket(ctx context.Context, w http.ResponseWriter, r *http.Request, bucket string) {
-	if !validBucketName(bucket) {
+	if !storage.ValidBucketName(bucket) {
 		writeError(w, r, s3Error{Code: "InvalidBucketName", Message: "Invalid bucket name", Resource: "/" + bucket, StatusCode: http.StatusBadRequest})
 		return
 	}
